@@ -89,17 +89,11 @@ APPEND_TO_STRING(C_FLAGS "${CMAKE_C_FLAGS_INIT}")
 #
 APPEND_TO_STRING(CXX_FLAGS "${CMAKE_CXX_FLAGS_INIT}")
 
-# We don't necessarily want to enable aggressive warnings for everyone.  This can only be
-# configured from the command line or from the caller's CMakeLists.txt.
+# We want to enable aggressive warnings for everyone to avoid unexpected build
+# farm failures.  This can only be configured from the command line or from the
+# caller's CMakeLists.txt.
 if(NOT DEFINED OPTIX_USE_AGGRESSIVE_WARNINGS)
-  set(OPTIX_USE_AGGRESSIVE_WARNINGS OFF)
-endif()
-
-# Goldenrod requires C++11.
-if (USING_GNU_CXX OR USING_CLANG_CXX)
-  if(GCC_LIBSTDCPP11)
-    APPEND_TO_STRING( CXX_FLAGS "-std=c++11" )
-  endif()
+    set(OPTIX_USE_AGGRESSIVE_WARNINGS ON)
 endif()
 
 #############################################################
@@ -155,22 +149,31 @@ ENDIF()
 # Windows flags
 
 # /W3 - more warnings
-# /WX - warnings as erros
+# /WX - warnings as errors
+#
+# Disable these warnings:
 # /wd4355 - 'this' used in initializer list
 # /wd4996 - strncpy and other functions are unsafe
 # /wd4800 - forcing value to bool 'true' or 'false' (performance warning)
 #
-# Turn on warnings for level /W3 (/w3XXXX).
+# Turn on warnings for level /W3 (/w3XXXX):
 # /w34101 - unreference local variable
 # /w34189 - local variable is initialized but not referenced
 # /w34018 - 'expression' : signed/unsigned mismatch
 # /w34389 - 'operator' : signed/unsigned mismatch
-if(OPTIX_USE_AGGRESSIVE_WARNINGS)
-  set(WARNING_FLAGS "/WX /wd4355 /wd4996 /wd4800 /w34101 /w34189 /w34018 /w34389")
-else()
-  set(WARNING_FLAGS "    /wd4355 /wd4996")
+if( WIN32 )
+    set( WARNING_FLAGS "/W3" )
+    if( WARNINGS_AS_ERRORS )
+        set( WARNING_FLAGS "${WARNING_FLAGS} /WX" )
+    endif()
+
+    if(OPTIX_USE_AGGRESSIVE_WARNINGS)
+      set(WARNING_FLAGS "${WARNING_FLAGS} /wd4355 /wd4996 /wd4800 /w34101 /w34189 /w34018 /w34389")
+    else()
+      set(WARNING_FLAGS "${WARNING_FLAGS} /wd4355 /wd4996")
+    endif()
+    SET(DEBUG_FLAGS "")
 endif()
-SET(DEBUG_FLAGS "")
 
 # Add /MP to get file-level compilation parallelism
 SET(PARALLEL_COMPILE_FLAGS /MP)

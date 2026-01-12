@@ -27,7 +27,8 @@
 //
 #pragma once
 
-#include <lib/DemandLoading/ImageReader.h>
+#include "optixDemandTexture.h"
+#include <ImageReader.h>
 
 #include <cuda_runtime.h>
 
@@ -38,14 +39,7 @@
 #include <memory>
 #include <vector>
 
-/// DemandTextureSampler contains the device-side info required for a demand texture fetch.
-/// The index of a DemandTextureSampler is passed to the closest hit shader via a hit group
-/// record in the SBT, and a table of samplers is available as a launch parameter.
-struct DemandTextureSampler
-{
-    /// The CUDA texture object.
-    cudaTextureObject_t texture;
-};
+namespace demandLoading {
 
 /// Demand-loaded textures are created by the DemandTextureManager.  This base class describes the
 /// public interface, while the derived class below is employed by the DemandTextureManager.
@@ -69,11 +63,11 @@ class DemandTexture
     }
 
     /// Get the texture sampler, which bundles the CUDA texture object with additional info.
-    DemandTextureSampler getSampler() const { return DemandTextureSampler{m_texture}; }
+    DemandTextureSampler getSampler() const { return DemandTextureSampler{ m_texture }; }
 
     /// Initialize the texture, e.g. reading image info from file header.  Returns false on error.
     bool init();
-    
+
     /// Reallocate backing storage to span the specified miplevels.
     void reallocate( unsigned int minMipLevel, unsigned int maxMipLevel );
 
@@ -104,7 +98,7 @@ class DemandTexture
     cudaTextureObject_t m_texture = {};
 
     // Host buffer for filling miplevels.
-    std::vector<float4> m_hostMipLevel;
+    std::vector<char> m_hostMipLevel;
 
     // Current min and max miplevels
     unsigned int m_minMipLevel = std::numeric_limits<unsigned int>::max();
@@ -113,9 +107,13 @@ class DemandTexture
     // Create CUDA texture object (called internally after reallocation).
     cudaTextureObject_t createTextureObject() const;
 
+    void destroyMipmapAndTextureObject( cudaMipmappedArray_t mipMap );
+
     // Get the width of the specified miplevel.
     unsigned int getLevelWidth( unsigned int mipLevel ) const { return getInfo().width >> mipLevel; }
 
     // Get the height of the specified miplevel.
     unsigned int getLevelHeight( unsigned int mipLevel ) const { return getInfo().height >> mipLevel; }
 };
+
+}  // namespace demandLoading

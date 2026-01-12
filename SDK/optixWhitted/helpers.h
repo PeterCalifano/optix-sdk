@@ -29,21 +29,20 @@
 #pragma once
 
 #include <cuda_runtime.h>
-#include <stdint.h>
 #include <optix_device.h>
 #include <vector_types.h>
 
-__forceinline__ __device__ void* unpackPointer( uint32_t i0, uint32_t i1 )
+__forceinline__ __device__ void* unpackPointer( unsigned int i0, unsigned int i1 )
 {
-    const uint64_t uptr = static_cast<uint64_t>( i0 ) << 32 | i1;
+    const unsigned long long uptr = static_cast<unsigned long long>( i0 ) << 32 | i1;
     void*           ptr = reinterpret_cast<void*>( uptr );
     return ptr;
 }
 
 
-__forceinline__ __device__ void  packPointer( void* ptr, uint32_t& i0, uint32_t& i1 )
+__forceinline__ __device__ void  packPointer( void* ptr, unsigned int& i0, unsigned int& i1 )
 {
-    const uint64_t uptr = reinterpret_cast<uint64_t>( ptr );
+    const unsigned long long uptr = reinterpret_cast<unsigned long long>( ptr );
     i0 = uptr >> 32;
     i1 = uptr & 0x00000000ffffffff;
 }
@@ -52,20 +51,9 @@ __forceinline__ __device__ void  packPointer( void* ptr, uint32_t& i0, uint32_t&
 template <typename T>
 __forceinline__ __device__ T* getPRD()
 {
-    const uint32_t u0 = optixGetPayload_0();
-    const uint32_t u1 = optixGetPayload_1();
+    const unsigned int u0 = optixGetPayload_0();
+    const unsigned int u1 = optixGetPayload_1();
     return reinterpret_cast<T*>( unpackPointer( u0, u1 ) );
-}
-
-
-__forceinline__ __device__ uchar4 make_color( const float4&  c )
-{
-    return make_uchar4(
-        static_cast<uint8_t>( clamp( c.x, 0.0f, 1.0f ) *255.0f ),
-        static_cast<uint8_t>( clamp( c.y, 0.0f, 1.0f ) *255.0f ),
-        static_cast<uint8_t>( clamp( c.z, 0.0f, 1.0f ) *255.0f ),
-        255u
-    );
 }
 
 __forceinline__ __device__ float luminance( const float3& rgb )
@@ -136,7 +124,7 @@ __forceinline__ __device__ float3 exp( const float3& x )
 }
 
 #define float3_as_args(u) \
-    reinterpret_cast<uint32_t&>((u).x), \
-    reinterpret_cast<uint32_t&>((u).y), \
-    reinterpret_cast<uint32_t&>((u).z)
+    reinterpret_cast<unsigned int&>((u).x), \
+    reinterpret_cast<unsigned int&>((u).y), \
+    reinterpret_cast<unsigned int&>((u).z)
 

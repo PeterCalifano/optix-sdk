@@ -26,9 +26,6 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#include <stdint.h>
-
-
 enum RayType
 {
     RAY_TYPE_RADIANCE = 0,
@@ -38,11 +35,11 @@ enum RayType
 
 struct Params
 {
-    uint32_t     width;
-    uint32_t     height;
+    unsigned int width;
+    unsigned int height;
     float4*      accum_buffer;
     uchar4*      frame_buffer;
-    uint32_t     subframe_index;
+    unsigned int subframe_index;
 
     float3       eye;
     float3       U;
@@ -60,8 +57,8 @@ struct RayGenData
 
 struct MissData
 {
-    float3     color;
-    uint32_t   pad;
+    float3       color;
+    unsigned int pad;
 };
 
 
@@ -80,7 +77,7 @@ struct HitGroupData
     float3     center;
     float      radius;
 
-    uint32_t   pad;
+    unsigned int pad;
 
 };
 

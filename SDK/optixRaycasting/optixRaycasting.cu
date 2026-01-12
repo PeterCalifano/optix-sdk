@@ -36,9 +36,6 @@
 
 #include <sutil/vec_math.h>
 
-#include <stdint.h>
-
-
 extern "C" {
 __constant__ Params params;
 }
@@ -46,12 +43,12 @@ __constant__ Params params;
 
 extern "C" __global__ void __raygen__from_buffer()
 {
-    const uint3    idx        = optixGetLaunchIndex();
-    const uint3    dim        = optixGetLaunchDimensions();
-    const uint32_t linear_idx = idx.z * dim.y * dim.x + idx.y * dim.x + idx.x;
+    const uint3        idx        = optixGetLaunchIndex();
+    const uint3        dim        = optixGetLaunchDimensions();
+    const unsigned int linear_idx = idx.z * dim.y * dim.x + idx.y * dim.x + idx.x;
 
-    uint32_t t, nx, ny, nz;
-    Ray      ray = params.rays[linear_idx];
+    unsigned int t, nx, ny, nz;
+    Ray          ray = params.rays[linear_idx];
     optixTrace( params.handle, ray.origin, ray.dir, ray.tmin, ray.tmax, 0.0f, OptixVisibilityMask( 1 ),
                 OPTIX_RAY_FLAG_NONE, RAY_TYPE_RADIANCE, RAY_TYPE_COUNT, RAY_TYPE_RADIANCE, t, nx, ny, nz );
 
@@ -75,7 +72,7 @@ extern "C" __global__ void __miss__buffer_miss()
 
 extern "C" __global__ void __closesthit__buffer_hit()
 {
-    const uint32_t t = optixGetRayTmax();
+    const unsigned int t = optixGetRayTmax();
 
     whitted::HitGroupData* rt_data = (whitted::HitGroupData*)optixGetSbtDataPointer();
     LocalGeometry          geom    = getLocalGeometry( rt_data->geometry_data );
@@ -85,5 +82,18 @@ extern "C" __global__ void __closesthit__buffer_hit()
     optixSetPayload_1( float_as_int( geom.N.x ) );
     optixSetPayload_2( float_as_int( geom.N.y ) );
     optixSetPayload_3( float_as_int( geom.N.z ) );
+}
+
+
+extern "C" __global__ void __anyhit__texture_mask()
+{
+    whitted::HitGroupData* rt_data = (whitted::HitGroupData*)optixGetSbtDataPointer();
+    LocalGeometry          geom    = getLocalGeometry( rt_data->geometry_data );
+
+    float4 mask = tex2D<float4>( rt_data->material_data.pbr.base_color_tex, geom.UV.x, geom.UV.y );
+    if( mask.x < 0.5f && mask.y < 0.5f )
+    {
+        optixIgnoreIntersection();
+    }
 }
 

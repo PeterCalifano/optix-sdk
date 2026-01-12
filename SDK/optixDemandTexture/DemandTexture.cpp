@@ -32,6 +32,8 @@
 #include <cassert>
 #include <cstring>
 
+namespace demandLoading {
+
 // DemandTexture is constructed by DemandTextureManager::createTexture
 DemandTexture::DemandTexture( unsigned int id, std::shared_ptr<ImageReader> image )
     : m_id( id )
@@ -41,14 +43,7 @@ DemandTexture::DemandTexture( unsigned int id, std::shared_ptr<ImageReader> imag
 
 DemandTexture::~DemandTexture()
 {
-    try
-    {
-        CUDA_CHECK( cudaDestroyTextureObject( m_texture ) );
-        CUDA_CHECK( cudaFreeMipmappedArray( m_mipLevelData ) );
-    }
-    catch( ... )
-    {
-    }
+    destroyMipmapAndTextureObject( m_mipLevelData );
 }
 
 // Initialize the texture, e.g. reading image info from file header.  Returns false on error.
@@ -80,7 +75,7 @@ void DemandTexture::reallocate( unsigned int minMipLevel, unsigned int maxMipLev
     unsigned int numLevels = newMaxMipLevel - newMinMipLevel + 1;
 
     // Allocate new array.
-    cudaMipmappedArray_t  newMipLevelData;
+    cudaMipmappedArray_t         newMipLevelData;
     const cudaChannelFormatDesc& channelDesc = getInfo().channelDesc;
     cudaExtent                   extent      = make_cudaExtent( newWidth, newHeight, 0 );
     CUDA_CHECK( cudaMallocMipmappedArray( &newMipLevelData, &channelDesc, extent, numLevels ) );
@@ -90,10 +85,11 @@ void DemandTexture::reallocate( unsigned int minMipLevel, unsigned int maxMipLev
     m_mipLevelData                       = newMipLevelData;
     for( unsigned int nominalLevel = oldMinMipLevel; nominalLevel <= oldMaxMipLevel; ++nominalLevel )
     {
-        unsigned int sourceLevel = nominalLevel - oldMinMipLevel;
-        unsigned int destLevel   = nominalLevel - newMinMipLevel;
-        unsigned int width       = getLevelWidth( nominalLevel );
-        unsigned int height      = getLevelHeight( nominalLevel );
+        unsigned int sourceLevel  = nominalLevel - oldMinMipLevel;
+        unsigned int destLevel    = nominalLevel - newMinMipLevel;
+        unsigned int width        = getLevelWidth( nominalLevel );
+        unsigned int height       = getLevelHeight( nominalLevel );
+        unsigned int widthInBytes = width * getBitsPerPixel( getInfo().channelDesc ) / 8;
 
         // Get the CUDA arrays for the source and destination miplevels.
         cudaArray_t sourceArray, destArray;
@@ -101,12 +97,12 @@ void DemandTexture::reallocate( unsigned int minMipLevel, unsigned int maxMipLev
         CUDA_CHECK( cudaGetMipmappedArrayLevel( &destArray, newMipLevelData, destLevel ) );
 
         // Copy the miplevel.
-        CUDA_CHECK( cudaMemcpy2DArrayToArray( destArray, 0, 0, sourceArray, 0, 0, width, height, cudaMemcpyDeviceToDevice ) );
+        CUDA_CHECK( cudaMemcpy2DArrayToArray( destArray, 0, 0, sourceArray, 0, 0, widthInBytes, height, cudaMemcpyDeviceToDevice ) );
     }
 
     // Destroy the old mipmapped array and the old texture.
-    CUDA_CHECK( cudaFreeMipmappedArray( oldMipLevelData ) );
-    CUDA_CHECK( cudaDestroyTextureObject( m_texture ) );
+
+    destroyMipmapAndTextureObject( oldMipLevelData );
 
     // Create new texture object.
     m_texture = createTextureObject();
@@ -141,13 +137,27 @@ cudaTextureObject_t DemandTexture::createTextureObject() const
     return texture;
 }
 
+void DemandTexture::destroyMipmapAndTextureObject( cudaMipmappedArray_t mipMap )
+{
+    try
+    {
+        CUDA_CHECK( cudaFreeMipmappedArray( mipMap ) );
+        CUDA_CHECK( cudaDestroyTextureObject( m_texture ) );
+    }
+    catch( ... )
+    {
+        cudaGetLastError();
+    }
+}
+
 // Fill the specified miplevel.
 void DemandTexture::fillMipLevel( unsigned int nominalMipLevel )
 {
     // We retain the host-side fill buffer to amortize allocation overhead.
-    unsigned int width  = getLevelWidth( nominalMipLevel );
-    unsigned int height = getLevelHeight( nominalMipLevel );
-    m_hostMipLevel.resize( width * height );
+    unsigned int width         = getLevelWidth( nominalMipLevel );
+    unsigned int height        = getLevelHeight( nominalMipLevel );
+    int          bytesPerPixel = getBitsPerPixel( getInfo().channelDesc ) / 8;
+    m_hostMipLevel.resize( width * height * bytesPerPixel );
 
     // Read the requested miplevel into the host buffer.
     bool ok = m_image->readMipLevel( m_hostMipLevel.data(), nominalMipLevel, width, height );
@@ -160,7 +170,9 @@ void DemandTexture::fillMipLevel( unsigned int nominalMipLevel )
     CUDA_CHECK( cudaGetMipmappedArrayLevel( &array, m_mipLevelData, actualMipLevel ) );
 
     // Copy data into the miplevel on the device.
-    size_t widthInBytes = width * sizeof( float4 );
+    size_t widthInBytes = width * getBitsPerPixel( getInfo().channelDesc ) / 8;
     size_t pitch        = widthInBytes;
     CUDA_CHECK( cudaMemcpy2DToArray( array, 0, 0, m_hostMipLevel.data(), pitch, widthInBytes, height, cudaMemcpyHostToDevice ) );
 }
+
+}  // namespace demandLoading

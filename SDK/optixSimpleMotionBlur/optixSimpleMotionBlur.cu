@@ -31,9 +31,7 @@
 #include "random.h"
 
 #include <sutil/vec_math.h>
-
-#include <stdio.h>
-
+#include <cuda/helpers.h>
 
 extern "C" {
 __constant__ Params params;
@@ -47,18 +45,6 @@ __constant__ Params params;
 //
 //------------------------------------------------------------------------------
 
-#define print_x 512
-#define print_y 384
-
-#define print_pixel(...)                                                       \
-{                                                                              \
-    const uint3  idx__ = optixGetLaunchIndex();                                \
-    if( idx__.x == print_y && idx__.y == print_x )                             \
-        printf( __VA_ARGS__ );                                                 \
-}
-
-
-
 static __forceinline__ __device__ float3 traceCamera(
         OptixTraversableHandle handle,
         float3                 ray_origin,
@@ -66,7 +52,7 @@ static __forceinline__ __device__ float3 traceCamera(
         float                  ray_time
         )
 {
-    uint32_t r, g, b;
+    unsigned int r, g, b;
 
     optixTrace(
             handle,
@@ -86,18 +72,6 @@ static __forceinline__ __device__ float3 traceCamera(
             __int_as_float( r ),
             __int_as_float( g ),
             __int_as_float( b )
-            );
-}
-
-
-static __forceinline__ __device__ uchar4 make_color( const float3&  c )
-{
-    const float gamma = 2.2f;
-    return make_uchar4(
-            static_cast<uint8_t>( powf( clamp( c.x, 0.0f, 1.0f ), 1.0/gamma )*255.0f ),
-            static_cast<uint8_t>( powf( clamp( c.y, 0.0f, 1.0f ), 1.0/gamma )*255.0f ),
-            static_cast<uint8_t>( powf( clamp( c.z, 0.0f, 1.0f ), 1.0/gamma )*255.0f ),
-            255u
             );
 }
 
@@ -126,7 +100,7 @@ extern "C" __global__ void __raygen__rg()
     const uint3  idx = optixGetLaunchIndex();
     const int    subframe_index = params.subframe_index;
 
-    uint32_t seed = tea<4>( idx.y*w + idx.x, subframe_index );
+    unsigned int seed = tea<4>( idx.y*w + idx.x, subframe_index );
     const float2 subpixel_jitter = make_float2( rnd( seed )-0.5f, rnd( seed )-0.5f );
 
     const float2 d = 2.0f * make_float2(
@@ -136,18 +110,9 @@ extern "C" __global__ void __raygen__rg()
     float3 ray_direction = normalize(d.x*U + d.y*V + W);
     float3 ray_origin    = eye;
 
-    /*
-    print_pixel( "ray o: %f %f %f  d: %f %f %f\n",
-            ray_origin.x,
-            ray_origin.y,
-            ray_origin.z,
-            ray_direction.x,
-            ray_direction.y,
-            ray_direction.z );
-            */
-    const float3 result = traceCamera( params.handle, ray_origin, ray_direction, rnd( seed ) );
+    const float3 result        = traceCamera( params.handle, ray_origin, ray_direction, rnd( seed ) );
 
-    const int32_t image_index = idx.y*w + idx.x;
+    const int image_index = idx.y*w + idx.x;
     float3 accum_color = result;
     if( subframe_index > 0 )
     {

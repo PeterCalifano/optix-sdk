@@ -1513,7 +1513,7 @@ macro(CUDA_WRAP_SRCS cuda_target format generated_files)
   # remove it from the host. This is because -Xcompile -std=c++ will choke nvcc (it uses
   # the C preprocessor).  In order to get this to work correctly, we need to use nvcc's
   # specific c++11 flag.
-  if( "${_cuda_host_flags}" MATCHES "-std=c\\+\\+11")
+  if( "${_cuda_host_flags}" MATCHES "-std=c\\+\\+11" OR ( CMAKE_CXX_STANDARD EQUAL 11 AND NOT USING_WINDOWS_CL ) )
     # Add the c++11 flag to nvcc if it isn't already present.  Note that we only look at
     # the main flag instead of the configuration specific flags.
     if( NOT "${CUDA_NVCC_FLAGS}" MATCHES "-std;c\\+\\+11" )

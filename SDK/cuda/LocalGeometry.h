@@ -59,8 +59,8 @@ SUTIL_HOSTDEVICE LocalGeometry getLocalGeometry( const GeometryData& geometry_da
         {
             const GeometryData::TriangleMesh& mesh_data = geometry_data.triangle_mesh;
 
-            const uint32_t prim_idx = optixGetPrimitiveIndex();
-            const float2   barys    = optixGetTriangleBarycentrics();
+            const unsigned int prim_idx = optixGetPrimitiveIndex();
+            const float2       barys    = optixGetTriangleBarycentrics();
 
             uint3 tri = make_uint3(0u, 0u, 0u);
             if( mesh_data.indices.elmt_byte_size == 4 )
@@ -70,11 +70,11 @@ SUTIL_HOSTDEVICE LocalGeometry getLocalGeometry( const GeometryData& geometry_da
             }
             else
             {
-                const uint16_t* indices = reinterpret_cast<uint16_t*>( mesh_data.indices.data );
-                const uint16_t idx0 = indices[ prim_idx*3+0 ];
-                const uint16_t idx1 = indices[ prim_idx*3+1 ];
-                const uint16_t idx2 = indices[ prim_idx*3+2 ];
-                tri = make_uint3( idx0, idx1, idx2 );
+                const unsigned short* indices = reinterpret_cast<unsigned short*>( mesh_data.indices.data );
+                const unsigned short  idx0    = indices[prim_idx * 3 + 0];
+                const unsigned short  idx1    = indices[prim_idx * 3 + 1];
+                const unsigned short  idx2    = indices[prim_idx * 3 + 2];
+                tri                           = make_uint3( idx0, idx1, idx2 );
             }
 
             const float3 P0 = mesh_data.positions[ tri.x ];

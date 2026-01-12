@@ -28,6 +28,7 @@
 
 #include <optix.h>
 #include <optix_function_table_definition.h>
+#include <optix_stack_size.h>
 #include <optix_stubs.h>
 
 #include <cuda_runtime.h>
@@ -85,7 +86,7 @@ void printUsageAndExit( const char* argv0 )
 static void context_log_cb( unsigned int level, const char* tag, const char* message, void* /*cbdata */)
 {
     std::cerr << "[" << std::setw( 2 ) << level << "][" << std::setw( 12 ) << tag << "]: "
-    << message << "\n";
+              << message << "\n";
 }
 
 
@@ -138,11 +139,17 @@ int main( int argc, char* argv[] )
             // Initialize CUDA
             CUDA_CHECK( cudaFree( 0 ) );
 
-            CUcontext cuCtx = 0;  // zero means take the current context
+            // Initialize the OptiX API, loading all API entry points
             OPTIX_CHECK( optixInit() );
+
+            // Specify context options
             OptixDeviceContextOptions options = {};
             options.logCallbackFunction       = &context_log_cb;
             options.logCallbackLevel          = 4;
+
+            // Associate a CUDA context (and therefore a specific GPU) with this
+            // device context
+            CUcontext cuCtx = 0;  // zero means take the current context
             OPTIX_CHECK( optixDeviceContextCreate( cuCtx, &options, &context ) );
         }
 
@@ -153,11 +160,13 @@ int main( int argc, char* argv[] )
         OptixTraversableHandle gas_handle;
         CUdeviceptr            d_gas_output_buffer;
         {
+            // Use default options for simplicity.  In a real use case we would want to
+            // enable compaction, etc
             OptixAccelBuildOptions accel_options = {};
-            accel_options.buildFlags = OPTIX_BUILD_FLAG_ALLOW_COMPACTION;
+            accel_options.buildFlags = OPTIX_BUILD_FLAG_NONE;
             accel_options.operation  = OPTIX_BUILD_OPERATION_BUILD;
 
-            // Triangle build input
+            // Triangle build input: simple list of three vertices
             const std::array<float3, 3> vertices =
             { {
                   { -0.5f, -0.5f, 0.0f },
@@ -175,6 +184,7 @@ int main( int argc, char* argv[] )
                         cudaMemcpyHostToDevice
                         ) );
 
+            // Our build input is a simple list of non-indexed triangle vertices
             const uint32_t triangle_input_flags[1] = { OPTIX_GEOMETRY_FLAG_NONE };
             OptixBuildInput triangle_input = {};
             triangle_input.type                        = OPTIX_BUILD_INPUT_TYPE_TRIANGLES;
@@ -185,58 +195,42 @@ int main( int argc, char* argv[] )
             triangle_input.triangleArray.numSbtRecords = 1;
 
             OptixAccelBufferSizes gas_buffer_sizes;
-            OPTIX_CHECK( optixAccelComputeMemoryUsage( context, &accel_options, &triangle_input,
-                                                       1,  // Number of build input
-                                                       &gas_buffer_sizes ) );
-            CUdeviceptr d_temp_buffer_gas;
-            CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_temp_buffer_gas ), gas_buffer_sizes.tempSizeInBytes ) );
-
-            // non-compacted output
-            CUdeviceptr d_buffer_temp_output_gas_and_compacted_size;
-            size_t compactedSizeOffset = roundUp<size_t>( gas_buffer_sizes.outputSizeInBytes, 8ull );
-            CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>(
-                            &d_buffer_temp_output_gas_and_compacted_size ),
-                        compactedSizeOffset + 8
+            OPTIX_CHECK( optixAccelComputeMemoryUsage(
+                        context,
+                        &accel_options,
+                        &triangle_input,
+                        1, // Number of build inputs
+                        &gas_buffer_sizes
                         ) );
-
-            OptixAccelEmitDesc emitProperty = {};
-            emitProperty.type = OPTIX_PROPERTY_TYPE_COMPACTED_SIZE;
-            emitProperty.result = (CUdeviceptr)((char*)d_buffer_temp_output_gas_and_compacted_size + compactedSizeOffset);
+            CUdeviceptr d_temp_buffer_gas;
+            CUDA_CHECK( cudaMalloc(
+                        reinterpret_cast<void**>( &d_temp_buffer_gas ),
+                        gas_buffer_sizes.tempSizeInBytes
+                        ) );
+            CUDA_CHECK( cudaMalloc(
+                        reinterpret_cast<void**>( &d_gas_output_buffer ),
+                        gas_buffer_sizes.outputSizeInBytes
+                        ) );
 
             OPTIX_CHECK( optixAccelBuild(
                         context,
-                        0,              // CUDA stream
+                        0,                  // CUDA stream
                         &accel_options,
                         &triangle_input,
-                        1,              // num build inputs
+                        1,                  // num build inputs
                         d_temp_buffer_gas,
                         gas_buffer_sizes.tempSizeInBytes,
-                        d_buffer_temp_output_gas_and_compacted_size,
+                        d_gas_output_buffer,
                         gas_buffer_sizes.outputSizeInBytes,
                         &gas_handle,
-                        &emitProperty,  // emitted property list
-                        1               // num emitted properties
+                        nullptr,            // emitted property list
+                        0                   // num emitted properties
                         ) );
 
-            CUDA_CHECK( cudaFree( (void*)d_temp_buffer_gas ) );
-            CUDA_CHECK( cudaFree( (void*)d_vertices ) );
-
-            size_t compacted_gas_size;
-            CUDA_CHECK( cudaMemcpy( &compacted_gas_size, (void*)emitProperty.result, sizeof(size_t), cudaMemcpyDeviceToHost ) );
-
-            if( compacted_gas_size < gas_buffer_sizes.outputSizeInBytes )
-            {
-                CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_gas_output_buffer ), compacted_gas_size ) );
-
-                // use handle as input and output
-                OPTIX_CHECK( optixAccelCompact( context, 0, gas_handle, d_gas_output_buffer, compacted_gas_size, &gas_handle ) );
-
-                CUDA_CHECK( cudaFree( (void*)d_buffer_temp_output_gas_and_compacted_size ) );
-            }
-            else
-            {
-                d_gas_output_buffer = d_buffer_temp_output_gas_and_compacted_size;
-            }
+            // We can now free the scratch space buffer used during build and the vertex
+            // inputs, since they are not needed by our trivial shading method
+            CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_temp_buffer_gas ) ) );
+            CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_vertices        ) ) );
         }
 
         //
@@ -254,10 +248,15 @@ int main( int argc, char* argv[] )
             pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
             pipeline_compile_options.numPayloadValues      = 3;
             pipeline_compile_options.numAttributeValues    = 3;
-            pipeline_compile_options.exceptionFlags        = OPTIX_EXCEPTION_FLAG_NONE;  // TODO: should be OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
+#ifdef DEBUG // Enables debug exceptions during optix launches. This may incur significant performance cost and should only be done during development.
+            pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_DEBUG | OPTIX_EXCEPTION_FLAG_TRACE_DEPTH | OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
+#else
+            pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
+#endif
             pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
+            pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_TRIANGLE;
 
-            const std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, "optixTriangle.cu" );
+            const std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixTriangle.cu" );
             size_t sizeof_log = sizeof( log );
 
             OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
@@ -332,12 +331,12 @@ int main( int argc, char* argv[] )
         //
         OptixPipeline pipeline = nullptr;
         {
+            const uint32_t    max_trace_depth  = 1;
             OptixProgramGroup program_groups[] = { raygen_prog_group, miss_prog_group, hitgroup_prog_group };
 
             OptixPipelineLinkOptions pipeline_link_options = {};
-            pipeline_link_options.maxTraceDepth          = 5;
+            pipeline_link_options.maxTraceDepth          = max_trace_depth;
             pipeline_link_options.debugLevel             = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
-            pipeline_link_options.overrideUsesMotionBlur = false;
             size_t sizeof_log = sizeof( log );
             OPTIX_CHECK_LOG( optixPipelineCreate(
                         context,
@@ -349,6 +348,25 @@ int main( int argc, char* argv[] )
                         &sizeof_log,
                         &pipeline
                         ) );
+
+            OptixStackSizes stack_sizes = {};
+            for( auto& prog_group : program_groups )
+            {
+                OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes ) );
+            }
+
+            uint32_t direct_callable_stack_size_from_traversal;
+            uint32_t direct_callable_stack_size_from_state;
+            uint32_t continuation_stack_size;
+            OPTIX_CHECK( optixUtilComputeStackSizes( &stack_sizes, max_trace_depth,
+                                                     0,  // maxCCDepth
+                                                     0,  // maxDCDEpth
+                                                     &direct_callable_stack_size_from_traversal,
+                                                     &direct_callable_stack_size_from_state, &continuation_stack_size ) );
+            OPTIX_CHECK( optixPipelineSetStackSize( pipeline, direct_callable_stack_size_from_traversal,
+                                                    direct_callable_stack_size_from_state, continuation_stack_size,
+                                                    1  // maxTraversableDepth
+                                                    ) );
         }
 
         //
@@ -359,12 +377,7 @@ int main( int argc, char* argv[] )
             CUdeviceptr  raygen_record;
             const size_t raygen_record_size = sizeof( RayGenSbtRecord );
             CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &raygen_record ), raygen_record_size ) );
-            sutil::Camera cam;
-            configureCamera( cam, width, height );
             RayGenSbtRecord rg_sbt;
-            rg_sbt.data ={};
-            rg_sbt.data.cam_eye = cam.eye();
-            cam.UVWFrame( rg_sbt.data.camera_u, rg_sbt.data.camera_v, rg_sbt.data.camera_w );
             OPTIX_CHECK( optixSbtRecordPackHeader( raygen_prog_group, &rg_sbt ) );
             CUDA_CHECK( cudaMemcpy(
                         reinterpret_cast<void*>( raygen_record ),
@@ -390,7 +403,6 @@ int main( int argc, char* argv[] )
             size_t      hitgroup_record_size = sizeof( HitGroupSbtRecord );
             CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &hitgroup_record ), hitgroup_record_size ) );
             HitGroupSbtRecord hg_sbt;
-            hg_sbt.data = { 1.5f };
             OPTIX_CHECK( optixSbtRecordPackHeader( hitgroup_prog_group, &hg_sbt ) );
             CUDA_CHECK( cudaMemcpy(
                         reinterpret_cast<void*>( hitgroup_record ),
@@ -417,13 +429,16 @@ int main( int argc, char* argv[] )
             CUstream stream;
             CUDA_CHECK( cudaStreamCreate( &stream ) );
 
+            sutil::Camera cam;
+            configureCamera( cam, width, height );
+
             Params params;
             params.image        = output_buffer.map();
             params.image_width  = width;
             params.image_height = height;
-            params.origin_x     = width / 2;
-            params.origin_y     = height / 2;
             params.handle       = gas_handle;
+            params.cam_eye      = cam.eye();
+            cam.UVWFrame( params.cam_u, params.cam_v, params.cam_w );
 
             CUdeviceptr d_param;
             CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_param ), sizeof( Params ) ) );
@@ -451,7 +466,7 @@ int main( int argc, char* argv[] )
             if( outfile.empty() )
                 sutil::displayBufferWindow( argv[0], buffer );
             else
-                sutil::displayBufferFile( outfile.c_str(), buffer, false );
+                sutil::saveImage( outfile.c_str(), buffer, false );
         }
 
         //

@@ -33,6 +33,7 @@
 
 #include <optix.h>
 #include <optix_function_table_definition.h>
+#include <optix_stack_size.h>
 #include <optix_stubs.h>
 
 #include <sampleConfig.h>
@@ -61,6 +62,7 @@
 
 bool             use_pbo      = true;
 bool             resize_dirty = false;
+bool             minimized    = false;
 
 // Camera state
 bool             camera_changed = true;
@@ -424,11 +426,24 @@ static void cursorPosCallback( GLFWwindow* window, double xpos, double ypos )
 
 static void windowSizeCallback( GLFWwindow* window, int32_t res_x, int32_t res_y )
 {
+    // Keep rendering at the current resolution when the window is minimized.
+    if( minimized )
+        return;
+
+    // Output dimensions must be at least 1 in both x and y.
+    sutil::ensureMinimumSize( res_x, res_y );
+
     Params* params = static_cast<Params*>( glfwGetWindowUserPointer( window ) );
     params->width  = res_x;
     params->height = res_y;
     camera_changed = true;
     resize_dirty   = true;
+}
+
+
+static void windowIconifyCallback( GLFWwindow* window, int32_t iconified )
+{
+    minimized = ( iconified > 0 );
 }
 
 
@@ -464,11 +479,12 @@ static void scrollCallback( GLFWwindow* window, double xscroll, double yscroll )
 
 void printUsageAndExit( const char* argv0 )
 {
-    std::cerr <<  "Usage  : " << argv0 << " [options]\n";
-    std::cerr <<  "Options: --file | -f <filename>      File for image output\n";
-    std::cerr <<  "         --launch-samples | -s       Number of samples per pixel per launch (default 16)\n";
-    std::cerr <<  "         --no-gl-interop             Disable GL interop for display\n";
-    std::cerr <<  "         --help | -h                 Print this usage message\n";
+    std::cerr << "Usage  : " << argv0 << " [options]\n";
+    std::cerr << "Options: --file | -f <filename>      File for image output\n";
+    std::cerr << "         --launch-samples | -s       Number of samples per pixel per launch (default 16)\n";
+    std::cerr << "         --no-gl-interop             Disable GL interop for display\n";
+    std::cerr << "         --dim=<width>x<height>      Set image dimensions; defaults to 768x768\n";
+    std::cerr << "         --help | -h                 Print this usage message\n";
     exit( 0 );
 }
 
@@ -657,7 +673,7 @@ void buildGeomAccel( CutoutsState& state )
         triangle_input.type                                      = OPTIX_BUILD_INPUT_TYPE_TRIANGLES;
         triangle_input.triangleArray.vertexFormat                = OPTIX_VERTEX_FORMAT_FLOAT3;
         triangle_input.triangleArray.vertexStrideInBytes         = sizeof( Vertex );
-        triangle_input.triangleArray.numVertices                 = static_cast<uint32_t>( g_vertices.size() * 3 );
+        triangle_input.triangleArray.numVertices                 = static_cast<uint32_t>( g_vertices.size() );
         triangle_input.triangleArray.vertexBuffers               = &state.d_vertices;
         triangle_input.triangleArray.flags                       = triangle_input_flags;
         triangle_input.triangleArray.numSbtRecords               = TRIANGLE_MAT_COUNT;
@@ -746,12 +762,12 @@ void buildGeomAccel( CutoutsState& state )
                                 cudaMemcpyHostToDevice ) );
 
         uint32_t sphere_input_flag = OPTIX_GEOMETRY_FLAG_NONE;
-        OptixBuildInput sphere_input = {};
-        sphere_input.type                    = OPTIX_BUILD_INPUT_TYPE_CUSTOM_PRIMITIVES;
-        sphere_input.aabbArray.aabbBuffers   = &d_aabb_buffer;
-        sphere_input.aabbArray.numPrimitives = 1;
-        sphere_input.aabbArray.flags         = &sphere_input_flag;
-        sphere_input.aabbArray.numSbtRecords = 1;
+        OptixBuildInput sphere_input                    = {};
+        sphere_input.type                               = OPTIX_BUILD_INPUT_TYPE_CUSTOM_PRIMITIVES;
+        sphere_input.customPrimitiveArray.aabbBuffers   = &d_aabb_buffer;
+        sphere_input.customPrimitiveArray.numPrimitives = 1;
+        sphere_input.customPrimitiveArray.flags         = &sphere_input_flag;
+        sphere_input.customPrimitiveArray.numSbtRecords = 1;
 
         OptixAccelBufferSizes gas_buffer_sizes;
         OPTIX_CHECK( optixAccelComputeMemoryUsage( state.context,
@@ -890,7 +906,7 @@ void createModule( CutoutsState& state )
     state.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE; // should be OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
     state.pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
-    std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, "optixCutouts.cu" );
+    std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixCutouts.cu" );
     char log[2048];
     size_t sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
@@ -983,6 +999,7 @@ void createProgramGroups( CutoutsState& state )
 
 void createPipeline( CutoutsState& state )
 {
+    const uint32_t    max_trace_depth = 2;
     OptixProgramGroup program_groups[] =
     {
         state.raygen_prog_group,
@@ -993,9 +1010,8 @@ void createPipeline( CutoutsState& state )
     };
 
     OptixPipelineLinkOptions pipeline_link_options = {};
-    pipeline_link_options.maxTraceDepth            = 2;
+    pipeline_link_options.maxTraceDepth            = max_trace_depth;
     pipeline_link_options.debugLevel               = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
-    pipeline_link_options.overrideUsesMotionBlur   = false;
 
     char   log[2048];
     size_t sizeof_log = sizeof( log );
@@ -1007,6 +1023,25 @@ void createPipeline( CutoutsState& state )
                                           log,
                                           &sizeof_log,
                                           &state.pipeline ) );
+
+    OptixStackSizes stack_sizes = {};
+    for( auto& prog_group : program_groups )
+    {
+        OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes ) );
+    }
+
+    uint32_t direct_callable_stack_size_from_traversal;
+    uint32_t direct_callable_stack_size_from_state;
+    uint32_t continuation_stack_size;
+    OPTIX_CHECK( optixUtilComputeStackSizes( &stack_sizes, max_trace_depth,
+                                             0,  // maxCCDepth
+                                             0,  // maxDCDEpth
+                                             &direct_callable_stack_size_from_traversal,
+                                             &direct_callable_stack_size_from_state, &continuation_stack_size ) );
+    OPTIX_CHECK( optixPipelineSetStackSize( state.pipeline, direct_callable_stack_size_from_traversal,
+                                            direct_callable_stack_size_from_state, continuation_stack_size,
+                                            1  // maxTraversableDepth
+                                            ) );
 }
 
 
@@ -1158,6 +1193,14 @@ int main( int argc, char* argv[] )
                 printUsageAndExit( argv[0] );
             outfile = argv[++i];
         }
+        else if( arg.substr( 0, 6 ) == "--dim=" )
+        {
+            const std::string dims_arg = arg.substr( 6 );
+            int               w, h;
+            sutil::parseDimensions( dims_arg.c_str(), w, h );
+            state.params.width  = w;
+            state.params.height = h;
+        }
         else if( arg == "--launch-samples" || arg == "-s" )
         {
             if( i >= argc - 1 )
@@ -1192,12 +1235,13 @@ int main( int argc, char* argv[] )
         if( outfile.empty() )
         {
             GLFWwindow* window = sutil::initUI( "optixCutouts", state.params.width, state.params.height );
-            glfwSetMouseButtonCallback( window, mouseButtonCallback );
-            glfwSetCursorPosCallback  ( window, cursorPosCallback   );
-            glfwSetWindowSizeCallback ( window, windowSizeCallback  );
-            glfwSetKeyCallback        ( window, keyCallback         );
-            glfwSetScrollCallback     ( window, scrollCallback      );
-            glfwSetWindowUserPointer  ( window, &state.params       );
+            glfwSetMouseButtonCallback  ( window, mouseButtonCallback   );
+            glfwSetCursorPosCallback    ( window, cursorPosCallback     );
+            glfwSetWindowSizeCallback   ( window, windowSizeCallback    );
+            glfwSetWindowIconifyCallback( window, windowIconifyCallback );
+            glfwSetKeyCallback          ( window, keyCallback           );
+            glfwSetScrollCallback       ( window, scrollCallback        );
+            glfwSetWindowUserPointer    ( window, &state.params         );
 
             //
             // Render loop
@@ -1261,7 +1305,7 @@ int main( int argc, char* argv[] )
             buffer.height = output_buffer.height();
             buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
 
-            sutil::displayBufferFile(outfile.c_str(), buffer, false);
+            sutil::saveImage(outfile.c_str(), buffer, false);
 
             glfwTerminate();
         }

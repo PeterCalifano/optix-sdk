@@ -28,19 +28,41 @@
 #pragma once
 
 #include <optix.h>
-
-#include <DemandTexture.h>
 #include <optixPaging/optixPaging.h>
+#include <sutil/vec_math.h>
 
-#include <stdint.h>
+/// DemandTextureSampler contains the device-side info required for a demand texture fetch.
+/// The index of a DemandTextureSampler is passed to the closest hit shader via a hit group
+/// record in the SBT, and a table of samplers is available as a launch parameter.
+struct DemandTextureSampler
+{
+    /// The CUDA texture object.
+    cudaTextureObject_t texture;
+};
+
+struct Sphere
+{
+    float3 center;
+    float  radius;
+
+    OptixAabb bounds() const
+    {
+        float3 m_min = center - radius;
+        float3 m_max = center + radius;
+
+        OptixAabb aabb = {m_min.x, m_min.y, m_min.z, m_max.x, m_max.y, m_max.z};
+        return aabb;
+    }
+};
+
 
 struct Params
 {
     uchar4*                     image;
-    uint32_t                    image_width;
-    uint32_t                    image_height;
-    int32_t                     origin_x;
-    int32_t                     origin_y;
+    unsigned int                image_width;
+    unsigned int                image_height;
+    int                         origin_x;
+    int                         origin_y;
     OptixTraversableHandle      handle;
     OptixPagingContext          pagingContext;
     const DemandTextureSampler* demandTextures;
@@ -62,8 +84,8 @@ struct MissData
 
 struct HitGroupData
 {
-    float    radius;
-    uint32_t demand_texture_id;
-    float    texture_scale;
-    float    texture_lod;
+    Sphere       sphere;
+    unsigned int demand_texture_id;
+    float        texture_scale;
+    float        texture_lod;
 };

@@ -55,6 +55,9 @@
 #    elif defined( __APPLE__ ) && defined( __MACH__ )
 #      define SUTILAPI __attribute__ ((visibility ("default")))
 #      define SUTILCLASSAPI SUTILAPI
+#    elif defined( __CUDACC_RTC__ )
+#      define SUTILAPI
+#      define SUTILCLASSAPI
 #    else
 #      error "CODE FOR THIS OS HAS NOT YET BEEN DEFINED"
 #    endif

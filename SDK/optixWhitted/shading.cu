@@ -97,8 +97,8 @@ traceRadianceRay(
         RAY_TYPE_RADIANCE,
         float3_as_args(prd.result),
         /* Can't use float_as_int() because it returns rvalue but payload requires a lvalue */
-        reinterpret_cast<uint32_t&>(prd.importance),
-        reinterpret_cast<uint32_t&>(prd.depth) );
+        reinterpret_cast<unsigned int&>(prd.importance),
+        reinterpret_cast<unsigned int&>(prd.depth) );
 
     return prd.result;
 }
@@ -110,7 +110,6 @@ __device__ void phongShadowed()
     OcclusionPRD prd;
     prd.attenuation = make_float3(0.f);
     setOcclusionPRD(prd);
-    optixTerminateRay();
 }
 
 static
@@ -186,7 +185,8 @@ __device__ void phongShade( float3 p_Kd,
         int new_depth = prd.depth + 1;
 
         // reflection ray
-        if( new_importance >= 0.01f && new_depth <= params.max_depth)
+        // compare new_depth to max_depth - 1 to leave room for a potential shadow ray trace
+        if( new_importance >= 0.01f && new_depth <= params.max_depth - 1)
         {
             float3 R = reflect( ray_dir, p_normal );
 
@@ -261,7 +261,7 @@ extern "C" __global__ void __closesthit__metal_radiance()
     phongShade( phong.Kd, phong.Ka, phong.Ks, phong.Kr, phong.phong_exp, ffnormal );
 }
 
-extern "C" __global__ void __anyhit__full_occlusion()
+extern "C" __global__ void __closesthit__full_occlusion()
 {
     phongShadowed();
 }
@@ -321,7 +321,8 @@ extern "C" __global__ void __closesthit__glass_radiance()
     }
 
     // refraction
-    if (depth < min(glass.refraction_maxdepth, params.max_depth))
+    // compare depth to max_depth - 1 to leave room for a potential shadow ray trace
+    if (depth < min(glass.refraction_maxdepth, params.max_depth - 1))
     {
         if ( refract(t, ray_dir, n, glass.refraction_index) )
         {
@@ -353,8 +354,9 @@ extern "C" __global__ void __closesthit__glass_radiance()
     } // else reflection==1 so refraction has 0 weight
 
     // reflection
+    // compare depth to max_depth - 1 to leave room for a potential shadow ray trace
     float3 color = glass.cutoff_color;
-    if (depth < min(glass.reflection_maxdepth, params.max_depth))
+    if (depth < min(glass.reflection_maxdepth, params.max_depth - 1))
     {
         r = reflect(ray_dir, n);
 
@@ -393,9 +395,15 @@ extern "C" __global__ void __anyhit__glass_occlusion()
     shadow_prd.attenuation *= 1-fresnel_schlick(nDi, 5, 1-glass.shadow_attenuation, make_float3(1));
     setOcclusionPRD(shadow_prd);
 
+    // Test the attenuation of the light from the glass shell
     if(luminance(shadow_prd.attenuation) < glass.importance_cutoff)
+        // The attenuation is so high, > 99% blocked, that we can consider testing to be done.
         optixTerminateRay();
     else
+        // There is still some light coming through the glass shell that we should test other occluders.
+        // We "ignore" the intersection with the glass shell, meaning that shadow testing will continue.
+        // If the ray does not hit another occluder, the light's attenuation from this glass shell
+        // (along with other glass shells) is then used.
         optixIgnoreIntersection();
 }
 

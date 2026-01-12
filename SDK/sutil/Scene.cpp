@@ -39,15 +39,15 @@
 #include <sutil/sutil.h>
 
 #define TINYGLTF_IMPLEMENTATION
-#define STB_IMAGE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_IMPLEMENTATION
+//#define STB_IMAGE_IMPLEMENTATION        // Implementation in sutil.cpp
+//#define STB_IMAGE_WRITE_IMPLEMENTATION  //
 #if defined( WIN32 )
-#pragma warning( push )
-#pragma warning( disable : 4267 )
+#    pragma warning( push )
+#    pragma warning( disable : 4267 )
 #endif
 #include <support/tinygltf/tiny_gltf.h>
 #if defined( WIN32 )
-#pragma warning( pop )
+#    pragma warning( pop )
 #endif
 
 #include <cassert>
@@ -255,6 +255,8 @@ void processGLTFNode(
 
 void loadScene( const std::string& filename, Scene& scene )
 {
+    scene.cleanup();
+
     tinygltf::Model model;
     tinygltf::TinyGLTF loader;
     std::string err;
@@ -440,6 +442,15 @@ void loadScene( const std::string& filename, Scene& scene )
 }
 
 
+Scene::Scene( void ) {}
+
+
+Scene::~Scene( void )
+{
+    cleanup();
+}
+
+
 void Scene::addBuffer( const uint64_t buf_size, const void* data )
 {
         CUdeviceptr buffer = 0;
@@ -577,7 +588,85 @@ void Scene::finalize()
 
 void sutil::Scene::cleanup()
 {
-    // TODO
+    // OptiX cleanup
+    if( m_pipeline )
+    {
+        OPTIX_CHECK( optixPipelineDestroy( m_pipeline ) );
+        m_pipeline = 0;
+    }
+    if( m_raygen_prog_group )
+    {
+        OPTIX_CHECK( optixProgramGroupDestroy( m_raygen_prog_group ) );
+        m_raygen_prog_group = 0;
+    }
+    if( m_radiance_miss_group )
+    {
+        OPTIX_CHECK( optixProgramGroupDestroy( m_radiance_miss_group ) );
+        m_radiance_miss_group = 0;
+    }
+    if( m_occlusion_miss_group )
+    {
+        OPTIX_CHECK( optixProgramGroupDestroy( m_occlusion_miss_group ) );
+        m_occlusion_miss_group = 0;
+    }
+    if( m_radiance_hit_group )
+    {
+        OPTIX_CHECK( optixProgramGroupDestroy( m_radiance_hit_group ) );
+        m_radiance_hit_group = 0;
+    }
+    if( m_occlusion_hit_group )
+    {
+        OPTIX_CHECK( optixProgramGroupDestroy( m_occlusion_hit_group ) );
+        m_occlusion_hit_group = 0;
+    }
+    if( m_ptx_module )
+    {
+        OPTIX_CHECK( optixModuleDestroy( m_ptx_module ) );
+        m_ptx_module = 0;
+    }
+    if( m_context )
+    {
+        OPTIX_CHECK( optixDeviceContextDestroy( m_context ) );
+        m_context = 0;
+    }
+
+    // Free buffers for mesh (indices, positions, normals, texcoords)
+    for( CUdeviceptr& buffer : m_buffers )
+        CUDA_CHECK( cudaFree( reinterpret_cast<void*>( buffer ) ) );
+    m_buffers.clear();
+
+    // Destroy textures (base_color, metallic_roughness, normal)
+    for( cudaTextureObject_t& texture : m_samplers )
+        CUDA_CHECK( cudaDestroyTextureObject( texture ) );
+    m_samplers.clear();
+
+    for( cudaArray_t& image : m_images )
+        CUDA_CHECK( cudaFreeArray( image ) );
+    m_images.clear();
+
+    if( m_d_ias_output_buffer )
+    {
+        CUDA_CHECK( cudaFree( reinterpret_cast<void*>( m_d_ias_output_buffer ) ) );
+        m_d_ias_output_buffer = 0;
+    }
+    if( m_sbt.raygenRecord )
+    {
+        CUDA_CHECK( cudaFree( reinterpret_cast<void*>( m_sbt.raygenRecord ) ) );
+        m_sbt.raygenRecord = 0;
+    }
+    if( m_sbt.missRecordBase )
+    {
+        CUDA_CHECK( cudaFree( reinterpret_cast<void*>( m_sbt.missRecordBase ) ) );
+        m_sbt.missRecordBase = 0;
+    }
+    if( m_sbt.hitgroupRecordBase )
+    {
+        CUDA_CHECK( cudaFree( reinterpret_cast<void*>( m_sbt.hitgroupRecordBase ) ) );
+        m_sbt.hitgroupRecordBase = 0;
+    }
+    for( auto mesh : m_meshes )
+        CUDA_CHECK( cudaFree( reinterpret_cast<void*>( mesh->d_gas_output ) ) );
+    m_meshes.clear();
 }
 
 
@@ -635,7 +724,7 @@ class CuBuffer
     }
     void allocIfRequired( size_t count )
     {
-        if( count <= m_count )
+        if( count <= m_allocCount )
         {
             m_count = count;
             return;
@@ -653,9 +742,9 @@ class CuBuffer
     }
     CUdeviceptr release()
     {
-        CUdeviceptr current = reinterpret_cast<CUdeviceptr>( m_ptr );
         m_count             = 0;
         m_allocCount        = 0;
+        CUdeviceptr current = reinterpret_cast<CUdeviceptr>( m_ptr );
         m_ptr               = nullptr;
         return current;
     }
@@ -684,7 +773,7 @@ class CuBuffer
 };
 }  // namespace
 
-void Scene::buildMeshAccels()
+void Scene::buildMeshAccels( uint32_t triangle_input_flags )
 {
     // Problem:
     // The memory requirements of a compacted GAS are unknown prior to building the GAS.
@@ -770,7 +859,6 @@ void Scene::buildMeshAccels()
     };
     std::multimap<size_t, GASInfo> gases;
     size_t totalTempOutputSize = 0;
-    /*const*/ uint32_t triangle_input_flags =  OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT;
 
     for(size_t i=0; i<m_meshes.size(); ++i)
     {
@@ -877,11 +965,6 @@ void Scene::buildMeshAccels()
             d_temp_compactedSizes.free();
         d_temp_compactedSizes.allocIfRequired( batchNGASes );
 
-        // sum of build output size of GASes, excluding alignment
-        size_t batchTempOutputSize = 0;
-        // sum of size of compacted GASes
-        size_t batchCompactedSize = 0;
-
         auto it = gases.rbegin();
         for( size_t i = 0, tempOutputAlignmentOffset = 0; i < batchNGASes; ++i )
         {
@@ -929,6 +1012,9 @@ void Scene::buildMeshAccels()
             }
             it++;
         }
+
+        // sum of size of compacted GASes
+        size_t batchCompactedSize = 0;
 
         if( canCompact )
         {
@@ -1077,7 +1163,7 @@ void Scene::createPTXModule()
     m_pipeline_compile_options.exceptionFlags            = OPTIX_EXCEPTION_FLAG_NONE; // should be OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
     m_pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
-    const std::string ptx = getPtxString( nullptr, "whitted.cu" );
+    const std::string ptx = getPtxString( nullptr, nullptr, "whitted.cu" );
 
     m_ptx_module  = {};
     char log[2048];
@@ -1214,7 +1300,6 @@ void Scene::createPipeline()
     OptixPipelineLinkOptions pipeline_link_options = {};
     pipeline_link_options.maxTraceDepth          = 2;
     pipeline_link_options.debugLevel             = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
-    pipeline_link_options.overrideUsesMotionBlur = false;
 
     char log[2048];
     size_t sizeof_log = sizeof( log );

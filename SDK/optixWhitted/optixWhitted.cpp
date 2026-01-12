@@ -33,6 +33,7 @@
 
 #include <optix.h>
 #include <optix_function_table_definition.h>
+#include <optix_stack_size.h>
 #include <optix_stubs.h>
 
 #include <sampleConfig.h>
@@ -60,6 +61,7 @@
 //------------------------------------------------------------------------------
 
 bool              resize_dirty  = false;
+bool              minimized     = false;
 
 // Camera state
 bool              camera_changed = true;
@@ -69,7 +71,7 @@ sutil::Trackball  trackball;
 // Mouse state
 int32_t           mouse_button = -1;
 
-const int         max_trace = 10;
+const int         max_trace = 12;
 
 //------------------------------------------------------------------------------
 //
@@ -193,11 +195,24 @@ static void cursorPosCallback( GLFWwindow* window, double xpos, double ypos )
 
 static void windowSizeCallback( GLFWwindow* window, int32_t res_x, int32_t res_y )
 {
+    // Keep rendering at the current resolution when the window is minimized.
+    if( minimized )
+        return;
+
+    // Output dimensions must be at least 1 in both x and y.
+    sutil::ensureMinimumSize( res_x, res_y );
+
     Params* params = static_cast<Params*>( glfwGetWindowUserPointer( window ) );
     params->width  = res_x;
     params->height = res_y;
     camera_changed = true;
     resize_dirty   = true;
+}
+
+
+static void windowIconifyCallback( GLFWwindow* window, int32_t iconified )
+{
+    minimized = ( iconified > 0 );
 }
 
 
@@ -233,11 +248,12 @@ static void scrollCallback( GLFWwindow* window, double xscroll, double yscroll )
 
 void printUsageAndExit( const char* argv0 )
 {
-    std::cerr <<  "Usage  : " << argv0 << " [options]\n";
-    std::cerr <<  "Options: --file | -f <filename>      File for image output\n";
-    std::cerr <<  "         --launch-samples | -s       Number of samples per pixel per launch (default 16)\n";
-    std::cerr <<  "         --no-gl-interop             Disable GL interop for display\n";
-    std::cerr <<  "         --help | -h                 Print this usage message\n";
+    std::cerr << "Usage  : " << argv0 << " [options]\n";
+    std::cerr << "Options: --file | -f <filename>      File for image output\n";
+    std::cerr << "         --launch-samples | -s       Number of samples per pixel per launch (default 16)\n";
+    std::cerr << "         --no-gl-interop             Disable GL interop for display\n";
+    std::cerr << "         --dim=<width>x<height>      Set image dimensions; defaults to 768x768\n";
+    std::cerr << "         --help | -h                 Print this usage message\n";
     exit( 0 );
 }
 
@@ -363,7 +379,7 @@ static void buildGas(
     }
 }
 
-void createGeomety( WhittedState &state )
+void createGeometry( WhittedState &state )
 {
     //
     // Build Custom Primitives
@@ -395,11 +411,11 @@ void createGeomety( WhittedState &state )
     // Setup AABB build input
     uint32_t aabb_input_flags[] = {
         /* flags for metal sphere */
-        OPTIX_GEOMETRY_FLAG_NONE,
+        OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT,
         /* flag for glass sphere */
         OPTIX_GEOMETRY_FLAG_REQUIRE_SINGLE_ANYHIT_CALL,
         /* flag for floor */
-        OPTIX_GEOMETRY_FLAG_NONE,
+        OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT,
     };
     /* TODO: This API cannot control flags for different ray type */
 
@@ -415,13 +431,13 @@ void createGeomety( WhittedState &state )
 
     OptixBuildInput aabb_input = {};
     aabb_input.type = OPTIX_BUILD_INPUT_TYPE_CUSTOM_PRIMITIVES;
-    aabb_input.aabbArray.aabbBuffers   = &d_aabb;
-    aabb_input.aabbArray.flags         = aabb_input_flags;
-    aabb_input.aabbArray.numSbtRecords = OBJ_COUNT;
-    aabb_input.aabbArray.numPrimitives = OBJ_COUNT;
-    aabb_input.aabbArray.sbtIndexOffsetBuffer         = d_sbt_index;
-    aabb_input.aabbArray.sbtIndexOffsetSizeInBytes    = sizeof( uint32_t );
-    aabb_input.aabbArray.primitiveIndexOffset         = 0;
+    aabb_input.customPrimitiveArray.aabbBuffers   = &d_aabb;
+    aabb_input.customPrimitiveArray.flags         = aabb_input_flags;
+    aabb_input.customPrimitiveArray.numSbtRecords = OBJ_COUNT;
+    aabb_input.customPrimitiveArray.numPrimitives = OBJ_COUNT;
+    aabb_input.customPrimitiveArray.sbtIndexOffsetBuffer         = d_sbt_index;
+    aabb_input.customPrimitiveArray.sbtIndexOffsetSizeInBytes    = sizeof( uint32_t );
+    aabb_input.customPrimitiveArray.primitiveIndexOffset         = 0;
 
 
     OptixAccelBuildOptions accel_options = {
@@ -451,7 +467,7 @@ void createModules( WhittedState &state )
     size_t sizeof_log = sizeof(log);
 
     {
-        const std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, "geometry.cu" );
+        const std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "geometry.cu" );
         OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
             state.context,
             &module_compile_options,
@@ -464,7 +480,7 @@ void createModules( WhittedState &state )
     }
 
     {
-        const std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, "camera.cu" );
+        const std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "camera.cu" );
         OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
             state.context,
             &module_compile_options,
@@ -477,7 +493,7 @@ void createModules( WhittedState &state )
     }
 
     {
-        const std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, "shading.cu" );
+        const std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "shading.cu" );
         OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
             state.context,
             &module_compile_options,
@@ -598,10 +614,10 @@ static void createMetalSphereProgram( WhittedState &state, std::vector<OptixProg
     occlusion_sphere_prog_group_desc.kind   = OPTIX_PROGRAM_GROUP_KIND_HITGROUP,
         occlusion_sphere_prog_group_desc.hitgroup.moduleIS           = state.geometry_module;
     occlusion_sphere_prog_group_desc.hitgroup.entryFunctionNameIS    = "__intersection__sphere";
-    occlusion_sphere_prog_group_desc.hitgroup.moduleCH               = nullptr;
-    occlusion_sphere_prog_group_desc.hitgroup.entryFunctionNameCH    = nullptr;
-    occlusion_sphere_prog_group_desc.hitgroup.moduleAH               = state.shading_module;
-    occlusion_sphere_prog_group_desc.hitgroup.entryFunctionNameAH    = "__anyhit__full_occlusion";
+    occlusion_sphere_prog_group_desc.hitgroup.moduleCH               = state.shading_module;
+    occlusion_sphere_prog_group_desc.hitgroup.entryFunctionNameCH    = "__closesthit__full_occlusion";
+    occlusion_sphere_prog_group_desc.hitgroup.moduleAH               = nullptr;
+    occlusion_sphere_prog_group_desc.hitgroup.entryFunctionNameAH    = nullptr;
 
     OPTIX_CHECK_LOG( optixProgramGroupCreate(
         state.context,
@@ -649,10 +665,10 @@ static void createFloorProgram( WhittedState &state, std::vector<OptixProgramGro
     occlusion_floor_prog_group_desc.kind   = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
     occlusion_floor_prog_group_desc.hitgroup.moduleIS               = state.geometry_module;
     occlusion_floor_prog_group_desc.hitgroup.entryFunctionNameIS    = "__intersection__parallelogram";
-    occlusion_floor_prog_group_desc.hitgroup.moduleCH               = nullptr;
-    occlusion_floor_prog_group_desc.hitgroup.entryFunctionNameCH    = nullptr;
-    occlusion_floor_prog_group_desc.hitgroup.moduleAH               = state.shading_module;
-    occlusion_floor_prog_group_desc.hitgroup.entryFunctionNameAH    = "__anyhit__full_occlusion";
+    occlusion_floor_prog_group_desc.hitgroup.moduleCH               = state.shading_module;
+    occlusion_floor_prog_group_desc.hitgroup.entryFunctionNameCH    = "__closesthit__full_occlusion";
+    occlusion_floor_prog_group_desc.hitgroup.moduleAH               = nullptr;
+    occlusion_floor_prog_group_desc.hitgroup.entryFunctionNameAH    = nullptr;
 
     OPTIX_CHECK_LOG( optixProgramGroupCreate(
         state.context,
@@ -686,6 +702,8 @@ static void createMissProgram( WhittedState &state, std::vector<OptixProgramGrou
         &sizeof_log,
         &state.radiance_miss_prog_group ) );
 
+    program_groups.push_back(state.radiance_miss_prog_group);
+
     miss_prog_group_desc.miss = {
         nullptr,    // module
         nullptr     // entryFunctionName
@@ -698,6 +716,8 @@ static void createMissProgram( WhittedState &state, std::vector<OptixProgramGrou
         log,
         &sizeof_log,
         &state.occlusion_miss_prog_group ) );
+
+    program_groups.push_back(state.occlusion_miss_prog_group);
 }
 
 void createPipeline( WhittedState &state )
@@ -724,8 +744,7 @@ void createPipeline( WhittedState &state )
     // Link program groups to pipeline
     OptixPipelineLinkOptions pipeline_link_options = {
         max_trace,                          // maxTraceDepth
-        OPTIX_COMPILE_DEBUG_LEVEL_FULL,     // debugLevel
-        false                               // overrideUsesMotionBlur
+        OPTIX_COMPILE_DEBUG_LEVEL_FULL      // debugLevel
     };
     char    log[2048];
     size_t  sizeof_log = sizeof(log);
@@ -738,6 +757,25 @@ void createPipeline( WhittedState &state )
         log,
         &sizeof_log,
         &state.pipeline ) );
+
+    OptixStackSizes stack_sizes = {};
+    for( auto& prog_group : program_groups )
+    {
+        OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes ) );
+    }
+
+    uint32_t direct_callable_stack_size_from_traversal;
+    uint32_t direct_callable_stack_size_from_state;
+    uint32_t continuation_stack_size;
+    OPTIX_CHECK( optixUtilComputeStackSizes( &stack_sizes, max_trace,
+                                             0,  // maxCCDepth
+                                             0,  // maxDCDepth
+                                             &direct_callable_stack_size_from_traversal,
+                                             &direct_callable_stack_size_from_state, &continuation_stack_size ) );
+    OPTIX_CHECK( optixPipelineSetStackSize( state.pipeline, direct_callable_stack_size_from_traversal,
+                                            direct_callable_stack_size_from_state, continuation_stack_size,
+                                            1  // maxTraversableDepth
+                                            ) );
 }
 
 void syncCameraDataToSbt( WhittedState &state, const CameraData& camData )
@@ -1075,6 +1113,14 @@ int main( int argc, char* argv[] )
                 printUsageAndExit( argv[0] );
             outfile = argv[++i];
         }
+        else if( arg.substr( 0, 6 ) == "--dim=" )
+        {
+            const std::string dims_arg = arg.substr( 6 );
+            int w, h;
+            sutil::parseDimensions( dims_arg.c_str(), w, h );
+            state.params.width  = w;
+            state.params.height = h;
+        }
         else
         {
             std::cerr << "Unknown option '" << argv[i] << "'\n";
@@ -1090,7 +1136,7 @@ int main( int argc, char* argv[] )
         // Set up OptiX state
         //
         createContext  ( state );
-        createGeomety  ( state );
+        createGeometry  ( state );
         createPipeline ( state );
         createSBT      ( state );
 
@@ -1102,12 +1148,13 @@ int main( int argc, char* argv[] )
         if( outfile.empty() )
         {
             GLFWwindow* window = sutil::initUI( "optixWhitted", state.params.width, state.params.height );
-            glfwSetMouseButtonCallback( window, mouseButtonCallback );
-            glfwSetCursorPosCallback  ( window, cursorPosCallback   );
-            glfwSetWindowSizeCallback ( window, windowSizeCallback  );
-            glfwSetKeyCallback        ( window, keyCallback         );
-            glfwSetScrollCallback     ( window, scrollCallback      );
-            glfwSetWindowUserPointer  ( window, &state.params       );
+            glfwSetMouseButtonCallback  ( window, mouseButtonCallback   );
+            glfwSetCursorPosCallback    ( window, cursorPosCallback     );
+            glfwSetWindowSizeCallback   ( window, windowSizeCallback    );
+            glfwSetWindowIconifyCallback( window, windowIconifyCallback );
+            glfwSetKeyCallback          ( window, keyCallback           );
+            glfwSetScrollCallback       ( window, scrollCallback        );
+            glfwSetWindowUserPointer    ( window, &state.params         );
 
             {
                 // output_buffer needs to be destroyed before cleanupUI is called
@@ -1177,7 +1224,7 @@ int main( int argc, char* argv[] )
             buffer.width        = output_buffer.width();
             buffer.height       = output_buffer.height();
             buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
-            sutil::displayBufferFile( outfile.c_str(), buffer, false );
+            sutil::saveImage( outfile.c_str(), buffer, false );
 
             if( output_buffer_type == sutil::CUDAOutputBufferType::GL_INTEROP )
             {

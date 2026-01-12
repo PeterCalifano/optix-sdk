@@ -30,16 +30,13 @@
 
 #include <sutil/Preprocessor.h>
 
-#include <stdint.h>
-
-
 template <typename T>
 struct BufferView
 {
-    CUdeviceptr  data            CONST_STATIC_INIT( 0 );
-    uint32_t     count           CONST_STATIC_INIT( 0 );
-    uint16_t     byte_stride     CONST_STATIC_INIT( 0 );
-    uint16_t     elmt_byte_size  CONST_STATIC_INIT( 0 );
+    CUdeviceptr    data           CONST_STATIC_INIT( 0 );
+    unsigned int   count          CONST_STATIC_INIT( 0 );
+    unsigned short byte_stride    CONST_STATIC_INIT( 0 );
+    unsigned short elmt_byte_size CONST_STATIC_INIT( 0 );
 
     SUTIL_HOSTDEVICE bool isValid() const
     { return static_cast<bool>( data ); }
@@ -47,9 +44,9 @@ struct BufferView
     SUTIL_HOSTDEVICE operator bool() const
     { return isValid(); }
 
-    SUTIL_HOSTDEVICE const T& operator[]( uint32_t idx ) const
+    SUTIL_HOSTDEVICE const T& operator[]( unsigned int idx ) const
     { return *reinterpret_cast<T*>( data + idx*(byte_stride ? byte_stride : sizeof( T ) ) ); }
 };
 
-typedef BufferView<uint32_t> GenericBufferView;
+typedef BufferView<unsigned int> GenericBufferView;
 

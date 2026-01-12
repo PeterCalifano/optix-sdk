@@ -28,7 +28,7 @@
 #pragma once
 
 #include <sutil/vec_math.h>
-#include <sutil/Aabb.h>
+#include <sutil/Matrix.h>
 
 
 #ifndef __CUDACC__
@@ -147,6 +147,7 @@ namespace sutil
     /** Enlarge the box by moving both min and max by 'amount' */
     SUTIL_HOSTDEVICE void enlarge( float amount );
 
+    SUTIL_HOSTDEVICE void transform( const Matrix3x4& m );
     SUTIL_HOSTDEVICE void transform( const Matrix4x4& m );
 
     /** Check if the box is flat in at least one dimension  */
@@ -348,6 +349,43 @@ namespace sutil
     m_max += make_float3( amount );
   }
 
+    SUTIL_INLINE SUTIL_HOSTDEVICE void Aabb::transform( const Matrix3x4& m )
+  {
+    // row-major matrix -> column vectors:
+    // x ={ m[0], m[4], m[8] }
+    // y ={ m[1], m[5], m[9] }
+    // z ={ m[2], m[6], m[10] }
+    // 3,7,11 translation
+
+    // no need to initialize, will be overwritten completely
+    Aabb result;
+    const float loxx = m[0] * m_min.x;
+    const float hixx = m[0] * m_max.x;
+    const float loyx = m[1] * m_min.y;
+    const float hiyx = m[1] * m_max.y;
+    const float lozx = m[2] * m_min.z;
+    const float hizx = m[2] * m_max.z;
+    result.m_min.x = fminf( loxx, hixx ) + fminf( loyx, hiyx ) + fminf( lozx, hizx ) + m[3];
+    result.m_max.x = fmaxf( loxx, hixx ) + fmaxf( loyx, hiyx ) + fmaxf( lozx, hizx ) + m[3];
+    const float loxy = m[4] * m_min.x;
+    const float hixy = m[4] * m_max.x;
+    const float loyy = m[5] * m_min.y;
+    const float hiyy = m[5] * m_max.y;
+    const float lozy = m[6] * m_min.z;
+    const float hizy = m[6] * m_max.z;
+    result.m_min.y = fminf( loxy, hixy ) + fminf( loyy, hiyy ) + fminf( lozy, hizy ) + m[7];
+    result.m_max.y = fmaxf( loxy, hixy ) + fmaxf( loyy, hiyy ) + fmaxf( lozy, hizy ) + m[7];
+    const float loxz = m[8] * m_min.x;
+    const float hixz = m[8] * m_max.x;
+    const float loyz = m[9] * m_min.y;
+    const float hiyz = m[9] * m_max.y;
+    const float lozz = m[10] * m_min.z;
+    const float hizz = m[10] * m_max.z;
+    result.m_min.z = fminf( loxz, hixz ) + fminf( loyz, hiyz ) + fminf( lozz, hizz ) + m[11];
+    result.m_max.z = fmaxf( loxz, hixz ) + fmaxf( loyz, hiyz ) + fmaxf( lozz, hizz ) + m[11];
+    *this = result;
+  }
+
   SUTIL_INLINE SUTIL_HOSTDEVICE void Aabb::transform( const Matrix4x4& m )
   {
       const float3 b000 = m_min;
@@ -437,4 +475,3 @@ namespace sutil
   }
 
 } // end namespace sutil
-

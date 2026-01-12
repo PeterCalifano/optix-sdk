@@ -30,6 +30,7 @@
 #include <sampleConfig.h>
 #include <sutil/Exception.h>
 #include <sutil/GLDisplay.h>
+#include <sutil/PPMLoader.h>
 #include <sutil/sutil.h>
 #include <sutil/vec_math.h>
 
@@ -38,6 +39,12 @@
 #include <imgui/imgui.h>
 #include <imgui/imgui_impl_glfw.h>
 #include <imgui/imgui_impl_opengl3.h>
+#define STB_IMAGE_IMPLEMENTATION
+#include <tinygltf/stb_image.h>
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include <tinygltf/stb_image_write.h>
+#define TINYEXR_IMPLEMENTATION
+#include <tinyexr/tinyexr.h>
 
 #include <nvrtc.h>
 
@@ -78,25 +85,25 @@ static void keyCallback( GLFWwindow* window, int32_t key, int32_t /*scancode*/, 
 }
 
 
-static void SavePPM( const unsigned char* Pix, const char* fname, int wid, int hgt, int chan )
+static void savePPM( const unsigned char* Pix, const char* fname, int wid, int hgt, int chan )
 {
     if( Pix == NULL || wid < 1 || hgt < 1 )
-        throw std::invalid_argument( "Image is ill-formed. Not saving" );
+        throw Exception( "savePPM: Image is ill-formed. Not saving" );
 
     if( chan != 1 && chan != 3 && chan != 4 )
-        throw std::invalid_argument( "Attempting to save image with channel count != 1, 3, or 4." );
+        throw Exception( "savePPM: Attempting to save image with channel count != 1, 3, or 4." );
 
     std::ofstream OutFile( fname, std::ios::out | std::ios::binary );
     if( !OutFile.is_open() )
-        throw std::runtime_error( "Could not open file for SavePPM" );
+        throw Exception( "savePPM: Could not open file for" );
 
     bool is_float = false;
     OutFile << 'P';
-    OutFile << ( ( chan == 1 ? ( is_float ? 'Z' : '5' ) : ( chan == 3 ? ( is_float ? '7' : '6' ) : '8' ) ) ) << std::endl;
+    OutFile << ( ( chan == 1 ? ( is_float ? 'Z' : '5' ) : ( chan == 3 ? ( is_float ? '7' : '6' ) : '8' ) ) )
+            << std::endl;
     OutFile << wid << " " << hgt << std::endl << 255 << std::endl;
 
-    OutFile.write( reinterpret_cast<char*>( const_cast<unsigned char*>( Pix ) ), wid * hgt * chan * ( is_float ? 4 : 1 ) );
-
+    OutFile.write( reinterpret_cast<char*>( const_cast<unsigned char*>( Pix ) ), wid*hgt*chan*( is_float ? 4 : 1 ) );
     OutFile.close();
 }
 
@@ -149,7 +156,7 @@ std::string getSampleDir()
     };
     for( const char* directory : directories )
     {
-        if( dirExists( directory ) )
+        if( directory && dirExists( directory ) )
             return directory;
     }
 
@@ -197,6 +204,135 @@ size_t pixelFormatSize( BufferImageFormat format )
         default:
             throw Exception( "sutil::pixelFormatSize: Unrecognized buffer format" );
     }
+}
+
+
+Texture loadTexture( const char* fname, float3 default_color, cudaTextureDesc* tex_desc )
+{
+    const std::string filename( fname );
+    bool   isHDR = false;
+    size_t len   = filename.length();
+    if( len >= 3 )
+    {
+        isHDR = ( filename[len - 3] == 'H' || filename[len - 3] == 'h' ) &&
+                ( filename[len - 2] == 'D' || filename[len - 2] == 'd' ) &&
+		        ( filename[len - 1] == 'R' || filename[len - 1] == 'r' );
+    }
+    if( isHDR )
+    {
+        std::cerr << "HDR texture loading not yet implemented" << std::endl;
+        return {};
+    }
+    else
+    {
+        return loadPPMTexture( filename, default_color, tex_desc );
+    }
+}
+
+
+ImageBuffer loadImage( const char* fname, int32_t force_components )
+{
+    const std::string filename( fname );
+    if( filename.length() < 5 )
+        throw Exception( "sutil::loadImage(): Failed to determine filename extension" );
+
+    if( force_components >  4 ||
+        force_components == 2 ||
+        force_components == 1 )
+        throw Exception( "sutil::loadImage(): Invalid force_components value" );
+
+    ImageBuffer image;
+
+    const std::string ext = filename.substr( filename.length()-3 );
+    if( ext == "PPM" || ext == "ppm" )
+    {
+        if( force_components != 4 && force_components != 0 )
+            throw Exception( "sutil::loadImage(): PPM loading with force_components not implemented" );
+
+        PPMLoader loader( filename );
+        image.width  = loader.width();
+        image.height = loader.height();
+        image.data   = new uchar4[ image.width*image.height ];
+        for( int32_t i = 0; i < static_cast<int32_t>( image.width*image.height ); ++i )
+        {
+            // convert to rgba
+            reinterpret_cast<uchar4*>( image.data )[i].x = loader.raster()[i*3+0];
+            reinterpret_cast<uchar4*>( image.data )[i].y = loader.raster()[i*3+1];
+            reinterpret_cast<uchar4*>( image.data )[i].z = loader.raster()[i*3+2];
+            reinterpret_cast<uchar4*>( image.data )[i].w = 255;
+        }
+        image.pixel_format = UNSIGNED_BYTE4;
+    }
+    else if( ext == "png" || ext == "PNG" )
+    {
+        if( force_components != 4 && force_components != 0 )
+            throw Exception( "sutil::loadImage(): PNG loading with force_components not implemented" );
+
+        int32_t w, h, channels;
+        uint8_t* data = stbi_load( filename.c_str(), &w, &h, &channels, STBI_rgb_alpha );
+        if( !data )
+            throw sutil::Exception( "sutil::loadImage( png ): stbi_load failed" );
+
+        image.width  = w;
+        image.height = w;
+        image.data   = new uchar4[ w*h ];
+        image.pixel_format = UNSIGNED_BYTE4;
+        memcpy( image.data, data, w*h*STBI_rgb_alpha );
+
+        stbi_image_free( data );
+    }
+    else if( ext == "exr" || ext == "EXR" )
+    {
+        if( force_components != 4 && force_components != 0 && force_components != 3 )
+            throw Exception( "sutil::loadImage(): PNG loading with force_components not implemented" );
+
+        const char*  err  = nullptr;
+        float*       data = nullptr;
+        int32_t w, h;
+        int32_t res = LoadEXR( &data, &w, &h, filename.c_str(), &err);
+
+        if( res != TINYEXR_SUCCESS)
+        {
+            if (err)
+            {
+                sutil::Exception e( ( std::string( "sutil::loadImage( exr ): " ) + err ).c_str() );
+                FreeEXRErrorMessage( err );
+                throw e;
+            }
+            else
+            {
+                throw sutil::Exception( "sutil::loadImage( exr ): failed to load image" );
+            }
+        }
+
+        image.width  = w;
+        image.height = h;
+        if( force_components == 4 || force_components == 0 )
+        {
+            image.data   = new float4[ image.width*image.height ];
+            image.pixel_format = FLOAT4;
+            memcpy( image.data, data, sizeof(float)*4*w*h );
+        }
+        else // force_components == 3
+        {
+            image.data   = new float3[ image.width*image.height ];
+            image.pixel_format = FLOAT3;
+            for( int32_t i = 0; i < static_cast<int32_t>( image.width*image.height ); ++i )
+            {
+                reinterpret_cast<float3*>( image.data )[i].x = data[i*4+0];
+                reinterpret_cast<float3*>( image.data )[i].y = data[i*4+1];
+                reinterpret_cast<float3*>( image.data )[i].z = data[i*4+2];
+            }
+        }
+
+        free( data );
+    }
+    else
+    {
+        throw Exception( ( "sutil::loadImage(): Failed unsupported filetype '" + ext + "'" ).c_str() );
+    }
+
+    return image;
 }
 
 
@@ -343,8 +479,7 @@ void displayBufferWindow( const char* title, const ImageBuffer& buffer )
     int framebuf_res_x = 0, framebuf_res_y = 0;
     do
     {
-        glfwPollEvents();
-
+        glfwWaitEvents();
         glfwGetFramebufferSize( window, &framebuf_res_x, &framebuf_res_y );
         display.display( buffer.width, buffer.height, framebuf_res_x, framebuf_res_y, pbo );
         glfwSwapBuffers( window );
@@ -355,93 +490,180 @@ void displayBufferWindow( const char* title, const ImageBuffer& buffer )
 }
 
 
-void displayBufferFile( const char* filename, const ImageBuffer& buffer, bool disable_srgb_conversion )
+static float toSRGB( float c )
 {
-    // TODO: use stb_image_write to output PNG
-    GLsizei width, height;
+    float invGamma = 1.0f / 2.4f;
+    float powed    = std::pow( c, invGamma );
+    return c < 0.0031308f ? 12.92f * c : 1.055f * powed - 0.055f;
+}
 
-    GLvoid* imageData = buffer.data;
-    width             = static_cast<GLsizei>( buffer.width );
-    height            = static_cast<GLsizei>( buffer.height );
+void saveImage( const char* fname, const ImageBuffer& image, bool disable_srgb_conversion )
+{
+    const std::string filename( fname );
+    if( filename.length() < 5 )
+        throw Exception( "sutil::saveImage(): Failed to determine filename extension" );
 
-    std::vector<unsigned char> pix( width * height * 3 );
-
-    BufferImageFormat buffer_format = buffer.pixel_format;
-
-    const float gamma_inv = 1.0f / 2.2f;
-
-    switch( buffer_format )
+    const std::string ext = filename.substr( filename.length()-3 );
+    if( ext == "PPM" || ext == "ppm" )
     {
-        case BufferImageFormat::UNSIGNED_BYTE4:
-            // Data is upside down
-            for( int j = height - 1; j >= 0; --j )
-            {
-                unsigned char* dst = &pix[0] + ( 3 * width * ( height - 1 - j ) );
-                unsigned char* src = ( (unsigned char*)imageData ) + ( 4 * width * j );
-                for( int i = 0; i < width; i++ )
-                {
-                    *dst++ = *( src + 0 );
-                    *dst++ = *( src + 1 );
-                    *dst++ = *( src + 2 );
-                    src += 4;
-                }
-            }
-            break;
+        //
+        // Note -- we are flipping image vertically as we write it into output buffer
+        //
+        const int32_t width  = image.width;
+        const int32_t height = image.height;
+        std::vector<unsigned char> pix( width*height*3 );
 
-        case BufferImageFormat::FLOAT3:
-            // This buffer is upside down
-            for( int j = height - 1; j >= 0; --j )
+        switch( image.pixel_format )
+        {
+            case BufferImageFormat::UNSIGNED_BYTE4:
             {
-                unsigned char* dst = &pix[0] + ( 3 * width * ( height - 1 - j ) );
-                float*         src = ( (float*)imageData ) + ( 3 * width * j );
-                for( int i = 0; i < width; i++ )
+                for( int j = height - 1; j >= 0; --j )
                 {
-                    for( int elem = 0; elem < 3; ++elem )
+                    for( int i = 0; i < width; ++i )
                     {
-                        int P;
-                        if( disable_srgb_conversion )
-                            P = static_cast<int>( ( *src++ ) * 255.0f );
-                        else
-                            P = static_cast<int>( std::pow( *src++, gamma_inv ) * 255.0f );
-                        unsigned int Clamped = P < 0 ? 0 : P > 0xff ? 0xff : P;
-                        *dst++               = static_cast<unsigned char>( Clamped );
+                        const int32_t dst_idx = 3*width*(height-j-1) + 3*i;
+                        const int32_t src_idx = 4*width*j            + 4*i;
+                        pix[ dst_idx+0] = reinterpret_cast<uint8_t*>( image.data )[ src_idx+0 ];
+                        pix[ dst_idx+1] = reinterpret_cast<uint8_t*>( image.data )[ src_idx+1 ];
+                        pix[ dst_idx+2] = reinterpret_cast<uint8_t*>( image.data )[ src_idx+2 ];
                     }
                 }
-            }
-            break;
+            } break;
 
-        case BufferImageFormat::FLOAT4:
-            // This buffer is upside down
-            for( int j = height - 1; j >= 0; --j )
+            case BufferImageFormat::FLOAT3:
             {
-                unsigned char* dst = &pix[0] + ( 3 * width * ( height - 1 - j ) );
-                float*         src = ( (float*)imageData ) + ( 4 * width * j );
-                for( int i = 0; i < width; i++ )
+                for( int j = height - 1; j >= 0; --j )
                 {
-                    for( int elem = 0; elem < 3; ++elem )
+                    for( int i = 0; i < width; ++i )
                     {
-                        int P;
-                        if( disable_srgb_conversion )
-                            P = static_cast<int>( ( *src++ ) * 255.0f );
-                        else
-                            P = static_cast<int>( std::pow( *src++, gamma_inv ) * 255.0f );
-                        unsigned int Clamped = P < 0 ? 0 : P > 0xff ? 0xff : P;
-                        *dst++               = static_cast<unsigned char>( Clamped );
+                        const int32_t dst_idx = 3*width*(height-j-1) + 3*i;
+                        const int32_t src_idx = 3*width*j            + 3*i;
+                        for( int elem = 0; elem < 3; ++elem )
+                        {
+                            const float   f = reinterpret_cast<float*>( image.data )[src_idx+elem ];
+                            const int32_t v = static_cast<int32_t>( 256.0f*(disable_srgb_conversion ? f : toSRGB(f)) );
+                            const int32_t c =  v < 0 ? 0 : v > 0xff ? 0xff : v;
+                            pix[ dst_idx+elem ] = static_cast<uint8_t>( c );
+                        }
                     }
-
-                    // skip alpha
-                    src++;
                 }
-            }
-            break;
+            } break;
 
-        default:
-            fprintf( stderr, "Unrecognized buffer data type or format.\n" );
-            exit( 2 );
-            break;
+            case BufferImageFormat::FLOAT4:
+            {
+                for( int j = height - 1; j >= 0; --j )
+                {
+                    for( int i = 0; i < width; ++i )
+                    {
+                        const int32_t dst_idx = 3*width*(height-j-1) + 3*i;
+                        const int32_t src_idx = 4*width*j            + 4*i;
+                        for( int elem = 0; elem < 3; ++elem )
+                        {
+                            const float   f = reinterpret_cast<float*>( image.data )[src_idx+elem ];
+                            const int32_t v = static_cast<int32_t>( 256.0f*(disable_srgb_conversion ? f : toSRGB(f)) );
+                            const int32_t c =  v < 0 ? 0 : v > 0xff ? 0xff : v;
+                            pix[ dst_idx+elem ] = static_cast<uint8_t>( c );
+                        }
+                    }
+                }
+            } break;
+
+            default:
+            {
+                throw Exception( "sutil::saveImage(): Unrecognized image buffer pixel format.\n" );
+            }
+        }
+
+        savePPM( pix.data(), filename.c_str(), width, height, 3 );
     }
 
-    SavePPM( &pix[0], filename, width, height, 3 );
+    else if(  ext == "PNG" || ext == "png" )
+    {
+        switch( image.pixel_format )
+        {
+            case BufferImageFormat::UNSIGNED_BYTE4:
+            {
+                stbi_flip_vertically_on_write( true );
+                if( !stbi_write_png(
+                            filename.c_str(),
+                            image.width,
+                            image.height,
+                            4, // components,
+                            image.data,
+                            image.width*sizeof( uchar4 ) //stride_in_bytes
+                            ) )
+                    throw Exception( "sutil::saveImage(): stbi_write_png failed" );
+            } break;
+
+            case BufferImageFormat::FLOAT3:
+            {
+                throw Exception( "sutil::saveImage(): saving of float3 images to PNG not implemented yet" );
+            }
+
+            case BufferImageFormat::FLOAT4:
+            {
+                throw Exception( "sutil::saveImage(): saving of float4 images to PNG not implemented yet" );
+            }
+
+            default:
+            {
+                throw Exception( "sutil::saveImage: Unrecognized image buffer pixel format.\n" );
+            }
+        }
+    }
+
+    else if(  ext == "EXR" || ext == "exr" )
+    {
+        switch( image.pixel_format )
+        {
+            case BufferImageFormat::UNSIGNED_BYTE4:
+            {
+                throw Exception( "sutil::saveImage(): saving of uchar4 images to EXR not implemented yet" );
+            }
+
+            case BufferImageFormat::FLOAT3:
+            {
+                const char* err;
+                int32_t ret = SaveEXR(
+                        reinterpret_cast<float*>( image.data ),
+                        image.width,
+                        image.height,
+                        3, // num components
+                        static_cast<int32_t>( true ), // save_as_fp16
+                        filename.c_str(),
+                        &err );
+
+                if( ret != TINYEXR_SUCCESS )
+                    throw Exception( ( "sutil::saveImage( exr ) error: " + std::string( err ) ).c_str() );
+
+            } break;
+
+            case BufferImageFormat::FLOAT4:
+            {
+                const char* err;
+                int32_t ret = SaveEXR(
+                        reinterpret_cast<float*>( image.data ),
+                        image.width,
+                        image.height,
+                        4, // num components
+                        static_cast<int32_t>( true ), // save_as_fp16
+                        filename.c_str(),
+                        &err );
+
+                if( ret != TINYEXR_SUCCESS )
+                    throw Exception( ( "sutil::saveImage( exr ) error: " + std::string( err ) ).c_str() );
+            } break;
+
+            default:
+            {
+                throw Exception( "sutil::saveImage: Unrecognized image buffer pixel format.\n" );
+            }
+        }
+    }
+    else
+    {
+        throw Exception( ( "sutil::saveImage(): Failed unsupported filetype '" + ext + "'" ).c_str() );
+    }
 }
 
 
@@ -547,6 +769,12 @@ void parseDimensions( const char* arg, int& width, int& height )
     throw std::invalid_argument( err.c_str() );
 }
 
+double currentTime()
+{
+    return std::chrono::duration_cast< std::chrono::duration< double > >
+        ( std::chrono::high_resolution_clock::now().time_since_epoch() ).count();
+}
+
 
 #define STRINGIFY( x ) STRINGIFY2( x )
 #define STRINGIFY2( x ) #x
@@ -578,15 +806,15 @@ static bool readSourceFile( std::string& str, const std::string& filename )
 
 #if CUDA_NVRTC_ENABLED
 
-static void getCuStringFromFile( std::string& cu, std::string& location, const char* sample_name, const char* filename )
+static void getCuStringFromFile( std::string& cu, std::string& location, const char* sampleDir, const char* filename )
 {
     std::vector<std::string> source_locations;
 
     const std::string base_dir = getSampleDir();
 
     // Potential source locations (in priority order)
-    if( sample_name )
-        source_locations.push_back( base_dir + '/' + sample_name + '/' + filename );
+    if( sampleDir )
+        source_locations.push_back( base_dir + '/' + sampleDir + '/' + filename );
     source_locations.push_back( base_dir + "/cuda/" + filename );
 
     for( const std::string& loc : source_locations )
@@ -685,13 +913,16 @@ static std::string samplePTXFilePath( const char* sampleName, const char* fileNa
         SAMPLES_PTX_DIR,
         "."
     };
+
+    if( !sampleName )
+        sampleName = "cuda_compile_ptx";
     for( const char* directory : directories )
     {
         if( directory )
         {
             std::string path = directory;
             path += '/';
-            path += sampleName ? sampleName : "cuda_compile_ptx";
+            path += sampleName;
             path += "_generated_";
             path += fileName;
             path += ".ptx";
@@ -732,7 +963,7 @@ struct PtxSourceCache
 };
 static PtxSourceCache g_ptxSourceCache;
 
-const char* getPtxString( const char* sample, const char* filename, const char** log )
+const char* getPtxString( const char* sample, const char* sampleDir, const char* filename, const char** log )
 {
     if( log )
         *log = NULL;
@@ -746,7 +977,7 @@ const char* getPtxString( const char* sample, const char* filename, const char**
         ptx = new std::string();
 #if CUDA_NVRTC_ENABLED
         std::string location;
-        getCuStringFromFile( cu, location, sample, filename );
+        getCuStringFromFile( cu, location, sampleDir, filename );
         getPtxFromCuString( *ptx, sample, cu.c_str(), location.c_str(), log );
 #else
         getPtxStringFromFile( *ptx, sample, filename );

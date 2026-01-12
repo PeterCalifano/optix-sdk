@@ -28,6 +28,7 @@
 
 #include <optix.h>
 #include <optix_function_table_definition.h>
+#include <optix_stack_size.h>
 #include <optix_stubs.h>
 
 #include <cuda_runtime.h>
@@ -147,7 +148,7 @@ int main( int argc, char* argv[] )
             pipeline_compile_options.exceptionFlags        = OPTIX_EXCEPTION_FLAG_NONE;  // TODO: should be OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
             pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
-            const std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, "draw_solid_color.cu" );
+            const std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "draw_solid_color.cu" );
             size_t sizeof_log = sizeof( log );
 
             OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
@@ -220,12 +221,12 @@ int main( int argc, char* argv[] )
         //
         OptixPipeline pipeline = nullptr;
         {
+            const uint32_t    max_trace_depth  = 0;
             OptixProgramGroup program_groups[] = { raygen_prog_group };
 
             OptixPipelineLinkOptions pipeline_link_options = {};
-            pipeline_link_options.maxTraceDepth          = 5;
+            pipeline_link_options.maxTraceDepth          = max_trace_depth;
             pipeline_link_options.debugLevel             = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
-            pipeline_link_options.overrideUsesMotionBlur = false;
             size_t sizeof_log = sizeof( log );
             OPTIX_CHECK_LOG( optixPipelineCreate(
                         context,
@@ -237,6 +238,25 @@ int main( int argc, char* argv[] )
                         &sizeof_log,
                         &pipeline
                         ) );
+
+            OptixStackSizes stack_sizes = {};
+            for( auto& prog_group : program_groups )
+            {
+                OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes ) );
+            }
+
+            uint32_t direct_callable_stack_size_from_traversal;
+            uint32_t direct_callable_stack_size_from_state;
+            uint32_t continuation_stack_size;
+            OPTIX_CHECK( optixUtilComputeStackSizes( &stack_sizes, max_trace_depth,
+                                                     0,  // maxCCDepth
+                                                     0,  // maxDCDEpth
+                                                     &direct_callable_stack_size_from_traversal,
+                                                     &direct_callable_stack_size_from_state, &continuation_stack_size ) );
+            OPTIX_CHECK( optixPipelineSetStackSize( pipeline, direct_callable_stack_size_from_traversal,
+                                                    direct_callable_stack_size_from_state, continuation_stack_size,
+                                                    2  // maxTraversableDepth
+                                                    ) );
         }
 
         //
@@ -329,7 +349,7 @@ int main( int argc, char* argv[] )
             if( outfile.empty() )
                 sutil::displayBufferWindow( argv[0], buffer );
             else
-                sutil::displayBufferFile( outfile.c_str(), buffer, false );
+                sutil::saveImage( outfile.c_str(), buffer, false );
         }
 
         //

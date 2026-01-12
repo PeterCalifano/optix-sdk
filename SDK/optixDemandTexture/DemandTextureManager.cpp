@@ -36,6 +36,8 @@ const unsigned int NUM_PAGES            = 1024 * 1024;  // 1M 64KB pages => 64 G
 const unsigned int MAX_REQUESTED_PAGES  = 1024;
 const unsigned int MAX_NUM_FILLED_PAGES = 1024;
 
+namespace demandLoading {
+
 // Construct demand texture manager, initializing the OptiX paging library.
 DemandTextureManager::DemandTextureManager()
 {
@@ -52,9 +54,9 @@ DemandTextureManager::DemandTextureManager()
 
     // Allocate device memory that is used to call paging library routines.
     // These allocations are retained to reduce allocation overhead.
-    CUDA_CHECK( cudaMalloc( &m_devRequestedPages, MAX_REQUESTED_PAGES * sizeof( uint32_t ) ) );
-    CUDA_CHECK( cudaMalloc( &m_devNumPagesReturned, 3 * sizeof( uint32_t ) ) );
-    CUDA_CHECK( cudaMalloc( &m_devFilledPages, MAX_NUM_FILLED_PAGES * sizeof( MapType ) ) );
+    CUDA_CHECK( cudaMalloc( &m_devRequestedPages, MAX_REQUESTED_PAGES * sizeof( unsigned int ) ) );
+    CUDA_CHECK( cudaMalloc( &m_devNumPagesReturned, 3 * sizeof( unsigned int ) ) );
+    CUDA_CHECK( cudaMalloc( &m_devFilledPages, MAX_NUM_FILLED_PAGES * sizeof( PageMapping ) ) );
 }
 
 DemandTextureManager::~DemandTextureManager()
@@ -76,13 +78,13 @@ DemandTextureManager::~DemandTextureManager()
 }
 
 // Extract texture id from page id.
-static unsigned int getTextureId( uint32_t pageId )
+static unsigned int getTextureId( unsigned int pageId )
 {
     return pageId >> 4;
 }
 
 // Extract miplevel from page id.
-static unsigned int getMipLevel( uint32_t pageId )
+static unsigned int getMipLevel( unsigned int pageId )
 {
     return pageId & 0x0F;
 }
@@ -155,13 +157,13 @@ void DemandTextureManager::launchPrepare()
 // and invoking callbacks to fill the new miplevels.
 int DemandTextureManager::processRequests()
 {
-    std::vector<uint32_t> requestedPages;
+    std::vector<unsigned int> requestedPages;
     pullRequests( requestedPages );
     return processRequestsImpl( requestedPages );
 }
 
 // Get page requests from the device (via optixPagingPullRequests).
-void DemandTextureManager::pullRequests( std::vector<uint32_t>& requestedPages )
+void DemandTextureManager::pullRequests( std::vector<unsigned int>& requestedPages )
 {
     // Get a list of requested page ids, along with lists of stale and evictable pages (which are
     // currently unused).
@@ -169,21 +171,21 @@ void DemandTextureManager::pullRequests( std::vector<uint32_t>& requestedPages )
                              nullptr /*evictablePages*/, 0, m_devNumPagesReturned );
 
     // Get the sizes of the requsted, stale, and evictable page lists.
-    uint32_t numReturned[3] = {0};
-    CUDA_CHECK( cudaMemcpy( &numReturned[0], m_devNumPagesReturned, 3 * sizeof( uint32_t ), cudaMemcpyDeviceToHost ) );
+    unsigned int numReturned[3] = {0};
+    CUDA_CHECK( cudaMemcpy( &numReturned[0], m_devNumPagesReturned, 3 * sizeof( unsigned int ), cudaMemcpyDeviceToHost ) );
 
     // Return early if no pages requested.
-    uint32_t numRequests = numReturned[0];
+    unsigned int numRequests = numReturned[0];
     if( numRequests == 0 )
         return;
 
     // Copy the requested page list from this device.
     requestedPages.resize( numRequests );
-    CUDA_CHECK( cudaMemcpy( requestedPages.data(), m_devRequestedPages, numRequests * sizeof( uint32_t ), cudaMemcpyDeviceToHost ) );
+    CUDA_CHECK( cudaMemcpy( requestedPages.data(), m_devRequestedPages, numRequests * sizeof( unsigned int ), cudaMemcpyDeviceToHost ) );
 }
 
 // Process requests.  Implemented as a separate method to permit testing.
-int DemandTextureManager::processRequestsImpl( std::vector<uint32_t>& requestedPages )
+int DemandTextureManager::processRequestsImpl( std::vector<unsigned int>& requestedPages )
 {
     if( requestedPages.empty() )
         return 0;
@@ -197,7 +199,7 @@ int DemandTextureManager::processRequestsImpl( std::vector<uint32_t>& requestedP
     size_t numRequests = requestedPages.size();
     for( size_t i = 0; i < numRequests; /* nop */ )
     {
-        uint32_t     pageId    = requestedPages[i];
+        unsigned int     pageId    = requestedPages[i];
         unsigned int textureId = getTextureId( pageId );
 
         // Initialize the texture if necessary, e.g. reading image info from file header.
@@ -206,15 +208,15 @@ int DemandTextureManager::processRequestsImpl( std::vector<uint32_t>& requestedP
         ok, assert( ok );  // TODO: handle image reader errors.
 
         unsigned int requestedMipLevel = getMipLevel( pageId );
-        requestedMipLevel = std::min( requestedMipLevel, texture->getInfo().numMipLevels );
-        
-        unsigned int minMipLevel       = requestedMipLevel;
-        unsigned int maxMipLevel       = requestedMipLevel;
+        requestedMipLevel              = std::min( requestedMipLevel, texture->getInfo().numMipLevels );
+
+        unsigned int minMipLevel = requestedMipLevel;
+        unsigned int maxMipLevel = requestedMipLevel;
 
         // Accumulate requests for other miplevels from the same texture.
         for( ++i; i < numRequests && getTextureId( requestedPages[i] ) == textureId; ++i )
         {
-            uint32_t     pageId            = requestedPages[i];
+            unsigned int     pageId            = requestedPages[i];
             unsigned int requestedMipLevel = getMipLevel( pageId );
 
             minMipLevel = std::min( minMipLevel, requestedMipLevel );
@@ -231,22 +233,24 @@ int DemandTextureManager::processRequestsImpl( std::vector<uint32_t>& requestedP
     }
 
     // Fill each requested miplevel.
-    std::vector<MapType> filledPages;
+    std::vector<PageMapping> filledPages;
     for( size_t i = 0; i < numRequests; ++i )
     {
-        uint32_t       pageId   = requestedPages[i];
+        unsigned int       pageId   = requestedPages[i];
         DemandTexture& texture  = m_textures[getTextureId( pageId )];
         unsigned int   mipLevel = getMipLevel( pageId );
         texture.fillMipLevel( mipLevel );
 
         // Keep track of which pages were filled.  (The value of the page table entry is not used.)
-        filledPages.push_back( MapType{pageId, 1} );
+        filledPages.push_back( PageMapping{pageId, 1} );
     }
 
     // Push the new page mappings to the device.
-    uint32_t numFilledPages = static_cast<uint32_t>( filledPages.size() );
-    CUDA_CHECK( cudaMemcpy( m_devFilledPages, filledPages.data(), numFilledPages * sizeof( MapType ), cudaMemcpyHostToDevice ) );
+    unsigned int numFilledPages = static_cast<unsigned int>( filledPages.size() );
+    CUDA_CHECK( cudaMemcpy( m_devFilledPages, filledPages.data(), numFilledPages * sizeof( PageMapping ), cudaMemcpyHostToDevice ) );
     optixPagingPushMappings( m_pagingContext, m_devFilledPages, numFilledPages, nullptr /*invalidatedPages*/, 0 );
 
     return static_cast<int>( filledPages.size() );
 }
+
+} // namespace demandLoading

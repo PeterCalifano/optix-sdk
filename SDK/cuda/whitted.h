@@ -28,7 +28,6 @@
 #pragma once
 
 #include <vector_types.h>
-#include <stdint.h>
 
 #include <cuda/BufferView.h>
 #include <cuda/GeometryData.h>
@@ -38,7 +37,7 @@
 namespace whitted
 {
 
-const uint32_t NUM_PAYLOAD_VALUES = 4u;
+const unsigned int NUM_PAYLOAD_VALUES = 4u;
 
 
 struct HitGroupData
@@ -58,17 +57,19 @@ enum RayType
 
 struct LaunchParams
 {
-    uint32_t                 subframe_index;
+    unsigned int             width;
+    unsigned int             height;
+    unsigned int             subframe_index;
     float4*                  accum_buffer;
     uchar4*                  frame_buffer;
-    int32_t                  max_depth;
+    int                      max_depth;
 
     float3                   eye;
     float3                   U;
     float3                   V;
     float3                   W;
 
-    BufferView<Light::Point> lights;
+    BufferView<Light>        lights;
     float3                   miss_color;
     OptixTraversableHandle   handle;
 };

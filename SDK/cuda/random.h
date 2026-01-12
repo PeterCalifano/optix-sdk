@@ -26,6 +26,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
+#pragma once
 
 template<unsigned int N>
 static __host__ __device__ __inline__ unsigned int tea( unsigned int val0, unsigned int val1 )

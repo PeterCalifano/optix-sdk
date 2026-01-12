@@ -238,9 +238,14 @@ void GLDisplay::display(
     else if ( elmt_size % 2 == 0) glPixelStorei(GL_UNPACK_ALIGNMENT, 2);
     else                          glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
-    if( m_image_format == BufferImageFormat::UNSIGNED_BYTE4 )
-        glTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA8,   screen_res_x, screen_res_y, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr );
+    bool convertToSrgb = true;
 
+    if( m_image_format == BufferImageFormat::UNSIGNED_BYTE4 )
+    {
+        // input is assumed to be in srgb since it is only 1 byte per channel in size
+        glTexImage2D( GL_TEXTURE_2D, 0, GL_RGBA8,   screen_res_x, screen_res_y, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr );
+        convertToSrgb = false;
+    }
     else if( m_image_format == BufferImageFormat::FLOAT3 )
         glTexImage2D( GL_TEXTURE_2D, 0, GL_RGB32F,  screen_res_x, screen_res_y, 0, GL_RGB,  GL_FLOAT,         nullptr );
 
@@ -266,10 +271,17 @@ void GLDisplay::display(
             )
         );
 
+    if( convertToSrgb )
+        GL_CHECK( glEnable( GL_FRAMEBUFFER_SRGB ) );
+    else 
+        GL_CHECK( glDisable( GL_FRAMEBUFFER_SRGB ) );
+
     // Draw the triangles !
     GL_CHECK( glDrawArrays(GL_TRIANGLES, 0, 6) ); // 2*3 indices starting at 0 -> 2 triangles
 
     GL_CHECK( glDisableVertexAttribArray(0) );
+
+    GL_CHECK( glDisable( GL_FRAMEBUFFER_SRGB ) );
 
     GL_CHECK_ERRORS();
 }

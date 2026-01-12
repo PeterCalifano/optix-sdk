@@ -31,9 +31,7 @@
 #include "random.h"
 
 #include <sutil/vec_math.h>
-
-#include <stdio.h>
-
+#include <cuda/helpers.h>
 
 extern "C" {
 __constant__ Params params;
@@ -50,16 +48,15 @@ __constant__ Params params;
 struct RadiancePRD
 {
     // TODO: move some state directly into payload registers?
-    float3   emitted;
-    float3   radiance;
-    float3   attenuation;
-    float3   origin;
-    float3   direction;
-    uint32_t seed;
-    int32_t  countEmitted;
-    int32_t  done;
-    int32_t  pad;
-
+    float3       emitted;
+    float3       radiance;
+    float3       attenuation;
+    float3       origin;
+    float3       direction;
+    unsigned int seed;
+    int          countEmitted;
+    int          done;
+    int          pad;
 };
 
 
@@ -103,28 +100,17 @@ struct Onb
 //
 //------------------------------------------------------------------------------
 
-#define print_x 512
-#define print_y 384
-
-#define print_pixel(...)                                                       \
-{                                                                              \
-    const uint3  idx__ = optixGetLaunchIndex();                                \
-    if( idx__.x == print_y && idx__.y == print_x )                             \
-        printf( __VA_ARGS__ );                                                 \
-}
-
-
-static __forceinline__ __device__ void* unpackPointer( uint32_t i0, uint32_t i1 )
+static __forceinline__ __device__ void* unpackPointer( unsigned int i0, unsigned int i1 )
 {
-    const uint64_t uptr = static_cast<uint64_t>( i0 ) << 32 | i1;
+    const unsigned long long uptr = static_cast<unsigned long long>( i0 ) << 32 | i1;
     void*           ptr = reinterpret_cast<void*>( uptr );
     return ptr;
 }
 
 
-static __forceinline__ __device__ void  packPointer( void* ptr, uint32_t& i0, uint32_t& i1 )
+static __forceinline__ __device__ void  packPointer( void* ptr, unsigned int& i0, unsigned int& i1 )
 {
-    const uint64_t uptr = reinterpret_cast<uint64_t>( ptr );
+    const unsigned long long uptr = reinterpret_cast<unsigned long long>( ptr );
     i0 = uptr >> 32;
     i1 = uptr & 0x00000000ffffffff;
 }
@@ -132,15 +118,15 @@ static __forceinline__ __device__ void  packPointer( void* ptr, uint32_t& i0, ui
 
 static __forceinline__ __device__ RadiancePRD* getPRD()
 {
-    const uint32_t u0 = optixGetPayload_0();
-    const uint32_t u1 = optixGetPayload_1();
+    const unsigned int u0 = optixGetPayload_0();
+    const unsigned int u1 = optixGetPayload_1();
     return reinterpret_cast<RadiancePRD*>( unpackPointer( u0, u1 ) );
 }
 
 
 static __forceinline__ __device__ void setPayloadOcclusion( bool occluded )
 {
-    optixSetPayload_0( static_cast<uint32_t>( occluded ) );
+    optixSetPayload_0( static_cast<unsigned int>( occluded ) );
 }
 
 
@@ -168,7 +154,7 @@ static __forceinline__ __device__ void traceRadiance(
 {
     // TODO: deduce stride from num ray-types passed in params
 
-    uint32_t u0, u1;
+    unsigned int u0, u1;
     packPointer( prd, u0, u1 );
     optixTrace(
             handle,
@@ -194,7 +180,7 @@ static __forceinline__ __device__ bool traceOcclusion(
         float                  tmax
         )
 {
-    uint32_t occluded = 0u;
+    unsigned int occluded = 0u;
     optixTrace(
             handle,
             ray_origin,
@@ -209,18 +195,6 @@ static __forceinline__ __device__ bool traceOcclusion(
             RAY_TYPE_OCCLUSION,      // missSBTIndex
             occluded );
     return occluded;
-}
-
-
-__forceinline__ __device__ uchar4 make_color( const float3&  c )
-{
-    const float gamma = 2.2f;
-    return make_uchar4(
-            static_cast<uint8_t>( powf( clamp( c.x, 0.0f, 1.0f ), 1.0/gamma )*255.0f ),
-            static_cast<uint8_t>( powf( clamp( c.y, 0.0f, 1.0f ), 1.0/gamma )*255.0f ),
-            static_cast<uint8_t>( powf( clamp( c.z, 0.0f, 1.0f ), 1.0/gamma )*255.0f ),
-            255u
-            );
 }
 
 
@@ -241,7 +215,7 @@ extern "C" __global__ void __raygen__rg()
     const uint3  idx = optixGetLaunchIndex();
     const int    subframe_index = params.subframe_index;
 
-    uint32_t seed = tea<4>( idx.y*w + idx.x, subframe_index );
+    unsigned int seed = tea<4>( idx.y*w + idx.x, subframe_index );
 
     float3 result = make_float3( 0.0f );
     int i = params.samples_per_launch;
@@ -290,7 +264,7 @@ extern "C" __global__ void __raygen__rg()
     while( --i );
 
     const uint3    launch_index = optixGetLaunchIndex();
-    const uint32_t image_index  = launch_index.y * params.width + launch_index.x;
+    const unsigned int image_index  = launch_index.y * params.width + launch_index.x;
     float3         accum_color  = result / static_cast<float>( params.samples_per_launch );
 
     if( subframe_index > 0 )
@@ -344,7 +318,7 @@ extern "C" __global__ void __closesthit__radiance()
         prd->emitted = make_float3( 0.0f );
 
 
-    uint32_t seed = prd->seed;
+    unsigned int seed = prd->seed;
 
     {
         const float z1 = rnd(seed);

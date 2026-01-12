@@ -33,8 +33,10 @@
 #include <sutil/Preprocessor.h>
 #include <sutil/vec_math.h>
 
+#if !defined(__CUDACC_RTC__)
 #include <cmath>
 #include <initializer_list>
+#endif
 
 #define RT_MATRIX_ACCESS(m,i,j) m[i*N+j]
 #define RT_MAT_DECL template <unsigned int M, unsigned int N>

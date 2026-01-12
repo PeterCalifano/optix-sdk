@@ -30,7 +30,9 @@
 
 struct Light
 {
-    enum class Falloff : int32_t
+    Light() {}
+
+    enum class Falloff : int
     {
         NONE = 0,
         LINEAR,
@@ -38,9 +40,10 @@ struct Light
     };
 
 
-    enum class Type : int32_t
+    enum class Type : int
     {
-        POINT = 0
+        POINT   = 0,
+        AMBIENT = 1
     };
 
     struct Point
@@ -52,11 +55,17 @@ struct Light
     };
 
 
+    struct Ambient
+    {
+        float3   color      CONST_STATIC_INIT( {1.0f, 1.0f, 1.0f} );
+    };
+
+
     Type  type;
 
     union
     {
-        Point point;
+        Point   point;
+        Ambient ambient;
     };
-
 };

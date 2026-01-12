@@ -27,6 +27,7 @@
 #
 
 OPTIX_add_sample_executable( optixCutouts target_name
+  ${SAMPLES_CUDA_DIR}/helpers.h
   optixCutouts.cu
   optixCutouts.cpp
   optixCutouts.h

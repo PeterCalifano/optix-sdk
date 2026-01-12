@@ -26,17 +26,13 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#include <DemandTextureManager.h>
 #include <optixDemandTexture.h>
-
-#ifdef OPTIX_SAMPLE_USE_OPEN_EXR
-#include <lib/DemandLoading/EXRReader.h>
-#else
-#include <lib/DemandLoading/CheckerBoardReader.h>
-#endif
+#include <CheckerBoardImage.h>
+#include <DemandTextureManager.h>
 
 #include <optix.h>
 #include <optix_function_table_definition.h>
+#include <optix_stack_size.h>
 #include <optix_stubs.h>
 
 #include <cuda_runtime.h>
@@ -44,14 +40,18 @@
 #include <sampleConfig.h>
 
 #include <sutil/CUDAOutputBuffer.h>
-#include <sutil/Exception.h>
 #include <sutil/Camera.h>
+#include <sutil/Exception.h>
 #include <sutil/sutil.h>
 
+#include <algorithm>
 #include <iomanip>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <vector>
+
+using namespace demandLoading;
 
 template <typename T>
 struct SbtRecord
@@ -67,7 +67,7 @@ typedef SbtRecord<HitGroupData> HitGroupSbtRecord;
 void configureCamera( const uint32_t width, const uint32_t height, float3& cam_eye, float3& camera_u, float3& camera_v, float3& camera_w )
 {
     sutil::Camera camera;
-    cam_eye = {-3.0f, 0.0f, 0.0f};
+    cam_eye = {0.0f, -3.0f, 0.0f};
     camera.setEye( cam_eye );
     camera.setLookat( make_float3( 0.0f, 0.0f, 0.0f ) );
     camera.setUp( make_float3( 0.0f, 0.0f, 1.0f ) );
@@ -80,9 +80,14 @@ void configureCamera( const uint32_t width, const uint32_t height, float3& cam_e
 void printUsageAndExit( const char* argv0 )
 {
     std::cerr << "Usage  : " << argv0 << " [options]\n";
-    std::cerr << "Options: --file | -f <filename>      Specify file for image output\n";
-    std::cerr << "         --help | -h                 Print this usage message\n";
-    std::cerr << "         --dim=<width>x<height>      Set image dimensions; defaults to 512x384\n";
+    std::cerr << "Options: --file                  | -f <filename>  Specify file for image output\n";
+    std::cerr << "         --help                  | -h             Print this usage message\n";
+    std::cerr << "         --cols <1-32>                            The number of columns in the sphere grid (default 1)\n";
+    std::cerr << "         --rows <1-32>                            The number of rows in the sphere grid (default 1)\n";
+    std::cerr << "         --num-textures <1-1024>                  The number of texture samplers to create (default 1)\n";
+    std::cerr << "         --mip-levels=<max>x<min>                 Set the mip level range for the textures (default 0, finest mip level)\n";
+    std::cerr << "                                                  The range is [0-9] (inclusive). Max. must be less than or equal to min.\n";
+    std::cerr << "         --dim=<width>x<height>                   Set image dimensions\n";
     exit( 1 );
 }
 
@@ -96,8 +101,13 @@ static void context_log_cb( unsigned int level, const char* tag, const char* mes
 int main( int argc, char* argv[] )
 {
     std::string outfile;
-    int         width  = 1024;
-    int         height = 1024;
+    int         width       = 1024;
+    int         height      = 1024;
+    int         numCols     = 1;
+    int         numRows     = 1;
+    int         numTextures = 1;
+    int         maxMip      = 0;
+    int         minMip      = 0;
 
     for( int i = 1; i < argc; ++i )
     {
@@ -121,6 +131,35 @@ int main( int argc, char* argv[] )
         {
             const std::string dims_arg = arg.substr( 6 );
             sutil::parseDimensions( dims_arg.c_str(), width, height );
+        }
+        else if( arg == "--cols" )
+        {
+            if( i >= argc - 1 )
+                printUsageAndExit( argv[0] );
+            numCols = std::max( 1, std::min( atoi( argv[++i] ), 32 ) );
+        }
+        else if( arg == "--rows" )
+        {
+            if( i >= argc - 1 )
+                printUsageAndExit( argv[0] );
+            numRows = std::max( 1, std::min( atoi( argv[++i] ), 32 ) );
+        }
+        else if( arg == "--num-textures" )
+        {
+            if( i >= argc - 1 )
+                printUsageAndExit( argv[0] );
+            numTextures = std::max( 1, std::min( atoi( argv[++i] ), 1024 ) );
+        }
+        else if( arg.substr( 0, 13 ) == "--mip-levels=" )
+        {
+            const std::string range_arg = arg.substr( 13 );
+            sutil::parseDimensions( range_arg.c_str(), maxMip, minMip );
+            if( maxMip < 0 || minMip < maxMip )
+                printUsageAndExit( argv[0] );
+
+            // Force maxMip to the range [0-9] and minMip to the range [maxMip-9].
+            maxMip = std::max( 0,      std::min( maxMip, 9 ) );
+            minMip = std::max( maxMip, std::min( minMip, 9 ) );
         }
         else
         {
@@ -150,6 +189,27 @@ int main( int argc, char* argv[] )
             OPTIX_CHECK( optixDeviceContextCreate( cuCtx, &options, &context ) );
         }
 
+        //
+        // Generate an MxN grid of spheres
+        //
+        std::vector<Sphere> spheres;
+        {
+            const float xSpacing = 3.0f / numCols;
+            const float ySpacing = 3.0f / numRows;
+            const float xOffset  = -( xSpacing * numCols / 2 ) + xSpacing / 2;
+            const float yOffset  = -( ySpacing * numRows / 2 ) + ySpacing / 2;
+            const float radius   = std::min<float>( xSpacing, ySpacing ) / 2.0f;
+
+            for( int yIdx = 0; yIdx < numRows; ++yIdx )
+            {
+                for( int xIdx = 0; xIdx < numCols; ++xIdx )
+                {
+                    float3 center = make_float3( xOffset + xIdx * xSpacing, 0.0f, yOffset + yIdx * ySpacing );
+                    Sphere sphere = { center, radius };
+                    spheres.emplace_back( sphere );
+                }
+            }
+        }
 
         //
         // accel handling
@@ -162,61 +222,75 @@ int main( int argc, char* argv[] )
             accel_options.operation              = OPTIX_BUILD_OPERATION_BUILD;
 
             // AABB build input
-            OptixAabb   aabb = {-1.5f, -1.5f, -1.5f, 1.5f, 1.5f, 1.5f};
+            std::vector<OptixAabb> aabbs;
+            for( size_t idx = 0; idx < spheres.size(); ++idx )
+            {
+                aabbs.push_back( spheres[idx].bounds() );
+            }
+
             CUdeviceptr d_aabb_buffer;
-            CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_aabb_buffer ), sizeof( OptixAabb ) ) );
-            CUDA_CHECK( cudaMemcpy(
-                        reinterpret_cast<void*>( d_aabb_buffer ),
-                        &aabb, sizeof( OptixAabb ),
-                        cudaMemcpyHostToDevice
-                        ) );
+            const size_t aabbs_size = sizeof( OptixAabb ) * aabbs.size();
+            CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_aabb_buffer ), aabbs_size ) );
+            CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( d_aabb_buffer ), &aabbs[0], aabbs_size, cudaMemcpyHostToDevice ) );
+
+            std::vector<uint32_t> sbt_index;
+            std::vector<uint32_t> aabb_input_flags;
+            for( size_t idx = 0; idx < spheres.size(); ++idx )
+            {
+                sbt_index.push_back( static_cast<uint32_t>( idx ) );
+                aabb_input_flags.push_back( OPTIX_GEOMETRY_FLAG_NONE );
+            }
+
+            CUdeviceptr d_sbt_index;
+            CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_sbt_index ), sizeof( uint32_t ) * sbt_index.size() ) );
+            CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( d_sbt_index ),
+                                    sbt_index.data(),
+                                    sizeof( uint32_t ) * sbt_index.size(),
+                                    cudaMemcpyHostToDevice ) );
 
             OptixBuildInput aabb_input = {};
-
-            aabb_input.type                    = OPTIX_BUILD_INPUT_TYPE_CUSTOM_PRIMITIVES;
-            aabb_input.aabbArray.aabbBuffers   = &d_aabb_buffer;
-            aabb_input.aabbArray.numPrimitives = 1;
-
-            uint32_t aabb_input_flags[1]       = {OPTIX_GEOMETRY_FLAG_NONE};
-            aabb_input.aabbArray.flags         = aabb_input_flags;
-            aabb_input.aabbArray.numSbtRecords = 1;
+            aabb_input.type                                             = OPTIX_BUILD_INPUT_TYPE_CUSTOM_PRIMITIVES;
+            aabb_input.customPrimitiveArray.flags                       = aabb_input_flags.data();
+            aabb_input.customPrimitiveArray.aabbBuffers                 = &d_aabb_buffer;
+            aabb_input.customPrimitiveArray.numPrimitives               = static_cast<uint32_t>( spheres.size() );
+            aabb_input.customPrimitiveArray.numSbtRecords               = static_cast<uint32_t>( spheres.size() );
+            aabb_input.customPrimitiveArray.sbtIndexOffsetBuffer        = d_sbt_index;
+            aabb_input.customPrimitiveArray.sbtIndexOffsetSizeInBytes   = sizeof( uint32_t );
+            aabb_input.customPrimitiveArray.sbtIndexOffsetStrideInBytes = sizeof( uint32_t );
+            aabb_input.customPrimitiveArray.primitiveIndexOffset        = 0;
 
             OptixAccelBufferSizes gas_buffer_sizes;
             OPTIX_CHECK( optixAccelComputeMemoryUsage( context, &accel_options, &aabb_input, 1, &gas_buffer_sizes ) );
             CUdeviceptr d_temp_buffer_gas;
-            CUDA_CHECK( cudaMalloc(
-                        reinterpret_cast<void**>( &d_temp_buffer_gas ),
-                        gas_buffer_sizes.tempSizeInBytes
-                        ) );
+            CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_temp_buffer_gas ), gas_buffer_sizes.tempSizeInBytes ) );
 
             // non-compacted output
             CUdeviceptr d_buffer_temp_output_gas_and_compacted_size;
             size_t      compactedSizeOffset = roundUp<size_t>( gas_buffer_sizes.outputSizeInBytes, 8ull );
-            CUDA_CHECK( cudaMalloc(
-                        reinterpret_cast<void**>( &d_buffer_temp_output_gas_and_compacted_size ),
-                        compactedSizeOffset + 8
-                        ) );
+            CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_buffer_temp_output_gas_and_compacted_size ),
+                                    compactedSizeOffset + 8 ) );
 
             OptixAccelEmitDesc emitProperty = {};
             emitProperty.type               = OPTIX_PROPERTY_TYPE_COMPACTED_SIZE;
-            emitProperty.result             = ( CUdeviceptr )( (char*)d_buffer_temp_output_gas_and_compacted_size + compactedSizeOffset );
+            emitProperty.result = ( CUdeviceptr )( (char*)d_buffer_temp_output_gas_and_compacted_size + compactedSizeOffset );
 
 
             OPTIX_CHECK( optixAccelBuild( context,
-                                          0,  // CUDA stream
+                                          0,              // CUDA stream
                                           &accel_options, &aabb_input,
-                                          1,  // num build inputs
-                                          d_temp_buffer_gas, gas_buffer_sizes.tempSizeInBytes, d_buffer_temp_output_gas_and_compacted_size,
-                                          gas_buffer_sizes.outputSizeInBytes, &gas_handle,
+                                          1,              // num build inputs
+                                          d_temp_buffer_gas, gas_buffer_sizes.tempSizeInBytes,
+                                          d_buffer_temp_output_gas_and_compacted_size, gas_buffer_sizes.outputSizeInBytes, &gas_handle,
                                           &emitProperty,  // emitted property list
                                           1               // num emitted properties
                                           ) );
 
             CUDA_CHECK( cudaFree( (void*)d_temp_buffer_gas ) );
             CUDA_CHECK( cudaFree( (void*)d_aabb_buffer ) );
+            CUDA_CHECK( cudaFree( (void*)d_sbt_index ) );
 
             size_t compacted_gas_size;
-            CUDA_CHECK( cudaMemcpy( &compacted_gas_size, (void*)emitProperty.result, sizeof(size_t), cudaMemcpyDeviceToHost ) );
+            CUDA_CHECK( cudaMemcpy( &compacted_gas_size, (void*)emitProperty.result, sizeof( size_t ), cudaMemcpyDeviceToHost ) );
 
             if( compacted_gas_size < gas_buffer_sizes.outputSizeInBytes )
             {
@@ -251,7 +325,7 @@ int main( int argc, char* argv[] )
             pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;  // TODO: should be OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
             pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
-            const std::string ptx        = sutil::getPtxString( OPTIX_SAMPLE_NAME, "optixDemandTexture.cu" );
+            const std::string ptx        = sutil::getPtxString( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixDemandTexture.cu" );
             size_t            sizeof_log = sizeof( log );
 
             OPTIX_CHECK_LOG( optixModuleCreateFromPTX( context, &module_compile_options, &pipeline_compile_options,
@@ -304,43 +378,60 @@ int main( int argc, char* argv[] )
         //
         OptixPipeline pipeline = nullptr;
         {
+            const uint32_t    max_trace_depth  = 1;
             OptixProgramGroup program_groups[] = {raygen_prog_group, miss_prog_group, hitgroup_prog_group};
 
             OptixPipelineLinkOptions pipeline_link_options = {};
-            pipeline_link_options.maxTraceDepth            = 5;
+            pipeline_link_options.maxTraceDepth            = max_trace_depth;
             pipeline_link_options.debugLevel               = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
-            pipeline_link_options.overrideUsesMotionBlur   = false;
             size_t sizeof_log                              = sizeof( log );
             OPTIX_CHECK_LOG( optixPipelineCreate( context, &pipeline_compile_options, &pipeline_link_options,
                                                   program_groups, sizeof( program_groups ) / sizeof( program_groups[0] ),
                                                   log, &sizeof_log, &pipeline ) );
+
+            OptixStackSizes stack_sizes = {};
+            for( auto& prog_group : program_groups )
+            {
+                OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes ) );
+            }
+
+            uint32_t direct_callable_stack_size_from_traversal;
+            uint32_t direct_callable_stack_size_from_state;
+            uint32_t continuation_stack_size;
+            OPTIX_CHECK( optixUtilComputeStackSizes( &stack_sizes, max_trace_depth,
+                                                     0,  // maxCCDepth
+                                                     0,  // maxDCDEpth
+                                                     &direct_callable_stack_size_from_traversal,
+                                                     &direct_callable_stack_size_from_state, &continuation_stack_size ) );
+            OPTIX_CHECK( optixPipelineSetStackSize( pipeline, direct_callable_stack_size_from_traversal,
+                                                    direct_callable_stack_size_from_state, continuation_stack_size,
+                                                    1  // maxTraversableDepth
+                                                    ) );
         }
 
         //
-        // Initialize DemandTextureManager and create a demand-loaded texture.
+        // Initialize DemandTextureManager and create an array of demand-loaded textures.
         // The texture id is passed to the closest hit shader via a hit group record in the SBT.
         // The texture sampler array (indexed by texture id) is passed as a launch parameter.
         //
-        DemandTextureManager       textureManager;
-#ifdef OPTIX_SAMPLE_USE_OPEN_EXR
-        // Image credit: CC0Textures.com (https://cc0textures.com/view.php?tex=Bricks12)
-        // Licensed under the Creative Commons CC0 License.
-	std::string textureFilename( sutil::sampleDataFilePath( "Textures/Bricks12_col.exr" ) );
+        DemandTextureManager textureManager;
 
-        std::shared_ptr<EXRReader> textureReader( std::make_shared<EXRReader>( textureFilename.c_str() ) );
-        const float                textureScale = 4.f;
-#else
-        // If OpenEXR is not available, use a procedurally generated image.
-        std::shared_ptr<CheckerBoardReader> textureReader( std::make_shared<CheckerBoardReader>( 1024, 1024 ) );
-        const float                      textureScale = 1.f;
-#endif
-        const DemandTexture& texture = textureManager.createTexture( textureReader );
+        // We use a procedurally generated image for the textures.
+        std::shared_ptr<CheckerBoardImage> textureReader( std::make_shared<CheckerBoardImage>( 1024, 1024 ) );
+        const float                        textureScale = 1.f;
+
+        std::vector<DemandTexture> textures;
+        for( int idx = 0; idx < numTextures; ++idx )
+        {
+            textures.push_back( textureManager.createTexture( textureReader ) );
+        }
 
         //
         // Set up shader binding table.  The demand-loaded texture is passed to the closest hit
         // program via the hitgroup record.
         //
         OptixShaderBindingTable sbt = {};
+        CUdeviceptr d_hitgroup_records = 0;
         {
             CUdeviceptr  raygen_record;
             const size_t raygen_record_size = sizeof( RayGenSbtRecord );
@@ -359,21 +450,35 @@ int main( int argc, char* argv[] )
             CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( miss_record ), &ms_sbt, miss_record_size, cudaMemcpyHostToDevice ) );
 
             // The demand-loaded texture id is passed to the closest hit program via the hitgroup record.
-            CUdeviceptr hitgroup_record;
-            size_t      hitgroup_record_size = sizeof( HitGroupSbtRecord );
-            CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &hitgroup_record ), hitgroup_record_size ) );
-            HitGroupSbtRecord hg_sbt;
-            hg_sbt.data = {1.5f /*radius*/, texture.getId(), textureScale, 0.f /*texture_lod*/};
-            OPTIX_CHECK( optixSbtRecordPackHeader( hitgroup_prog_group, &hg_sbt ) );
-            CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( hitgroup_record ), &hg_sbt, hitgroup_record_size, cudaMemcpyHostToDevice ) );
+            std::vector<HitGroupSbtRecord> hitgroup_records;
+            hitgroup_records.resize( spheres.size() );
+
+            int       lod      = 0;
+            const int lodRange = 1 + minMip - maxMip;
+            size_t    texIdx   = 0;
+            for( size_t idx = 0; idx < spheres.size(); ++idx )
+            {
+                OPTIX_CHECK( optixSbtRecordPackHeader( hitgroup_prog_group, &hitgroup_records[idx] ) );
+                hitgroup_records[idx].data = { spheres[idx],
+                                               textures[ ++texIdx % numTextures ].getId(),
+                                               textureScale,
+                                               static_cast<float>( (maxMip + (lod++ % lodRange)) % 10 ) };
+            }
+
+            size_t      hitgroup_records_size = sizeof( HitGroupSbtRecord ) * hitgroup_records.size();
+            CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_hitgroup_records ), hitgroup_records_size ) );
+            CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( d_hitgroup_records ),
+                                                             hitgroup_records.data(),
+                                                             hitgroup_records_size,
+                                                             cudaMemcpyHostToDevice ) );
 
             sbt.raygenRecord                = raygen_record;
             sbt.missRecordBase              = miss_record;
             sbt.missRecordStrideInBytes     = sizeof( MissSbtRecord );
             sbt.missRecordCount             = 1;
-            sbt.hitgroupRecordBase          = hitgroup_record;
+            sbt.hitgroupRecordBase          = d_hitgroup_records;
             sbt.hitgroupRecordStrideInBytes = sizeof( HitGroupSbtRecord );
-            sbt.hitgroupRecordCount         = 1;
+            sbt.hitgroupRecordCount         = static_cast<uint32_t>( spheres.size() );
         }
 
         sutil::CUDAOutputBuffer<uchar4> output_buffer( sutil::CUDAOutputBufferType::CUDA_DEVICE, width, height );
@@ -439,7 +544,7 @@ int main( int argc, char* argv[] )
             if( outfile.empty() )
                 sutil::displayBufferWindow( argv[0], buffer );
             else
-                sutil::displayBufferFile( outfile.c_str(), buffer, false );
+                sutil::saveImage( outfile.c_str(), buffer, false );
         }
 
         //

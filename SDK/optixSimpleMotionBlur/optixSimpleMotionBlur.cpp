@@ -59,8 +59,8 @@
 #include <sstream>
 #include <string>
 
-
 bool              resize_dirty  = false;
+bool              minimized     = false;
 
 // Camera state
 bool              camera_changed = true;
@@ -194,11 +194,24 @@ static void cursorPosCallback( GLFWwindow* window, double xpos, double ypos )
 
 static void windowSizeCallback( GLFWwindow* window, int32_t res_x, int32_t res_y )
 {
+    // Keep rendering at the current resolution when the window is minimized.
+    if( minimized )
+        return;
+
+    // Output dimensions must be at least 1 in both x and y.
+    sutil::ensureMinimumSize( res_x, res_y );
+
     Params* params  = static_cast<Params*>( glfwGetWindowUserPointer( window ) );
     params->width   = res_x;
     params->height  = res_y;
     camera_changed = true;
     resize_dirty   = true;
+}
+
+
+static void windowIconifyCallback( GLFWwindow* window, int32_t iconified )
+{
+    minimized = ( iconified > 0 );
 }
 
 
@@ -228,10 +241,11 @@ static void keyCallback( GLFWwindow* window, int32_t key, int32_t /*scancode*/, 
 
 void printUsageAndExit( const char* argv0 )
 {
-    std::cerr <<  "Usage  : " << argv0 << " [options]\n";
-    std::cerr <<  "Options: --file | -f <filename>      File for image output\n";
-    std::cerr <<  "         --no-gl-interop             Disable GL interop for display\n";
-    std::cerr <<  "         --help | -h                 Print this usage message\n";
+    std::cerr << "Usage  : " << argv0 << " [options]\n";
+    std::cerr << "Options: --file | -f <filename>      File for image output\n";
+    std::cerr << "         --no-gl-interop             Disable GL interop for display\n";
+    std::cerr << "         --dim=<width>x<height>      Set image dimensions; defaults to 768x768\n";
+    std::cerr << "         --help | -h                 Print this usage message\n";
     exit( 0 );
 }
 
@@ -242,11 +256,13 @@ void initLaunchParams( SimpleMotionBlurState& state )
                 reinterpret_cast<void**>( &state.params.accum_buffer ),
                 state.params.width*state.params.height*sizeof(float4)
                 ) );
+
     state.params.frame_buffer = nullptr; // Will be set when output buffer is mapped
 
     state.params.subframe_index = 0u;
 
     CUDA_CHECK( cudaStreamCreate( &state.stream ) );
+
     CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &state.d_params ), sizeof( Params ) ) );
 
     state.params.handle = state.ias_handle;
@@ -317,7 +333,6 @@ void launchSubframe( sutil::CUDAOutputBuffer<uchar4>& output_buffer, SimpleMotio
                 1                    // launch depth
                 ) );
     output_buffer.unmap();
-    CUDA_SYNC_CHECK();
 }
 
 
@@ -528,11 +543,11 @@ void buildGAS( SimpleMotionBlurState& state )
 
         uint32_t sphere_input_flag = OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT;
         OptixBuildInput sphere_input = {};
-        sphere_input.type                     = OPTIX_BUILD_INPUT_TYPE_CUSTOM_PRIMITIVES;
-        sphere_input.aabbArray.aabbBuffers    = &d_aabb_buffer;
-        sphere_input.aabbArray.numPrimitives  = 1;
-        sphere_input.aabbArray.flags          = &sphere_input_flag;
-        sphere_input.aabbArray.numSbtRecords  = 1;
+        sphere_input.type                                = OPTIX_BUILD_INPUT_TYPE_CUSTOM_PRIMITIVES;
+        sphere_input.customPrimitiveArray.aabbBuffers    = &d_aabb_buffer;
+        sphere_input.customPrimitiveArray.numPrimitives  = 1;
+        sphere_input.customPrimitiveArray.flags          = &sphere_input_flag;
+        sphere_input.customPrimitiveArray.numSbtRecords  = 1;
 
         OptixAccelBufferSizes gas_buffer_sizes;
         OPTIX_CHECK( optixAccelComputeMemoryUsage( state.context, &accel_options, &sphere_input,
@@ -758,7 +773,7 @@ void createModule( SimpleMotionBlurState& state )
     state.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE; // should be OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
     state.pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
-    std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, "optixSimpleMotionBlur.cu" );
+    std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixSimpleMotionBlur.cu" );
     char log[2048];
     size_t sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
@@ -859,8 +874,6 @@ void createPipeline( SimpleMotionBlurState& state )
     OptixPipelineLinkOptions pipeline_link_options = {};
     pipeline_link_options.maxTraceDepth          = 2;
     pipeline_link_options.debugLevel             = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
-    //pipeline_link_options.overrideUsesMotionBlur = false;
-    pipeline_link_options.overrideUsesMotionBlur = true;
 
     char log[2048];
     size_t sizeof_log = sizeof( log );
@@ -958,6 +971,8 @@ void createSBT( SimpleMotionBlurState& state )
     hitgroup_records[ InstanceType::SPHERE ].data.center = make_float3( -1.0f, -0.5f, 0.0f );
     hitgroup_records[ InstanceType::SPHERE ].data.radius =  0.5f;
 
+
+    OPTIX_CHECK( optixSbtRecordPackHeader( state.sphere_hit_group, &hitgroup_records[ InstanceType::SPHERE ] ) );
     OPTIX_CHECK( optixSbtRecordPackHeader( state.tri_hit_group, &hitgroup_records[ InstanceType::TRI ] ) );
     hitgroup_records[ InstanceType::TRI    ].data.color  = make_float3( 0.1f, 0.1f, 0.9f );
     hitgroup_records[ InstanceType::TRI    ].data.center = make_float3( 0.0f ); // Not used
@@ -1036,6 +1051,14 @@ int main( int argc, char* argv[] )
                 printUsageAndExit( argv[0] );
             outfile = argv[++i];
         }
+        else if( arg.substr( 0, 6 ) == "--dim=" )
+        {
+            const std::string dims_arg = arg.substr( 6 );
+            int w, h;
+            sutil::parseDimensions( dims_arg.c_str(), w, h );
+            state.params.width  = w;
+            state.params.height = h;
+        }
         else if( arg == "--launch-samples" || arg == "-s" )
         {
             if( i >= argc - 1 )
@@ -1070,11 +1093,12 @@ int main( int argc, char* argv[] )
         if( outfile.empty() )
         {
             GLFWwindow* window = sutil::initUI( "optixSimpleMotionBlur", state.params.width, state.params.height );
-            glfwSetMouseButtonCallback( window, mouseButtonCallback );
-            glfwSetCursorPosCallback  ( window, cursorPosCallback   );
-            glfwSetWindowSizeCallback ( window, windowSizeCallback  );
-            glfwSetKeyCallback        ( window, keyCallback         );
-            glfwSetWindowUserPointer  ( window, &state.params       );
+            glfwSetMouseButtonCallback  ( window, mouseButtonCallback   );
+            glfwSetCursorPosCallback    ( window, cursorPosCallback     );
+            glfwSetWindowSizeCallback   ( window, windowSizeCallback    );
+            glfwSetWindowIconifyCallback( window, windowIconifyCallback );
+            glfwSetKeyCallback          ( window, keyCallback           );
+            glfwSetWindowUserPointer    ( window, &state.params         );
 
             {
                 // output_buffer needs to be destroyed before cleanupUI is called
@@ -1147,7 +1171,8 @@ int main( int argc, char* argv[] )
             buffer.width        = output_buffer.width();
             buffer.height       = output_buffer.height();
             buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
-            sutil::displayBufferFile( outfile.c_str(), buffer, false );
+
+            sutil::saveImage( outfile.c_str(), buffer, false );
 
             if( output_buffer_type == sutil::CUDAOutputBufferType::GL_INTEROP )
             {

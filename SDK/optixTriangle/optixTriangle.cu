@@ -29,43 +29,12 @@
 #include <optix.h>
 
 #include "optixTriangle.h"
+#include <cuda/helpers.h>
 
 #include <sutil/vec_math.h>
 
 extern "C" {
 __constant__ Params params;
-}
-
-
-static __forceinline__ __device__ void trace(
-        OptixTraversableHandle handle,
-        float3                 ray_origin,
-        float3                 ray_direction,
-        float                  tmin,
-        float                  tmax,
-        float3*                prd
-        )
-{
-    uint32_t p0, p1, p2;
-    p0 = float_as_int( prd->x );
-    p1 = float_as_int( prd->y );
-    p2 = float_as_int( prd->z );
-    optixTrace(
-            handle,
-            ray_origin,
-            ray_direction,
-            tmin,
-            tmax,
-            0.0f,                // rayTime
-            OptixVisibilityMask( 1 ),
-            OPTIX_RAY_FLAG_NONE,
-            0,                   // SBT offset
-            0,                   // SBT stride
-            0,                   // missSBTIndex
-            p0, p1, p2 );
-    prd->x = int_as_float( p0 );
-    prd->y = int_as_float( p1 );
-    prd->z = int_as_float( p2 );
 }
 
 
@@ -77,66 +46,68 @@ static __forceinline__ __device__ void setPayload( float3 p )
 }
 
 
-static __forceinline__ __device__ float3 getPayload()
+static __forceinline__ __device__ void computeRay( uint3 idx, uint3 dim, float3& origin, float3& direction )
 {
-    return make_float3(
-            int_as_float( optixGetPayload_0() ),
-            int_as_float( optixGetPayload_1() ),
-            int_as_float( optixGetPayload_2() )
-            );
-}
+    const float3 U = params.cam_u;
+    const float3 V = params.cam_v;
+    const float3 W = params.cam_w;
+    const float2 d = 2.0f * make_float2(
+            static_cast<float>( idx.x ) / static_cast<float>( dim.x ),
+            static_cast<float>( idx.y ) / static_cast<float>( dim.y )
+            ) - 1.0f;
 
-
-__forceinline__ __device__ uchar4 make_color( const float3&  c )
-{
-    return make_uchar4(
-            static_cast<uint8_t>( clamp( c.x, 0.0f, 1.0f ) *255.0f ),
-            static_cast<uint8_t>( clamp( c.y, 0.0f, 1.0f ) *255.0f ),
-            static_cast<uint8_t>( clamp( c.z, 0.0f, 1.0f ) *255.0f ),
-            255u
-            );
+    origin    = params.cam_eye;
+    direction = normalize( d.x * U + d.y * V + W );
 }
 
 
 extern "C" __global__ void __raygen__rg()
 {
+    // Lookup our location within the launch grid
     const uint3 idx = optixGetLaunchIndex();
     const uint3 dim = optixGetLaunchDimensions();
 
-    const RayGenData* rtData = (RayGenData*)optixGetSbtDataPointer();
-    const float3      U      = rtData->camera_u;
-    const float3      V      = rtData->camera_v;
-    const float3      W      = rtData->camera_w;
-    const float2      d = 2.0f * make_float2(
-            static_cast<float>( idx.x ) / static_cast<float>( dim.x ),
-            static_cast<float>( idx.y ) / static_cast<float>( dim.y )
-            ) - 1.0f;
+    // Map our launch idx to a screen location and create a ray from the camera
+    // location through the screen
+    float3 ray_origin, ray_direction;
+    computeRay( idx, dim, ray_origin, ray_direction );
 
-    const float3 origin      = rtData->cam_eye;
-    const float3 direction   = normalize( d.x * U + d.y * V + W );
-    float3       payload_rgb = make_float3( 0.5f, 0.5f, 0.5f );
-    trace( params.handle,
-            origin,
-            direction,
-            0.00f,  // tmin
-            1e16f,  // tmax
-            &payload_rgb );
+    // Trace the ray against our scene hierarchy
+    unsigned int p0, p1, p2;
+    optixTrace(
+            params.handle,
+            ray_origin,
+            ray_direction,
+            0.0f,                // Min intersection distance
+            1e16f,               // Max intersection distance
+            0.0f,                // rayTime -- used for motion blur
+            OptixVisibilityMask( 255 ), // Specify always visible
+            OPTIX_RAY_FLAG_NONE,
+            0,                   // SBT offset   -- See SBT discussion
+            1,                   // SBT stride   -- See SBT discussion
+            0,                   // missSBTIndex -- See SBT discussion
+            p0, p1, p2 );
+    float3 result;
+    result.x = int_as_float( p0 );
+    result.y = int_as_float( p1 );
+    result.z = int_as_float( p2 );
 
-    params.image[idx.y * params.image_width + idx.x] = make_color( payload_rgb );
+    // Record results in our output raster
+    params.image[idx.y * params.image_width + idx.x] = make_color( result );
 }
 
 
 extern "C" __global__ void __miss__ms()
 {
-    MissData* rt_data  = reinterpret_cast<MissData*>( optixGetSbtDataPointer() );
-    float3    payload = getPayload();
-    setPayload( make_float3( rt_data->r, rt_data->g, rt_data->b ) );
+    MissData* miss_data  = reinterpret_cast<MissData*>( optixGetSbtDataPointer() );
+    setPayload(  miss_data->bg_color );
 }
 
 
 extern "C" __global__ void __closesthit__ch()
 {
-
+    // When built-in triangle intersection is used, a number of fundamental
+    // attributes are provided by the OptiX API, indlucing barycentric coordinates.
     const float2 barycentrics = optixGetTriangleBarycentrics();
 
     setPayload( make_float3( barycentrics, 1.0f ) );

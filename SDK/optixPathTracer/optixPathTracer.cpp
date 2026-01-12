@@ -62,6 +62,7 @@
 
 
 bool resize_dirty = false;
+bool minimized    = false;
 
 // Camera state
 bool             camera_changed = true;
@@ -359,11 +360,24 @@ static void cursorPosCallback( GLFWwindow* window, double xpos, double ypos )
 
 static void windowSizeCallback( GLFWwindow* window, int32_t res_x, int32_t res_y )
 {
+    // Keep rendering at the current resolution when the window is minimized.
+    if( minimized )
+        return;
+
+    // Output dimensions must be at least 1 in both x and y.
+    sutil::ensureMinimumSize( res_x, res_y );
+
     Params* params = static_cast<Params*>( glfwGetWindowUserPointer( window ) );
     params->width  = res_x;
     params->height = res_y;
     camera_changed = true;
     resize_dirty   = true;
+}
+
+
+static void windowIconifyCallback( GLFWwindow* window, int32_t iconified )
+{
+    minimized = ( iconified > 0 );
 }
 
 
@@ -403,6 +417,7 @@ void printUsageAndExit( const char* argv0 )
     std::cerr << "Options: --file | -f <filename>      File for image output\n";
     std::cerr << "         --launch-samples | -s       Number of samples per pixel per launch (default 16)\n";
     std::cerr << "         --no-gl-interop             Disable GL interop for display\n";
+    std::cerr << "         --dim=<width>x<height>      Set image dimensions; defaults to 768x768\n";
     std::cerr << "         --help | -h                 Print this usage message\n";
     exit( 0 );
 }
@@ -678,13 +693,14 @@ void createModule( PathTracerState& state )
     state.pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
     state.pipeline_compile_options.numPayloadValues      = 2;
     state.pipeline_compile_options.numAttributeValues    = 2;
-    state.pipeline_compile_options.exceptionFlags        =
-        OPTIX_EXCEPTION_FLAG_NONE;
-        //OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
-        //OPTIX_EXCEPTION_FLAG_DEBUG;
+#ifdef DEBUG // Enables debug exceptions during optix launches. This may incur significant performance cost and should only be done during development.
+    state.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_DEBUG | OPTIX_EXCEPTION_FLAG_TRACE_DEPTH | OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
+#else
+    state.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
+#endif
     state.pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
-    const std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, "optixPathTracer.cu" );
+    const std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixPathTracer.cu" );
 
     char   log[2048];
     size_t sizeof_log = sizeof( log );
@@ -799,9 +815,8 @@ void createPipeline( PathTracerState& state )
     };
 
     OptixPipelineLinkOptions pipeline_link_options = {};
-    pipeline_link_options.maxTraceDepth            = 3;
+    pipeline_link_options.maxTraceDepth            = 2;
     pipeline_link_options.debugLevel               = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
-    pipeline_link_options.overrideUsesMotionBlur   = false;
 
     char   log[2048];
     size_t sizeof_log = sizeof( log );
@@ -825,7 +840,7 @@ void createPipeline( PathTracerState& state )
     OPTIX_CHECK( optixUtilAccumulateStackSizes( state.radiance_hit_group,   &stack_sizes ) );
     OPTIX_CHECK( optixUtilAccumulateStackSizes( state.occlusion_hit_group,  &stack_sizes ) );
 
-    uint32_t max_trace_depth = 1;
+    uint32_t max_trace_depth = 2;
     uint32_t max_cc_depth = 0;
     uint32_t max_dc_depth = 0;
     uint32_t direct_callable_stack_size_from_traversal;
@@ -841,9 +856,7 @@ void createPipeline( PathTracerState& state )
                 &continuation_stack_size
                 ) );
 
-    // This is 3 since the largest depth is IAS->IAS->GAS
-    const uint32_t max_traversal_depth = 3;
-
+    const uint32_t max_traversal_depth = 1;
     OPTIX_CHECK( optixPipelineSetStackSize(
                 state.pipeline,
                 direct_callable_stack_size_from_traversal,
@@ -989,6 +1002,14 @@ int main( int argc, char* argv[] )
                 printUsageAndExit( argv[0] );
             outfile = argv[++i];
         }
+        else if( arg.substr( 0, 6 ) == "--dim=" )
+        {
+            const std::string dims_arg = arg.substr( 6 );
+            int w, h;
+            sutil::parseDimensions( dims_arg.c_str(), w, h );
+            state.params.width  = w;
+            state.params.height = h;
+        }
         else if( arg == "--launch-samples" || arg == "-s" )
         {
             if( i >= argc - 1 )
@@ -1024,6 +1045,7 @@ int main( int argc, char* argv[] )
             glfwSetMouseButtonCallback( window, mouseButtonCallback );
             glfwSetCursorPosCallback( window, cursorPosCallback );
             glfwSetWindowSizeCallback( window, windowSizeCallback );
+            glfwSetWindowIconifyCallback( window, windowIconifyCallback );
             glfwSetKeyCallback( window, keyCallback );
             glfwSetScrollCallback( window, scrollCallback );
             glfwSetWindowUserPointer( window, &state.params );
@@ -1099,7 +1121,7 @@ int main( int argc, char* argv[] )
             buffer.height       = output_buffer.height();
             buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
 
-            sutil::displayBufferFile( outfile.c_str(), buffer, false );
+            sutil::saveImage( outfile.c_str(), buffer, false );
 
             if( output_buffer_type == sutil::CUDAOutputBufferType::GL_INTEROP )
             {

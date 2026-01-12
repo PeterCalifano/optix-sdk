@@ -34,6 +34,8 @@
 #include <memory>
 #include <vector>
 
+namespace demandLoading {
+
 /// DemandTextureManager demonstrates how to implement demand-loaded textures using the OptiX paging library.
 class DemandTextureManager
 {
@@ -78,13 +80,15 @@ class DemandTextureManager
 
     // Device memory used to call OptiX paging library routines.
     // These allocations are retained to reduce allocation overhead.
-    uint32_t* m_devRequestedPages   = nullptr;
-    uint32_t* m_devNumPagesReturned = nullptr;
-    MapType*  m_devFilledPages      = nullptr;
+    unsigned int* m_devRequestedPages   = nullptr;
+    unsigned int* m_devNumPagesReturned = nullptr;
+    PageMapping*  m_devFilledPages      = nullptr;
 
     // Get page requests from the device (via optixPagingPullRequests).
-    void pullRequests( std::vector<uint32_t>& requestedPages );
+    void pullRequests( std::vector<unsigned int>& requestedPages );
 
     // Process requests.  Implemented as a separate method to permit testing.
-    int processRequestsImpl( std::vector<uint32_t>& requestedPages );
+    int processRequestsImpl( std::vector<unsigned int>& requestedPages );
 };
+
+} // namespace demandLoading

@@ -34,17 +34,20 @@ struct GeometryData
 {
     enum Type
     {
-        TRIANGLE_MESH = 0,
-        SPHERE        = 1
+        TRIANGLE_MESH         = 0,
+        SPHERE                = 1,
+        LINEAR_CURVE_ARRAY    = 2,
+        QUADRATIC_CURVE_ARRAY = 3,
+        CUBIC_CURVE_ARRAY     = 4,
     };
 
 
     struct TriangleMesh
     {
-        GenericBufferView    indices;
-        BufferView<float3>   positions;
-        BufferView<float3>   normals;
-        BufferView<float2>   texcoords;
+        GenericBufferView  indices;
+        BufferView<float3> positions;
+        BufferView<float3> normals;
+        BufferView<float2> texcoords;
     };
 
 
@@ -55,11 +58,21 @@ struct GeometryData
     };
 
 
+    struct Curves
+    {
+        BufferView<float2> strand_u;     // strand_u at segment start per segment
+        GenericBufferView  strand_i;     // strand index per segment
+        BufferView<uint2>  strand_info;  // info.x = segment base
+                                         // info.y = strand length (segments)
+    };
+
+
     Type  type;
 
     union
     {
         TriangleMesh triangle_mesh;
-        Sphere        sphere;
+        Sphere       sphere;
+        Curves       curves;
     };
 };

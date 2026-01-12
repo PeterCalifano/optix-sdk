@@ -31,6 +31,7 @@
 #include "optixWhitted.h"
 #include "random.h"
 #include "helpers.h"
+#include <cuda/helpers.h>
 
 extern "C" {
 __constant__ Params params;
@@ -43,8 +44,8 @@ extern "C" __global__ void __raygen__pinhole_camera()
 
     const CameraData* camera = (CameraData*) optixGetSbtDataPointer();
 
-    const uint32_t image_index  = params.width*idx.y+idx.x;
-    unsigned int seed           = tea<16>(image_index, params.subframe_index);
+    const unsigned int image_index = params.width * idx.y + idx.x;
+    unsigned int       seed        = tea<16>( image_index, params.subframe_index );
 
     // Subpixel jitter: send the ray through a different position inside the pixel each time,
     // to provide antialiasing.
@@ -72,8 +73,8 @@ extern "C" __global__ void __raygen__pinhole_camera()
         RAY_TYPE_COUNT,
         RAY_TYPE_RADIANCE,
         float3_as_args(prd.result),
-        reinterpret_cast<uint32_t&>(prd.importance),
-        reinterpret_cast<uint32_t&>(prd.depth) );
+        reinterpret_cast<unsigned int&>(prd.importance),
+        reinterpret_cast<unsigned int&>(prd.depth) );
 
     float4 acc_val = params.accum_buffer[image_index];
     if( params.subframe_index > 0 )

@@ -34,13 +34,17 @@
 #include <vector_functions.h>
 #include <vector_types.h>
 
+#if !defined(__CUDACC_RTC__)
 #include <cmath>
 #include <cstdlib>
-
+#endif
 
 /* scalar functions used in vector functions */
 #ifndef M_PIf
 #define M_PIf       3.14159265358979323846f
+#endif
+#ifndef M_PI_2f
+#define M_PI_2f     1.57079632679489661923f
 #endif
 #ifndef M_1_PIf
 #define M_1_PIf     0.318309886183790671538f
@@ -112,9 +116,9 @@ SUTIL_INLINE SUTIL_HOSTDEVICE IntegerType roundUp(IntegerType x, IntegerType y)
 #endif
 
 /** clamp */
-SUTIL_INLINE SUTIL_HOSTDEVICE float clamp(const float f, const float a, const float b)
+SUTIL_INLINE SUTIL_HOSTDEVICE float clamp( const float f, const float a, const float b )
 {
-  return fmaxf(a, fminf(f, b));
+    return fmaxf( a, fminf( f, b ) );
 }
 
 

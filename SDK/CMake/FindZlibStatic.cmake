@@ -72,3 +72,12 @@ find_package_handle_standard_args( ZlibStatic
   ZlibStatic_LIBRARY_RELEASE
   ZlibStatic_INCLUDE_DIR
   VERSION_VAR ZlibStatic_VERSION )
+
+if( ZlibStatic_FOUND )
+    add_library( Zlib::Static STATIC IMPORTED )
+    set_target_properties( Zlib::Static PROPERTIES 
+        IMPORTED_LOCATION_RELEASE ${ZlibStatic_LIBRARY_RELEASE}
+        IMPORTED_LOCATION_DEBUG ${ZlibStatic_LIBRARY_DEBUG}
+        MAP_IMPORTED_CONFIG_RELWITHDEBINFO RELEASE )
+    set_property( TARGET Zlib::Static APPEND PROPERTY INTERFACE_INCLUDE_DIRECTORIES ${ZLIB_INCLUDE_DIR} )
+endif()

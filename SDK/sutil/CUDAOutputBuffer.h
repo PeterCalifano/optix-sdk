@@ -67,11 +67,12 @@ public:
     PIXEL_FORMAT* map();
     void unmap();
 
-    int32_t        width()  { return m_width;  }
-    int32_t        height() { return m_height; }
+    int32_t        width() const  { return m_width;  }
+    int32_t        height() const { return m_height; }
 
     // Get output buffer
     GLuint         getPBO();
+    void           deletePBO();
     PIXEL_FORMAT*  getHostPointer();
 
 private:
@@ -97,6 +98,17 @@ template <typename PIXEL_FORMAT>
 CUDAOutputBuffer<PIXEL_FORMAT>::CUDAOutputBuffer( CUDAOutputBufferType type, int32_t width, int32_t height )
     : m_type( type )
 {
+    // Output dimensions must be at least 1 in both x and y to avoid an error
+    // with cudaMalloc.
+#if 0
+    if( width < 1 || height < 1 )
+    {
+        throw sutil::Exception( "CUDAOutputBuffer dimensions must be at least 1 in both x and y." );
+    }
+#else
+    ensureMinimumSize( width, height );
+#endif
+
     // If using GL Interop, expect that the active device is also the display device.
     if( type == CUDAOutputBufferType::GL_INTEROP )
     {
@@ -151,6 +163,10 @@ CUDAOutputBuffer<PIXEL_FORMAT>::~CUDAOutputBuffer()
 template <typename PIXEL_FORMAT>
 void CUDAOutputBuffer<PIXEL_FORMAT>::resize( int32_t width, int32_t height )
 {
+    // Output dimensions must be at least 1 in both x and y to avoid an error
+    // with cudaMalloc.
+    ensureMinimumSize( width, height );
+
     if( m_width == width && m_height == height )
         return;
 
@@ -174,7 +190,7 @@ void CUDAOutputBuffer<PIXEL_FORMAT>::resize( int32_t width, int32_t height )
         // GL buffer gets resized below
         GL_CHECK( glGenBuffers( 1, &m_pbo ) );
         GL_CHECK( glBindBuffer( GL_ARRAY_BUFFER, m_pbo ) );
-        GL_CHECK( glBufferData( GL_ARRAY_BUFFER, sizeof(PIXEL_FORMAT)*width*height, nullptr, GL_STREAM_DRAW ) );
+        GL_CHECK( glBufferData( GL_ARRAY_BUFFER, sizeof(PIXEL_FORMAT)*m_width*m_height, nullptr, GL_STREAM_DRAW ) );
         GL_CHECK( glBindBuffer( GL_ARRAY_BUFFER, 0u ) );
 
         CUDA_CHECK( cudaGraphicsGLRegisterBuffer(
@@ -202,7 +218,7 @@ void CUDAOutputBuffer<PIXEL_FORMAT>::resize( int32_t width, int32_t height )
     if( m_type != CUDAOutputBufferType::GL_INTEROP && m_type != CUDAOutputBufferType::CUDA_P2P && m_pbo != 0u )
     {
         GL_CHECK( glBindBuffer( GL_ARRAY_BUFFER, m_pbo ) );
-        GL_CHECK( glBufferData( GL_ARRAY_BUFFER, sizeof(PIXEL_FORMAT)*width*height, nullptr, GL_STREAM_DRAW ) );
+        GL_CHECK( glBufferData( GL_ARRAY_BUFFER, sizeof(PIXEL_FORMAT)*m_width*m_height, nullptr, GL_STREAM_DRAW ) );
         GL_CHECK( glBindBuffer( GL_ARRAY_BUFFER, 0u ) );
     }
 
@@ -299,7 +315,7 @@ GLuint CUDAOutputBuffer<PIXEL_FORMAT>::getPBO()
         makeCurrent();
         void* pbo_buff = nullptr;
         size_t dummy_size = 0;
-        
+
         CUDA_CHECK( cudaGraphicsMapResources( 1, &m_cuda_gfx_resource, m_stream ) );
         CUDA_CHECK( cudaGraphicsResourceGetMappedPointer( &pbo_buff, &dummy_size, m_cuda_gfx_resource ) );
         CUDA_CHECK( cudaMemcpy( pbo_buff, m_device_pixels, buffer_size, cudaMemcpyDeviceToDevice ) );
@@ -320,6 +336,13 @@ GLuint CUDAOutputBuffer<PIXEL_FORMAT>::getPBO()
     return m_pbo;
 }
 
+template <typename PIXEL_FORMAT>
+void CUDAOutputBuffer<PIXEL_FORMAT>::deletePBO()
+{
+    GL_CHECK( glBindBuffer( GL_ARRAY_BUFFER, 0 ) );
+    GL_CHECK( glDeleteBuffers( 1, &m_pbo ) );
+    m_pbo = 0;
+}
 
 template <typename PIXEL_FORMAT>
 PIXEL_FORMAT* CUDAOutputBuffer<PIXEL_FORMAT>::getHostPointer()

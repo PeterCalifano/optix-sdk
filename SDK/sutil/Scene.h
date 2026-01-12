@@ -52,6 +52,8 @@ namespace sutil
 class Scene
 {
 public:
+    SUTILAPI Scene();
+    SUTILAPI ~Scene();
     struct MeshGroup
     {
         std::string                       name;
@@ -104,10 +106,10 @@ public:
     SUTILAPI sutil::Aabb                               aabb() const                 { return m_scene_aabb; }
     SUTILAPI OptixDeviceContext                        context() const              { return m_context;    }
     SUTILAPI const std::vector<MaterialData::Pbr>&     materials() const            { return m_materials;  }
-    SUTILAPI const std::vector<std::shared_ptr<MeshGroup>>& meshes() const               { return m_meshes;     }
+    SUTILAPI const std::vector<std::shared_ptr<MeshGroup>>& meshes() const          { return m_meshes;     }
 
     SUTILAPI void createContext();
-    SUTILAPI void buildMeshAccels();
+    SUTILAPI void buildMeshAccels( uint32_t triangle_input_flags = OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT );
     SUTILAPI void buildInstanceAccel( int rayTypeCount = whitted::RAY_TYPE_COUNT );
 
 private:

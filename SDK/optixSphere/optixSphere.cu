@@ -29,6 +29,7 @@
 #include <optix.h>
 
 #include "optixSphere.h"
+#include <cuda/helpers.h>
 
 #include <sutil/vec_math.h>
 
@@ -46,7 +47,7 @@ static __forceinline__ __device__ void trace(
         float3*                prd
         )
 {
-    uint32_t p0, p1, p2;
+    unsigned int p0, p1, p2;
     p0 = float_as_int( prd->x );
     p1 = float_as_int( prd->y );
     p2 = float_as_int( prd->z );
@@ -83,17 +84,6 @@ static __forceinline__ __device__ float3 getPayload()
             int_as_float( optixGetPayload_0() ),
             int_as_float( optixGetPayload_1() ),
             int_as_float( optixGetPayload_2() )
-            );
-}
-
-
-__forceinline__ __device__ uchar4 make_color( const float3&  c )
-{
-    return make_uchar4(
-            static_cast<uint8_t>( clamp( c.x, 0.0f, 1.0f ) *255.0f ),
-            static_cast<uint8_t>( clamp( c.y, 0.0f, 1.0f ) *255.0f ),
-            static_cast<uint8_t>( clamp( c.z, 0.0f, 1.0f ) *255.0f ),
-            255u
             );
 }
 

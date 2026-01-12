@@ -64,6 +64,7 @@
 //#define USE_IAS // WAR for broken direct intersection of GAS on non-RTX cards
 
 bool              resize_dirty  = false;
+bool              minimized     = false;
 
 // Camera state
 bool              camera_changed = true;
@@ -122,10 +123,23 @@ static void cursorPosCallback( GLFWwindow* window, double xpos, double ypos )
 
 static void windowSizeCallback( GLFWwindow* window, int32_t res_x, int32_t res_y )
 {
+    // Keep rendering at the current resolution when the window is minimized.
+    if( minimized )
+        return;
+
+    // Output dimensions must be at least 1 in both x and y.
+    sutil::ensureMinimumSize( res_x, res_y );
+
     width   = res_x;
     height  = res_y;
     camera_changed = true;
     resize_dirty   = true;
+}
+
+
+static void windowIconifyCallback( GLFWwindow* window, int32_t iconified )
+{
+    minimized = ( iconified > 0 );
 }
 
 
@@ -164,6 +178,7 @@ void printUsageAndExit( const char* argv0 )
 {
     std::cerr <<  "Usage  : " << argv0 << " [options]\n";
     std::cerr <<  "Options: --file | -f <filename>      File for image output\n";
+    std::cerr << "          --dim=<width>x<height>      Set image dimensions; defaults to 768x768\n";
     std::cerr <<  "         --launch-samples | -s       Number of samples per pixel per launch (default 16)\n";
     std::cerr <<  "         --no-gl-interop             Disable GL interop for display\n";
     std::cerr <<  "         --model <model.gltf>        Specify model to render (required)\n";
@@ -184,25 +199,27 @@ void initLaunchParams( const sutil::Scene& scene ) {
     const float loffset = scene.aabb().maxExtent();
 
     // TODO: add light support to sutil::Scene
-    std::vector<Light::Point> lights(2);
-    lights[0].color     = { 1.0f, 1.0f, 0.8f };
-    lights[0].intensity = 5.0f;
-    lights[0].position  = scene.aabb().center() + make_float3( loffset );
-    lights[0].falloff   = Light::Falloff::QUADRATIC;
-    lights[1].color     = { 0.8f, 0.8f, 1.0f };
-    lights[1].intensity = 3.0f;
-    lights[1].position  = scene.aabb().center() + make_float3( -loffset, 0.5f*loffset, -0.5f*loffset  );
-    lights[1].falloff   = Light::Falloff::QUADRATIC;
+    std::vector<Light> lights( 2 );
+    lights[0].type            = Light::Type::POINT;
+    lights[0].point.color     = {1.0f, 1.0f, 0.8f};
+    lights[0].point.intensity = 5.0f;
+    lights[0].point.position  = scene.aabb().center() + make_float3( loffset );
+    lights[0].point.falloff   = Light::Falloff::QUADRATIC;
+    lights[1].type            = Light::Type::POINT;
+    lights[1].point.color     = {0.8f, 0.8f, 1.0f};
+    lights[1].point.intensity = 3.0f;
+    lights[1].point.position  = scene.aabb().center() + make_float3( -loffset, 0.5f * loffset, -0.5f * loffset );
+    lights[1].point.falloff   = Light::Falloff::QUADRATIC;
 
     params.lights.count  = static_cast<uint32_t>( lights.size() );
     CUDA_CHECK( cudaMalloc(
                 reinterpret_cast<void**>( &params.lights.data ),
-                lights.size() * sizeof( Light::Point )
+                lights.size() * sizeof( Light )
                 ) );
     CUDA_CHECK( cudaMemcpy(
                 reinterpret_cast<void*>( params.lights.data ),
                 lights.data(),
-                lights.size() * sizeof( Light::Point ),
+                lights.size() * sizeof( Light ),
                 cudaMemcpyHostToDevice
                 ) );
 
@@ -369,6 +386,11 @@ int main( int argc, char* argv[] )
                 printUsageAndExit( argv[0] );
             outfile = argv[++i];
         }
+        else if( arg.substr( 0, 6 ) == "--dim=" )
+        {
+            const std::string dims_arg = arg.substr( 6 );
+            sutil::parseDimensions( dims_arg.c_str(), width, height );
+        }
         else if( arg == "--launch-samples" || arg == "-s" )
         {
             if( i >= argc - 1 )
@@ -403,12 +425,13 @@ int main( int argc, char* argv[] )
         if( outfile.empty() )
         {
             GLFWwindow* window = sutil::initUI( "optixMeshViewer", width, height );
-            glfwSetMouseButtonCallback( window, mouseButtonCallback );
-            glfwSetCursorPosCallback  ( window, cursorPosCallback   );
-            glfwSetWindowSizeCallback ( window, windowSizeCallback  );
-            glfwSetKeyCallback        ( window, keyCallback         );
-            glfwSetScrollCallback     ( window, scrollCallback      );
-            glfwSetWindowUserPointer  ( window, &params       );
+            glfwSetMouseButtonCallback  ( window, mouseButtonCallback   );
+            glfwSetCursorPosCallback    ( window, cursorPosCallback     );
+            glfwSetWindowSizeCallback   ( window, windowSizeCallback    );
+            glfwSetWindowIconifyCallback( window, windowIconifyCallback );
+            glfwSetKeyCallback          ( window, keyCallback           );
+            glfwSetScrollCallback       ( window, scrollCallback        );
+            glfwSetWindowUserPointer    ( window, &params               );
 
             //
             // Render loop
@@ -471,7 +494,7 @@ int main( int argc, char* argv[] )
 			buffer.height = output_buffer.height();
 			buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
 
-			sutil::displayBufferFile(outfile.c_str(), buffer, false);
+			sutil::saveImage(outfile.c_str(), buffer, false);
 
             if( output_buffer_type == sutil::CUDAOutputBufferType::GL_INTEROP )
             {

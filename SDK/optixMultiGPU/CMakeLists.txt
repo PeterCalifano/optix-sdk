@@ -31,6 +31,7 @@ set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/optixMultiGPU_kernels.cu
   )
 
 OPTIX_add_sample_executable( optixMultiGPU target_name
+  ${SAMPLES_CUDA_DIR}/helpers.h
   optixMultiGPU_kernels.cu
   optixMultiGPU.cu
   optixMultiGPU.cpp

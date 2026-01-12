@@ -27,6 +27,10 @@
 #   OpenEXR_LIBRARIES
 #   OpenEXR_VERSION
 
+if( OpenEXR_FOUND )
+    return()
+endif()
+
 set( OpenEXR_LIB_NAMES IlmImf Half Iex Imath IlmThread )
 
 # If OpenEXR_ROOT has changed, unset variables that depend upon it.
@@ -46,7 +50,7 @@ set( OpenEXR_ROOT_PREVIOUS "${OpenEXR_ROOT}" CACHE PATH "Previous path to OpenEX
 
 # Find OpenEXR includes.
 find_path( OpenEXR_INCLUDE_DIR ImfOutputFile.h
-	   HINTS "${OpenEXR_ROOT}/include/OpenEXR" )
+           HINTS "${OpenEXR_ROOT}/include/OpenEXR" )
 mark_as_advanced( OpenEXR_INCLUDE_DIR )
 
 # Get version number from header, which we need for the library names.
@@ -71,16 +75,16 @@ mark_as_advanced( OpenEXR_LIB_DIR )
 set( OpenEXR_LIBRARIES "" )
 foreach( LIB ${OpenEXR_LIB_NAMES} )
   find_library( OpenEXR_${LIB}_RELEASE
-  		NAMES "${LIB}_s" "${LIB}-${VERSION_SUFFIX}_s" "${LIB}"
- 		HINTS "${OpenEXR_LIB_DIR}" )
+                NAMES "${LIB}_s" "${LIB}-${VERSION_SUFFIX}_s" "${LIB}"
+                HINTS "${OpenEXR_LIB_DIR}" )
   mark_as_advanced( OpenEXR_${LIB}_RELEASE )
   if( OpenEXR_${LIB}_RELEASE )
     list( APPEND OpenEXR_LIBRARIES optimized "${OpenEXR_${LIB}_RELEASE}" )
   endif()
 
   find_library( OpenEXR_${LIB}_DEBUG
-  		NAMES "${LIB}_s_d" "${LIB}-${VERSION_SUFFIX}_s_d"
- 		HINTS "${OpenEXR_LIB_DIR}" )
+                NAMES "${LIB}_s_d" "${LIB}-${VERSION_SUFFIX}_s_d"
+                HINTS "${OpenEXR_LIB_DIR}" )
   mark_as_advanced( OpenEXR_${LIB}_DEBUG )
   if( OpenEXR_${LIB}_DEBUG )
     list( APPEND OpenEXR_LIBRARIES debug "${OpenEXR_${LIB}_DEBUG}" )
@@ -99,3 +103,31 @@ find_package_handle_standard_args( OpenEXR
     OpenEXR_IlmImf_RELEASE OpenEXR_Half_RELEASE OpenEXR_Iex_RELEASE OpenEXR_Imath_RELEASE OpenEXR_IlmThread_RELEASE
     OpenEXR_INCLUDE_DIR
   VERSION_VAR OpenEXR_VERSION )
+
+foreach( LIB ${OpenEXR_LIB_NAMES} )
+    if( OpenEXR_${LIB}_RELEASE )
+        set( target OpenEXR::${LIB} )
+        add_library( ${target} STATIC IMPORTED )
+        # We only have release libraries on Linux
+        if( WIN32 )
+            set_target_properties( ${target} PROPERTIES
+                IMPORTED_LOCATION_RELEASE ${OpenEXR_${LIB}_RELEASE}
+                IMPORTED_LOCATION_DEBUG ${OpenEXR_${LIB}_DEBUG}
+                MAP_IMPORTED_CONFIG_MINSIZEREL Release
+                MAP_IMPORTED_CONFIG_RELWITHDEBINFO Release )
+        else()
+            set_target_properties( ${target} PROPERTIES
+                IMPORTED_LOCATION ${OpenEXR_${LIB}_RELEASE}
+                MAP_IMPORTED_CONFIG_DEBUG ""
+                MAP_IMPORTED_CONFIG_MINSIZEREL ""
+                MAP_IMPORTED_CONFIG_RELWITHDEBINFO "" )
+        endif()
+        set_property( TARGET ${target} APPEND PROPERTY INTERFACE_INCLUDE_DIRECTORIES ${OpenEXR_INCLUDE_DIR} )
+    endif()
+endforeach()
+
+if( OpenEXR_IlmImf_RELEASE AND OpenEXR_IlmThread_RELEASE )
+    # Record the library dependencies for IlmImf on the other OpenEXR libraries
+    set_property( TARGET OpenEXR::IlmImf PROPERTY INTERFACE_LINK_LIBRARIES
+        OpenEXR::Half OpenEXR::Iex OpenEXR::Imath OpenEXR::IlmThread )
+endif()

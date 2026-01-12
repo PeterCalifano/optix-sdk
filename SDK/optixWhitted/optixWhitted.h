@@ -26,7 +26,6 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#include <stdint.h>
 #include <vector_types.h>
 #include <optix_types.h>
 #include <sutil/vec_math.h>
@@ -48,18 +47,18 @@ struct BasicLight
 
 struct Params
 {
-    uint32_t     subframe_index;
+    unsigned int subframe_index;
     float4*      accum_buffer;
     uchar4*      frame_buffer;
-    uint32_t     width;
-    uint32_t     height;
+    unsigned int width;
+    unsigned int height;
 
     BasicLight   light;                 // TODO: make light list
     float3       ambient_light_color;
     int          max_depth;
     float        scene_epsilon;
 
-    OptixTraversableHandle  handle;
+    OptixTraversableHandle handle;
 };
 
 

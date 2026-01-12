@@ -28,6 +28,7 @@
 
 #include <optix.h>
 #include <optix_function_table_definition.h>
+#include <optix_stack_size.h>
 #include <optix_stubs.h>
 
 #include <cuda_runtime.h>
@@ -169,13 +170,13 @@ int main( int argc, char* argv[] )
 
             OptixBuildInput aabb_input = {};
 
-            aabb_input.type                    = OPTIX_BUILD_INPUT_TYPE_CUSTOM_PRIMITIVES;
-            aabb_input.aabbArray.aabbBuffers   = &d_aabb_buffer;
-            aabb_input.aabbArray.numPrimitives = 1;
+            aabb_input.type                               = OPTIX_BUILD_INPUT_TYPE_CUSTOM_PRIMITIVES;
+            aabb_input.customPrimitiveArray.aabbBuffers   = &d_aabb_buffer;
+            aabb_input.customPrimitiveArray.numPrimitives = 1;
 
-            uint32_t aabb_input_flags[1]       = {OPTIX_GEOMETRY_FLAG_NONE};
-            aabb_input.aabbArray.flags         = aabb_input_flags;
-            aabb_input.aabbArray.numSbtRecords = 1;
+            uint32_t aabb_input_flags[1]                  = {OPTIX_GEOMETRY_FLAG_NONE};
+            aabb_input.customPrimitiveArray.flags         = aabb_input_flags;
+            aabb_input.customPrimitiveArray.numSbtRecords = 1;
 
             OptixAccelBufferSizes gas_buffer_sizes;
             OPTIX_CHECK( optixAccelComputeMemoryUsage( context, &accel_options, &aabb_input, 1, &gas_buffer_sizes ) );
@@ -247,7 +248,7 @@ int main( int argc, char* argv[] )
             pipeline_compile_options.exceptionFlags        = OPTIX_EXCEPTION_FLAG_NONE;  // TODO: should be OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
             pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
-            const std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, "optixSphere.cu" );
+            const std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixSphere.cu" );
             size_t sizeof_log = sizeof( log );
 
             OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
@@ -326,12 +327,12 @@ int main( int argc, char* argv[] )
         //
         OptixPipeline pipeline = nullptr;
         {
+            const uint32_t    max_trace_depth  = 1;
             OptixProgramGroup program_groups[] = { raygen_prog_group, miss_prog_group, hitgroup_prog_group };
 
             OptixPipelineLinkOptions pipeline_link_options = {};
-            pipeline_link_options.maxTraceDepth          = 5;
+            pipeline_link_options.maxTraceDepth          = max_trace_depth;
             pipeline_link_options.debugLevel             = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
-            pipeline_link_options.overrideUsesMotionBlur = false;
             size_t sizeof_log = sizeof( log );
             OPTIX_CHECK_LOG( optixPipelineCreate(
                         context,
@@ -343,6 +344,25 @@ int main( int argc, char* argv[] )
                         &sizeof_log,
                         &pipeline
                         ) );
+
+            OptixStackSizes stack_sizes = {};
+            for( auto& prog_group : program_groups )
+            {
+                OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes ) );
+            }
+
+            uint32_t direct_callable_stack_size_from_traversal;
+            uint32_t direct_callable_stack_size_from_state;
+            uint32_t continuation_stack_size;
+            OPTIX_CHECK( optixUtilComputeStackSizes( &stack_sizes, max_trace_depth,
+                                                     0,  // maxCCDepth
+                                                     0,  // maxDCDEpth
+                                                     &direct_callable_stack_size_from_traversal,
+                                                     &direct_callable_stack_size_from_state, &continuation_stack_size ) );
+            OPTIX_CHECK( optixPipelineSetStackSize( pipeline, direct_callable_stack_size_from_traversal,
+                                                    direct_callable_stack_size_from_state, continuation_stack_size,
+                                                    1  // maxTraversableDepth
+                                                    ) );
         }
 
         //
@@ -445,7 +465,7 @@ int main( int argc, char* argv[] )
             if( outfile.empty() )
                 sutil::displayBufferWindow( argv[0], buffer );
             else
-                sutil::displayBufferFile( outfile.c_str(), buffer, false );
+                sutil::saveImage( outfile.c_str(), buffer, false );
         }
 
         //

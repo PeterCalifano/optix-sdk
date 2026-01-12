@@ -1,5 +1,5 @@
-Third Party Licenses as used in OptiX and VCA 
-=============================================
+Third Party Licenses as used in OptiX 
+=====================================
 
 This software may use parts or all of the following software:
 
@@ -16,22 +16,8 @@ ANY SPECIAL, INCIDENTAL, INDIRECT OR CONSEQUENTIAL DAMAGES OF ANY KIND, OR ANY D
 
 ========================================================================
 
-b. Regex
 
-Chapter 5. Henry Spencer regex license
-
-Copyright 1992, 1993, 1994, 1997 Henry Spencer.  All rights reserved.
-
-This software is not subject to any license of the American Telephone and Telegraph Company or of the Regents of the University of California.
-Permission is granted to anyone to use this software for any purpose on any computer system, and to alter it and redistribute it, subject to the following restrictions:
-1. The author is not responsible for the consequences of use of this software, no matter how awful, even if they arise from flaws in it.
-2. The origin of this software must not be misrepresented, either by explicit claim or by omission.  Since few users ever read sources, credits must appear in the documentation.
-3. Altered versions must be plainly marked as such, and must not be misrepresented as being the original software.  Since few users ever read sources, credits must appear in the documentation.
-4.This notice may not be removed or altered.
-
-========================================================================
-
-c. Zlib
+b. Zlib
 
 Copyright (C) 1995-2004 Jean-loup Gailly and Mark Adler
 
@@ -43,25 +29,7 @@ Permission is granted to anyone to use this software for any purpose, including 
 
 ========================================================================
 
-d. ffmpeg library
-
-Copyright (c) 2015, NVIDIA CORPORATION.  All rights reserved.
-
-This library is free software; you can redistribute it and/or
-modify it under the terms of the GNU Lesser General Public
-License, version 2.1, as published by the Free Software Foundation.
-
-This library is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-Lesser General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
-========================================================================
-
-e. FreeImage license
+c. FreeImage license
 
 This software uses the FreeImage open source image library. See http://freeimage.sourceforge.net for details.
 
@@ -69,7 +37,7 @@ FreeImage is used under the FIPL, license version.
 
 ========================================================================
 
-f. Boost C++ Libraries license.
+d. Boost C++ Libraries license.
 
 Boost Software License - Version 1.0 August 17th, 2003 Permission is
 hereby granted, free of charge, to any person or organization obtaining a copy
@@ -96,57 +64,7 @@ THE SOFTWARE.
 
 ========================================================================
 
-g. Jsoncpp
-
-Copyright (c) 2007-2010 Baptiste Lepilleur
-
-Permission is hereby granted, free of charge, to any person
-obtaining a copy of this software and associated documentation
-files (the "Software"), to deal in the Software without
-restriction, including without limitation the rights to use, copy,
-modify, merge, publish, distribute, sublicense, and/or sell copies
-of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be
-included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
-BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
-ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
-CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-========================================================================
-
-h. RPly 1.01 license
-
-Copyright 2003-2005 Diego Nehab.
-
-Permission is hereby granted, free of charge, to any person obtaining a
-copy of this software and associated documentation files (the "Software"),
-to deal in the Software without restriction, including without limitation
-the rights to use, copy, modify, merge, publish, distribute, sublicense,
-and/or sell copies of the Software, and to permit persons to whom the
-Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
-========================================================================
-
-i.LLVM Release License 
+e.LLVM Release License 
 
 University of Illinois/NCSA 
 Open Source License 
@@ -191,7 +109,7 @@ SOFTWARE.
 
 ========================================================================
 
-j. Glew
+f. Glew
 
 The OpenGL Extension Wrangler Library
 Copyright (C) 2008-2016, Nigel Stewart <nigels[]users sourceforge net>
@@ -225,7 +143,7 @@ THE POSSIBILITY OF SUCH DAMAGE.
 
 ========================================================================
 
-k. OpenEXR
+g. OpenEXR
 
 Copyright (c) 2006, Industrial Light & Magic, a division of Lucasfilm
 Entertainment Company Ltd.  Portions contributed and copyright held by
@@ -263,7 +181,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ========================================================================
 
-l. PNG reader
+h. PNG reader
 
 Copyright (c) 2005-2016 Lode Vandevenne
 
@@ -288,7 +206,7 @@ freely, subject to the following restrictions:
 
 ========================================================================
 
-m. CUDNN library
+i. CUDNN library
 
 Copyright 1993-2015 NVIDIA Corporation.  All rights reserved.
 
@@ -338,7 +256,7 @@ Users Notice.
 
 ========================================================================
 
-n. SQLite
+k. SQLite
 
 All of the code and documentation in SQLite has been dedicated to 
 the public domain by the authors.  All code authors, and representatives 
@@ -351,7 +269,7 @@ compiled binary, for any purpose, commercial or non-commercial, and by any means
 
 ========================================================================
 
-x. Google Performance Tools
+l. Google Performance Tools
 
 Copyright (c) 2005, Google Inc.
 All rights reserved.

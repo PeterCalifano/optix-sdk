@@ -26,8 +26,6 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#include <stdint.h>
-
 enum RayType
 {
     RAY_TYPE_RADIANCE  = 0,
@@ -47,14 +45,14 @@ struct ParallelogramLight
 
 struct Params
 {
-    uint32_t     subframe_index;
+    unsigned int subframe_index;
     int2*        sample_index_buffer;
     float4*      sample_accum_buffer;
     uchar4*      result_buffer;
-    uint32_t     width;
-    uint32_t     height;
-    uint32_t     samples_per_launch;
-    uint32_t     device_idx;
+    unsigned int width;
+    unsigned int height;
+    unsigned int samples_per_launch;
+    unsigned int device_idx;
 
     float3       eye;
     float3       U;

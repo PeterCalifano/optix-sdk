@@ -82,8 +82,11 @@
 project(OptiX-Samples)
 
 # This enforces a particular version of CMake that we require to process the script files
-# properly.
-cmake_minimum_required(VERSION 2.8.8 FATAL_ERROR)
+# properly.  We rely on CXX_STANDARD, which was added in CMake 3.1.
+cmake_minimum_required(VERSION 3.1 FATAL_ERROR)
+set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 # As of CMake 2.6 policies were introduced in order to provide a mechanism for
 # adding backwards compatibility one feature at a time.  We will just specify
@@ -159,10 +162,18 @@ mark_as_advanced(CLEAR CUDA_64_BIT_DEVICE_CODE)
 if(NOT PASSED_FIRST_CONFIGURE)
   list(FIND CUDA_NVCC_FLAGS "-arch" index)
   if(index EQUAL -1)
-    list(APPEND CUDA_NVCC_FLAGS -arch sm_30)
+    list(APPEND CUDA_NVCC_FLAGS -arch sm_60)
     set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} CACHE STRING "Semi-colon delimit multiple arguments." FORCE)
   endif()
+
   set(flag "--use_fast_math")
+  list(FIND CUDA_NVCC_FLAGS ${flag} index)
+  if(index EQUAL -1)
+    list(APPEND CUDA_NVCC_FLAGS ${flag})
+    set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} CACHE STRING "Semi-colon delimit multiple arguments." FORCE)
+  endif()
+  
+  set(flag "-lineinfo")
   list(FIND CUDA_NVCC_FLAGS ${flag} index)
   if(index EQUAL -1)
     list(APPEND CUDA_NVCC_FLAGS ${flag})
@@ -189,7 +200,12 @@ if(NOT PASSED_FIRST_CONFIGURE)
     endif()
   endif()
 
-  set(CUDA_NVRTC_FLAGS -arch compute_30 -use_fast_math -lineinfo -default-device -rdc true -D__x86_64 CACHE STRING "Semi-colon delimit multiple arguments." FORCE)
+  if(CMAKE_CXX_STANDARD EQUAL 11)
+    set(SAMPLES_NVRTC_CXX "-std=c++11")
+  else()
+    set(SAMPLES_NVRTC_CXX "")
+  endif()
+  set(CUDA_NVRTC_FLAGS ${SAMPLES_NVRTC_CXX} -arch compute_60 -use_fast_math -lineinfo -default-device -rdc true -D__x86_64 CACHE STRING "Semi-colon delimit multiple arguments." FORCE)
 endif(NOT PASSED_FIRST_CONFIGURE)
 
 mark_as_advanced(CUDA_NVRTC_FLAGS)
@@ -225,7 +241,7 @@ include_directories(
   )
 
 # Select whether to use NVRTC or NVCC to generate PTX
-set(CUDA_NVRTC_ENABLED OFF CACHE BOOL "Use NVRTC to compile PTX at run-time instead of NVCC at build-time")
+set(CUDA_NVRTC_ENABLED ON CACHE BOOL "Use NVRTC to compile PTX at run-time instead of NVCC at build-time")
 
 ##################################################################
 # SUtil compilation
@@ -255,7 +271,7 @@ set(SAMPLES_RELATIVE_INCLUDE_DIRS "\\
 
 # NVRTC absolute include paths to the headers used to build the samples
 set(SAMPLES_ABSOLUTE_INCLUDE_DIRS "\\
-  \"${OPTIX_INCLUDE_DIR}\", \\
+  \"${OptiX_INCLUDE}\", \\
   \"${CUDA_INCLUDE_DIRS}\", ")
 
 # Build a null-terminated option list for NVRTC
@@ -339,7 +355,8 @@ function(OPTIX_add_sample_executable target_name_base target_name_var)
     )
 
   set_target_properties( ${target_name} PROPERTIES
-    COMPILE_DEFINITIONS OPTIX_SAMPLE_NAME_DEFINE=${target_name})
+    COMPILE_DEFINITIONS
+    "OPTIX_SAMPLE_NAME_DEFINE=${target_name};OPTIX_SAMPLE_DIR_DEFINE=${target_name}" )
 
   if( UNIX AND NOT APPLE )
     # Force using RPATH instead of RUNPATH on Debian
@@ -357,21 +374,27 @@ endfunction()
 # If you wish to start your own sample, you can copy one of the sample's directories.
 # Just make sure you rename all the occurances of the sample's name in the C code as well
 # and the CMakeLists.txt file.
+add_subdirectory( optixCallablePrograms )
+add_subdirectory( optixCurves           )
 add_subdirectory( optixCutouts          )
+add_subdirectory( optixDemandTexture    )
+add_subdirectory( optixDynamicMaterials )
+add_subdirectory( optixHair             )
 add_subdirectory( optixHello            )
 add_subdirectory( optixMeshViewer       )
 add_subdirectory( optixMultiGPU         )
+add_subdirectory( optixNVLink           )
 add_subdirectory( optixPathTracer       )
 add_subdirectory( optixRaycasting       )
 add_subdirectory( optixSimpleMotionBlur )
 add_subdirectory( optixSphere           )
 add_subdirectory( optixTriangle         )
 add_subdirectory( optixWhitted          )
-add_subdirectory( optixDemandTexture    )
-add_subdirectory( optixDemandTextureAdvanced )
 
 # Our sutil library.  The rules to build it are found in the subdirectory.
 add_subdirectory(sutil)
+# Our other libraries.
+add_subdirectory( lib/optixPaging )
 # Third-party support libraries.
 add_subdirectory(support)
 

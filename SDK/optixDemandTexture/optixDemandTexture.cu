@@ -29,6 +29,7 @@
 #include <cuda_runtime.h>
 #include <optixDemandTexture.h>
 #include <sutil/vec_math.h>
+#include <cuda/helpers.h>
 
 extern "C" {
 __constant__ Params params;
@@ -36,7 +37,7 @@ __constant__ Params params;
 
 static __forceinline__ __device__ void trace( OptixTraversableHandle handle, float3 ray_origin, float3 ray_direction, float tmin, float tmax, float3* prd )
 {
-    uint32_t p0, p1, p2;
+    unsigned int p0, p1, p2;
     p0 = float_as_int( prd->x );
     p1 = float_as_int( prd->y );
     p2 = float_as_int( prd->z );
@@ -44,7 +45,7 @@ static __forceinline__ __device__ void trace( OptixTraversableHandle handle, flo
                 0.0f,  // rayTime
                 OptixVisibilityMask( 1 ), OPTIX_RAY_FLAG_NONE,
                 0,  // SBT offset
-                0,  // SBT stride
+                1,  // SBT stride
                 0,  // missSBTIndex
                 p0, p1, p2 );
     prd->x = int_as_float( p0 );
@@ -65,14 +66,6 @@ static __forceinline__ __device__ float3 getPayload()
 {
     return make_float3( int_as_float( optixGetPayload_0() ), int_as_float( optixGetPayload_1() ),
                         int_as_float( optixGetPayload_2() ) );
-}
-
-
-__forceinline__ __device__ uchar4 make_color( const float3& c )
-{
-    return make_uchar4( static_cast<uint8_t>( clamp( c.x, 0.0f, 1.0f ) * 255.0f ),
-                        static_cast<uint8_t>( clamp( c.y, 0.0f, 1.0f ) * 255.0f ),
-                        static_cast<uint8_t>( clamp( c.z, 0.0f, 1.0f ) * 255.0f ), 255u );
 }
 
 
@@ -122,18 +115,18 @@ __forceinline__ __device__ float3 cartesian_to_polar( const float3& v )
         elevation = atanf( v.z / r );
 
         if( v.x < 0.0f )
-            azimuth += M_PI;
+            azimuth += M_PIf;
         else if( v.y < 0.0f )
-            azimuth += M_PI * 2.0f;
+            azimuth += M_PIf * 2.0f;
     }
     else
     {
         azimuth = 0.0f;
 
         if( v.z > 0.0f )
-            elevation = +M_PI_2;
+            elevation = +M_PI_2f;
         else
-            elevation = -M_PI_2;
+            elevation = -M_PI_2f;
     }
 
     return make_float3( azimuth, elevation, radius );
@@ -142,17 +135,16 @@ __forceinline__ __device__ float3 cartesian_to_polar( const float3& v )
 extern "C" __global__ void __intersection__is()
 {
     HitGroupData* hg_data = reinterpret_cast<HitGroupData*>( optixGetSbtDataPointer() );
+    const Sphere  sphere  = hg_data->sphere;
     const float3  orig    = optixGetObjectRayOrigin();
     const float3  dir     = optixGetObjectRayDirection();
 
-    const float3 center = {0.f, 0.f, 0.f};
-    const float  radius = hg_data->radius;
-    const float3 O      = orig - center;
-    const float  l      = 1 / length( dir );
-    const float3 D      = dir * l;
+    const float3 O = orig - sphere.center;
+    const float  l = 1 / length( dir );
+    const float3 D = dir * l;
 
     const float b    = dot( O, D );
-    const float c    = dot( O, O ) - radius * radius;
+    const float c    = dot( O, O ) - sphere.radius * sphere.radius;
     const float disc = b * b - c;
     if( disc > 0.0f )
     {
@@ -160,10 +152,10 @@ extern "C" __global__ void __intersection__is()
         const float root1 = ( -b - sdisc );
 
         const float  root11         = 0.0f;
-        const float3 shading_normal = ( O + ( root1 + root11 ) * D ) / radius;
+        const float3 shading_normal = ( O + ( root1 + root11 ) * D ) / sphere.radius;
 
         float3 polar    = cartesian_to_polar( shading_normal );
-        float3 texcoord = make_float3( polar.x * 0.5f * M_1_PI, ( polar.y + M_PI_2 ) * M_1_PI, polar.z / radius );
+        float3 texcoord = make_float3( polar.x * 0.5f * M_1_PIf, ( polar.y + M_PI_2f ) * M_1_PIf, polar.z / sphere.radius );
 
         unsigned int p0, p1, p2;
         p0 = float_as_int( texcoord.x );
@@ -191,7 +183,8 @@ inline __device__ void requestMipLevel( unsigned int textureId, const DemandText
 
 // Fetch from a demand-loaded texture with a specified LOD.  The necessary miplevels are requested
 // if they are not resident, which is indicated by the boolean result parameter.
-inline __device__ float4 tex2DLodLoadOrRequest( unsigned int textureId, const DemandTextureSampler& sampler, float x, float y, float lod, bool& isResident )
+inline __device__ float4
+tex2DLodLoadOrRequest( unsigned int textureId, const DemandTextureSampler& sampler, float x, float y, float lod, bool& isResident )
 {
     // Request the closest miplevels.  We conservatively clamp the miplevel to [0,15].  It is
     // subsequently clamped to the actual number of miplevels when processing the request.
@@ -206,12 +199,7 @@ inline __device__ float4 tex2DLodLoadOrRequest( unsigned int textureId, const De
         isResident = isResident && isResident2;
     }
     if( isResident )
-    {
-        // In older versions of OptiX this call to tex2DLod() causes a PTX
-        // exception.  For testing purposes we call tex2D instead (which will access only a single miplevel).
-        // return tex2DLod<float4>( sampler.texture, x, y, lod );
-        return tex2D<float4>( sampler.texture, x, y );
-    }
+        return tex2DLod<float4>( sampler.texture, x, y, lod );
     else
         return make_float4( 1.f, 0.f, 1.f, 0.f );
 }
@@ -229,9 +217,9 @@ extern "C" __global__ void __closesthit__ch()
                                          int_as_float( optixGetAttribute_2() ) );
 
     // Fetch from the demand-loaded texture, requesting any non-resident miplevels as neeeded.
-    float  scale = hg_data->texture_scale;
-    float  lod   = hg_data->texture_lod;
-    bool   isResident;
+    float scale = hg_data->texture_scale;
+    float lod   = hg_data->texture_lod;
+    bool  isResident;
     float4 pixel = tex2DLodLoadOrRequest( textureId, sampler, texcoord.x * scale, 1.f - texcoord.y * scale, lod, isResident );
     setPayload( make_float3( pixel ) );
 }

@@ -26,16 +26,13 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#include <stdint.h>
-
-
 struct Params
 {
     uchar4*                image;
-    uint32_t               image_width;
-    uint32_t               image_height;
-    int32_t                origin_x;
-    int32_t                origin_y;
+    unsigned int           image_width;
+    unsigned int           image_height;
+    int                    origin_x;
+    int                    origin_y;
     OptixTraversableHandle handle;
 };
 

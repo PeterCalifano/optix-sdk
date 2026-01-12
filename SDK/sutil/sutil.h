@@ -29,6 +29,8 @@
 
 #pragma once
 
+#include <cuda_runtime.h>
+
 #include <cstdlib>
 #include <chrono>
 
@@ -40,9 +42,10 @@
 struct GLFWwindow;
 
 // Some helper macros to stringify the sample's name that comes in as a define
-#define OPTIX_SAMPLE_NAME_STRINGIFY2(name) #name
-#define OPTIX_SAMPLE_NAME_STRINGIFY(name) OPTIX_SAMPLE_NAME_STRINGIFY2(name)
-#define OPTIX_SAMPLE_NAME OPTIX_SAMPLE_NAME_STRINGIFY(OPTIX_SAMPLE_NAME_DEFINE)
+#define OPTIX_STRINGIFY2(name) #name
+#define OPTIX_STRINGIFY(name) OPTIX_STRINGIFY2(name)
+#define OPTIX_SAMPLE_NAME OPTIX_STRINGIFY(OPTIX_SAMPLE_NAME_DEFINE)
+#define OPTIX_SAMPLE_DIR OPTIX_STRINGIFY(OPTIX_SAMPLE_DIR_DEFINE)
 
 namespace sutil
 {
@@ -62,15 +65,32 @@ struct ImageBuffer
     BufferImageFormat pixel_format;
 };
 
+struct Texture
+{
+    cudaArray_t         array;
+    cudaTextureObject_t texture;
+};
+
 // Return a path to a sample data file, or NULL if the file cannot be located.
 // The pointer returned may point to a static array.
 SUTILAPI const char* sampleDataFilePath( const char* relativeFilePath );
 
 SUTILAPI size_t pixelFormatSize( BufferImageFormat format );
 
+// Create a cudaTextureObject_t for the given image file.  If the filename is
+// empty or if loading the file fails, return 1x1 texture with default color.
+SUTILAPI Texture loadTexture( const char* filename, float3 default_color, cudaTextureDesc* tex_desc = nullptr );
+
+// Floating point image buffers (see BufferImageFormat above) are assumed to be
+// linear and will be converted to sRGB when writing to a file format with 8
+// bits per channel.  This can be skipped if disable_srgb is set to true.
+// Image buffers with format UNSIGNED_BYTE4 are assumed to be in sRGB already
+// and will be written like that.
+SUTILAPI void        saveImage( const char* filename, const ImageBuffer& buffer, bool disable_srgb );
+SUTILAPI ImageBuffer loadImage( const char* filename, int32_t force_components = 0 );
+
 SUTILAPI void displayBufferWindow( const char* argv, const ImageBuffer& buffer );
 
-SUTILAPI void displayBufferFile( const char* filename, const ImageBuffer& buffer, bool disable_srgb );
 
 SUTILAPI void        initGL();
 SUTILAPI void        initGLFW();
@@ -116,9 +136,13 @@ SUTILAPI void calculateCameraVariables(
         float3& W,
         bool fov_is_vertical );
 
+// Get current time in seconds for benchmarking/timing purposes.
+double SUTILAPI currentTime();
+
 // Get PTX, either pre-compiled with NVCC or JIT compiled by NVRTC.
 SUTILAPI const char* getPtxString(
-        const char* sample,                 // Name of the sample, used to locate the input file. NULL = only search the common /cuda dir
+        const char* sampleName,             // Name of the sample, used to locate the input file. NULL = only search the common /cuda dir
+        const char* sampleDir,              // Directory name for the sample (typically the same as the sample name).
         const char* filename,               // Cuda C input file name
         const char** log = NULL );          // (Optional) pointer to compiler log string. If *log == NULL there is no output. Only valid until the next getPtxString call
 

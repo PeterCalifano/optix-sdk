@@ -30,8 +30,6 @@
 
 #include <sutil/vec_math.h>
 
-#include <stdint.h>
-
 enum RayType
 {
     RAY_TYPE_RADIANCE  = 0,
@@ -67,12 +65,12 @@ struct Sphere
 
 struct Params
 {
-    uint32_t     subframe_index;
+    unsigned int subframe_index;
     float4*      accum_buffer;
     uchar4*      frame_buffer;
-    uint32_t     width;
-    uint32_t     height;
-    uint32_t     samples_per_launch;
+    unsigned int width;
+    unsigned int height;
+    unsigned int samples_per_launch;
 
     float3       eye;
     float3       U;

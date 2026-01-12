@@ -26,56 +26,24 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-set( OPTIX_PAGING "${OptiX_INCLUDE}/optixPaging" )
 set( EXP_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../lib" )
 include_directories(
   .
-  "${CMAKE_CURRENT_SOURCE_DIR}"
   "${EXP_LIB_DIR}"
-  "${OPTIX_PAGING}"
 )
 
-# These CUDA files need to be compiled as OBJ, not as PTX
-set_source_files_properties( ${OPTIX_PAGING}/optixPaging.cu PROPERTIES CUDA_SOURCE_PROPERTY_FORMAT OBJ )
-
-# This file is just for reference in the IDE, don't compile it.
-set_source_files_properties( ${OPTIX_PAGING}/optixPagingImpl.cpp PROPERTIES HEADER_FILE_ONLY TRUE )
-
 OPTIX_add_sample_executable( optixDemandTexture target_name
+  ${SAMPLES_CUDA_DIR}/helpers.h
   optixDemandTexture.cpp
   optixDemandTexture.cu
   optixDemandTexture.h
+  CheckerBoardImage.cpp
+  CheckerBoardImage.h
   DemandTexture.cpp
   DemandTexture.h
   DemandTextureManager.cpp
   DemandTextureManager.h
-  ${EXP_LIB_DIR}/DemandLoading/ImageReader.h
-  ${EXP_LIB_DIR}/DemandLoading/CheckerBoardReader.h
-  ${EXP_LIB_DIR}/DemandLoading/CheckerBoardReader.cpp
-  ${OPTIX_PAGING}/optixPaging.h
-  ${OPTIX_PAGING}/optixPaging.cu
-  # EXRReader.cpp is added below if OpenEXR is available.
+  ImageReader.h
   )
 
-find_package( OpenEXR )
-if( NOT OpenEXR_FOUND )
-  message( WARNING "OpenEXR not found (see OpenEXR_ROOT).  Will use procedural texture in optixDemandTexture." )
-endif()
-
-find_package( ZlibStatic )
-if ( NOT ZlibStatic_FOUND )
-  message( WARNING "Zlib not found (see ZlibStatic_ROOT).  Will use procedural texture in optixDemandTexture." )
-endif()
-
-if( OpenEXR_FOUND AND ZlibStatic_FOUND )
-  # Build our EXRImage class if OpenEXR is available, adding the necessary include path and libraries.
-  target_sources( ${target_name} PUBLIC
-    ${EXP_LIB_DIR}/DemandLoading/EXRReader.cpp
-    ${EXP_LIB_DIR}/DemandLoading/EXRReader.h )
-  target_compile_definitions( ${target_name} PUBLIC OPTIX_SAMPLE_USE_OPEN_EXR )
-
-  target_include_directories( ${target_name} PUBLIC "${OpenEXR_INCLUDE_DIR}" )
-  target_link_libraries( ${target_name} ${OpenEXR_LIBRARIES} ${ZlibStatic_LIBRARIES} ${CUDA_LIBRARIES} )
-else()
-  target_link_libraries( ${target_name} ${CUDA_LIBRARIES} )
-endif()
+target_link_libraries( ${target_name} optixPaging ${CUDA_LIBRARIES} )

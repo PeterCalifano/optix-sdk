@@ -29,29 +29,29 @@
 #include "sutil/WorkDistribution.h"
 
 extern "C" __global__ void fillSamples(
-        int32_t gpu_idx,
-        int32_t num_gpus,
-        int32_t width,
-        int32_t height,
-        int2*   sample_indices )
+        int   gpu_idx,
+        int   num_gpus,
+        int   width,
+        int   height,
+        int2* sample_indices )
 {
     StaticWorkDistribution wd;
     wd.setRasterSize( width, height );
     wd.setNumGPUs( num_gpus );
 
-    const int32_t sample_idx = blockIdx.x;
+    const int sample_idx = blockIdx.x;
     sample_indices[sample_idx] = wd.getSamplePixel( gpu_idx, sample_idx );
 }
 
 
 extern "C" __host__ void fillSamplesCUDA(
-        int32_t  num_samples,
+        int          num_samples,
         cudaStream_t stream,
-        int32_t  gpu_idx,
-        int32_t  num_gpus,
-        int32_t  width,
-        int32_t  height,
-        int2*    sample_indices )
+        int          gpu_idx,
+        int          num_gpus,
+        int          width,
+        int          height,
+        int2*        sample_indices )
 {
     fillSamples<<<num_samples, 1, 0, stream>>>(
         gpu_idx,
