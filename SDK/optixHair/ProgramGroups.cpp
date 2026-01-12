@@ -87,9 +87,7 @@ HairProgramGroups::HairProgramGroups( const OptixDeviceContext context, OptixPip
     //
     // Create modules
     //
-    const OptixModuleCompileOptions defaultOptions = {OPTIX_COMPILE_DEFAULT_MAX_REGISTER_COUNT,
-                                                      OPTIX_COMPILE_OPTIMIZATION_DEFAULT,
-                                                      OPTIX_COMPILE_DEBUG_LEVEL_LINEINFO};
+    const OptixModuleCompileOptions defaultOptions = {};
 
     std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixHair.cu" );
     OPTIX_CHECK_LOG2( optixModuleCreateFromPTX( context,

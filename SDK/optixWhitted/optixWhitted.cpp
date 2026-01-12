@@ -104,6 +104,7 @@ struct WhittedState
     OptixModule                 geometry_module           = 0;
     OptixModule                 camera_module             = 0;
     OptixModule                 shading_module            = 0;
+    OptixModule                 sphere_module             = 0;
 
     OptixProgramGroup           raygen_prog_group         = 0;
     OptixProgramGroup           radiance_miss_prog_group  = 0;
@@ -132,7 +133,7 @@ struct WhittedState
 //------------------------------------------------------------------------------
 
 // Metal sphere, glass sphere, floor, light
-const Sphere g_sphere = {
+const GeometryData::Sphere g_sphere = {
     { 2.0f, 1.5f, -2.5f }, // center
     1.0f                   // radius
 };
@@ -250,7 +251,6 @@ void printUsageAndExit( const char* argv0 )
 {
     std::cerr << "Usage  : " << argv0 << " [options]\n";
     std::cerr << "Options: --file | -f <filename>      File for image output\n";
-    std::cerr << "         --launch-samples | -s       Number of samples per pixel per launch (default 16)\n";
     std::cerr << "         --no-gl-interop             Disable GL interop for display\n";
     std::cerr << "         --dim=<width>x<height>      Set image dimensions; defaults to 768x768\n";
     std::cerr << "         --help | -h                 Print this usage message\n";
@@ -458,11 +458,8 @@ void createGeometry( WhittedState &state )
 
 void createModules( WhittedState &state )
 {
-    OptixModuleCompileOptions module_compile_options = {
-        100,                                    // maxRegisterCount
-        OPTIX_COMPILE_OPTIMIZATION_DEFAULT,     // optLevel
-        OPTIX_COMPILE_DEBUG_LEVEL_LINEINFO      // debugLevel
-    };
+    OptixModuleCompileOptions module_compile_options = {};
+
     char log[2048];
     size_t sizeof_log = sizeof(log);
 
@@ -503,6 +500,19 @@ void createModules( WhittedState &state )
             log,
             &sizeof_log,
             &state.shading_module ) );
+    }
+
+    {
+        const std::string ptx = sutil::getPtxString( nullptr, nullptr, "sphere.cu" );
+        OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
+            state.context,
+            &module_compile_options,
+            &state.pipeline_compile_options,
+            ptx.c_str(),
+            ptx.size(),
+            log,
+            &sizeof_log,
+            &state.sphere_module ) );
     }
 }
 
@@ -587,7 +597,7 @@ static void createMetalSphereProgram( WhittedState &state, std::vector<OptixProg
     OptixProgramGroupOptions    radiance_sphere_prog_group_options = {};
     OptixProgramGroupDesc       radiance_sphere_prog_group_desc = {};
     radiance_sphere_prog_group_desc.kind   = OPTIX_PROGRAM_GROUP_KIND_HITGROUP,
-        radiance_sphere_prog_group_desc.hitgroup.moduleIS           = state.geometry_module;
+        radiance_sphere_prog_group_desc.hitgroup.moduleIS           = state.sphere_module;
     radiance_sphere_prog_group_desc.hitgroup.entryFunctionNameIS    = "__intersection__sphere";
     radiance_sphere_prog_group_desc.hitgroup.moduleCH               = state.shading_module;
     radiance_sphere_prog_group_desc.hitgroup.entryFunctionNameCH    = "__closesthit__metal_radiance";
@@ -612,7 +622,7 @@ static void createMetalSphereProgram( WhittedState &state, std::vector<OptixProg
     OptixProgramGroupOptions    occlusion_sphere_prog_group_options = {};
     OptixProgramGroupDesc       occlusion_sphere_prog_group_desc = {};
     occlusion_sphere_prog_group_desc.kind   = OPTIX_PROGRAM_GROUP_KIND_HITGROUP,
-        occlusion_sphere_prog_group_desc.hitgroup.moduleIS           = state.geometry_module;
+        occlusion_sphere_prog_group_desc.hitgroup.moduleIS           = state.sphere_module;
     occlusion_sphere_prog_group_desc.hitgroup.entryFunctionNameIS    = "__intersection__sphere";
     occlusion_sphere_prog_group_desc.hitgroup.moduleCH               = state.shading_module;
     occlusion_sphere_prog_group_desc.hitgroup.entryFunctionNameCH    = "__closesthit__full_occlusion";
@@ -1073,6 +1083,7 @@ void cleanupState( WhittedState& state )
     OPTIX_CHECK( optixModuleDestroy       ( state.shading_module          ) );
     OPTIX_CHECK( optixModuleDestroy       ( state.geometry_module         ) );
     OPTIX_CHECK( optixModuleDestroy       ( state.camera_module           ) );
+    OPTIX_CHECK( optixModuleDestroy       ( state.sphere_module           ) );
     OPTIX_CHECK( optixDeviceContextDestroy( state.context                 ) );
 
 

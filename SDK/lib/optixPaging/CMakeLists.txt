@@ -26,26 +26,25 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-set( OPTIX_PAGING ${OptiX_INCLUDE}/optixPaging )
+# CUDA compilation doesn't pick up the optixPaging include path target property.
+include_directories( include )
 
-include_directories( ${OptiX_INCLUDE} )
-
-cuda_wrap_srcs( optixPaging OBJ generated_files ${OPTIX_PAGING}/optixPaging.cu "" OPTIONS "" )
+cuda_wrap_srcs( optixPaging OBJ generated_files optixPaging.cu "" OPTIONS "" )
 
 add_library( optixPaging STATIC
-  ${OPTIX_PAGING}/optixPaging.h
-  ${OPTIX_PAGING}/optixPagingImpl.cpp
-  ${OPTIX_PAGING}/optixPaging.cu
+  include/optixPaging/optixPaging.h
+  optixPagingImpl.cpp
+  optixPaging.cu
   ${generated_files}
 )
 
-target_include_directories( optixPaging PUBLIC ${OptiX_INCLUDE} )
+target_include_directories( optixPaging PUBLIC include )
 
 # These CUDA files need to be compiled as OBJ, not as PTX
-set_source_files_properties( ${OPTIX_PAGING}/optixPaging.cu PROPERTIES CUDA_SOURCE_PROPERTY_FORMAT OBJ )
+set_source_files_properties( optixPaging.cu PROPERTIES CUDA_SOURCE_PROPERTY_FORMAT OBJ )
 
 # This file is just for reference in the IDE, don't compile it.
-set_source_files_properties( ${OPTIX_PAGING}/optixPagingImpl.cpp PROPERTIES HEADER_FILE_ONLY TRUE )
+set_source_files_properties( optixPagingImpl.cpp PROPERTIES HEADER_FILE_ONLY TRUE )
 
 set_property(TARGET optixPaging PROPERTY FOLDER "${OPTIX_IDE_FOLDER}")
 

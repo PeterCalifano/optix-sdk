@@ -365,11 +365,8 @@ void createGeometry( CallableProgramsState& state )
 
 void createModules( CallableProgramsState& state )
 {
-    OptixModuleCompileOptions module_compile_options = {
-        100,                                 // maxRegisterCount
-        OPTIX_COMPILE_OPTIMIZATION_DEFAULT,  // optLevel
-        OPTIX_COMPILE_DEBUG_LEVEL_LINEINFO   // debugLevel
-    };
+    OptixModuleCompileOptions module_compile_options = {};
+
     char   log[2048];
     size_t sizeof_log = sizeof( log );
 
@@ -486,7 +483,7 @@ void createPipeline( CallableProgramsState& state )
         false,                                          // usesMotionBlur
         OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS,  // traversableGraphFlags
         whitted::NUM_PAYLOAD_VALUES,                    // numPayloadValues
-        3,                                              // numAttributeValues
+        sphere::NUM_ATTRIBUTE_VALUES,                   // numAttributeValues
         OPTIX_EXCEPTION_FLAG_NONE,                      // exceptionFlags
         "params"                                        // pipelineLaunchParamsVariableName
     };
@@ -569,7 +566,8 @@ void createSBT( CallableProgramsState& state )
     {
         HitGroupRecord hitgroup_record;
         OPTIX_CHECK( optixSbtRecordPackHeader( state.hitgroup_prog_group, &hitgroup_record ) );
-        hitgroup_record.data.sphere = g_sphere;
+        hitgroup_record.data.sphere   = g_sphere;
+        hitgroup_record.data.dc_index = dc_index;
 
         CUdeviceptr d_hitgroup_record;
         size_t      sizeof_hitgroup_record = sizeof( HitGroupRecord );

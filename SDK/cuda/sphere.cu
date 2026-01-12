@@ -30,43 +30,35 @@
 
 #include <sutil/vec_math.h>
 
-#include "GeometryData.h"
+#include "sphere.h"
 
-#define float3_as_args( u )                                                                                            \
-    reinterpret_cast<unsigned int&>( ( u ).x ), reinterpret_cast<unsigned int&>( ( u ).y ),                            \
-        reinterpret_cast<unsigned int&>( ( u ).z )
+#define float3_as_ints( u ) float_as_int( u.x ), float_as_int( u.y ), float_as_int( u.z )
 
 extern "C" __global__ void __intersection__sphere()
 {
-    const bool use_robust_method = true;
-
-    const GeometryData::Sphere* sphere = reinterpret_cast<GeometryData::Sphere*>( optixGetSbtDataPointer() );
+    const sphere::SphereHitGroupData* hit_group_data = reinterpret_cast<sphere::SphereHitGroupData*>( optixGetSbtDataPointer() );
 
     const float3 ray_orig = optixGetWorldRayOrigin();
     const float3 ray_dir  = optixGetWorldRayDirection();
-    const float  ray_tmin = optixGetRayTmin(), ray_tmax = optixGetRayTmax();
+    const float  ray_tmin = optixGetRayTmin();
+    const float  ray_tmax = optixGetRayTmax();
 
-    float3 O      = ray_orig - sphere->center;
-    float  l      = 1 / length( ray_dir );
-    float3 D      = ray_dir * l;
-    float  radius = sphere->radius;
+    const float3 O      = ray_orig - hit_group_data->sphere.center;
+    const float  l      = 1.0f / length( ray_dir );
+    const float3 D      = ray_dir * l;
+    const float  radius = hit_group_data->sphere.radius;
 
     float b    = dot( O, D );
     float c    = dot( O, O ) - radius * radius;
     float disc = b * b - c;
     if( disc > 0.0f )
     {
-        float sdisc = sqrtf( disc );
-        float root1 = ( -b - sdisc );
+        float sdisc        = sqrtf( disc );
+        float root1        = ( -b - sdisc );
+        float root11       = 0.0f;
+        bool  check_second = true;
 
-        bool do_refine = false;
-
-        float root11 = 0.0f;
-
-        if( use_robust_method && fabsf( root1 ) > 10.f * radius )
-        {
-            do_refine = true;
-        }
+        const bool do_refine = fabsf( root1 ) > ( 10.0f * radius );
 
         if( do_refine )
         {
@@ -83,15 +75,13 @@ extern "C" __global__ void __intersection__sphere()
             }
         }
 
-        bool check_second = true;
-
         float  t;
         float3 normal;
         t = ( root1 + root11 ) * l;
         if( t > ray_tmin && t < ray_tmax )
         {
             normal = ( O + ( root1 + root11 ) * D ) / radius;
-            if( optixReportIntersection( t, 0, float3_as_args( normal ) ) )
+            if( optixReportIntersection( t, 0, float3_as_ints( normal ), float_as_int( radius ) ) )
                 check_second = false;
         }
 
@@ -101,7 +91,7 @@ extern "C" __global__ void __intersection__sphere()
             t           = root2 * l;
             normal      = ( O + root2 * D ) / radius;
             if( t > ray_tmin && t < ray_tmax )
-                optixReportIntersection( t, 0, float3_as_args( normal ) );
+                optixReportIntersection( t, 0, float3_as_ints( normal ), float_as_int( radius ) );
         }
     }
 }

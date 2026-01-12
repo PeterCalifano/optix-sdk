@@ -54,7 +54,6 @@ struct SbtRecord
 
 typedef SbtRecord<RayGenData> RayGenSbtRecord;
 typedef SbtRecord<int>        MissSbtRecord;
-typedef SbtRecord<int>        HitGroupSbtRecord;
 
 
 void printUsageAndExit( const char* argv0 )
@@ -168,7 +167,6 @@ int main( int argc, char* argv[] )
         //
         OptixProgramGroup raygen_prog_group   = nullptr;
         OptixProgramGroup miss_prog_group     = nullptr;
-        OptixProgramGroup hitgroup_prog_group = nullptr;
         {
             OptixProgramGroupOptions program_group_options   = {}; // Initialize to zeros
 
@@ -199,20 +197,6 @@ int main( int argc, char* argv[] )
                         log,
                         &sizeof_log,
                         &miss_prog_group
-                        ) );
-
-            // Leave hit group's module and entryfunc name null
-            OptixProgramGroupDesc hitgroup_prog_group_desc = {};
-            hitgroup_prog_group_desc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-            sizeof_log = sizeof( log );
-            OPTIX_CHECK_LOG( optixProgramGroupCreate(
-                        context,
-                        &hitgroup_prog_group_desc,
-                        1,   // num program groups
-                        &program_group_options,
-                        log,
-                        &sizeof_log,
-                        &hitgroup_prog_group
                         ) );
         }
 
@@ -289,25 +273,10 @@ int main( int argc, char* argv[] )
                         cudaMemcpyHostToDevice
                         ) );
 
-            CUdeviceptr hitgroup_record;
-            size_t      hitgroup_record_size = sizeof( HitGroupSbtRecord );
-            CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &hitgroup_record ), hitgroup_record_size ) );
-            RayGenSbtRecord hg_sbt;
-            OPTIX_CHECK( optixSbtRecordPackHeader( hitgroup_prog_group, &hg_sbt ) );
-            CUDA_CHECK( cudaMemcpy(
-                        reinterpret_cast<void*>( hitgroup_record ),
-                        &hg_sbt,
-                        hitgroup_record_size,
-                        cudaMemcpyHostToDevice
-                        ) );
-
             sbt.raygenRecord                = raygen_record;
             sbt.missRecordBase              = miss_record;
             sbt.missRecordStrideInBytes     = sizeof( MissSbtRecord );
             sbt.missRecordCount             = 1;
-            sbt.hitgroupRecordBase          = hitgroup_record;
-            sbt.hitgroupRecordStrideInBytes = sizeof( HitGroupSbtRecord );
-            sbt.hitgroupRecordCount         = 1;
         }
 
         sutil::CUDAOutputBuffer<uchar4> output_buffer( sutil::CUDAOutputBufferType::CUDA_DEVICE, width, height );
@@ -358,10 +327,8 @@ int main( int argc, char* argv[] )
         {
             CUDA_CHECK( cudaFree( reinterpret_cast<void*>( sbt.raygenRecord       ) ) );
             CUDA_CHECK( cudaFree( reinterpret_cast<void*>( sbt.missRecordBase     ) ) );
-            CUDA_CHECK( cudaFree( reinterpret_cast<void*>( sbt.hitgroupRecordBase ) ) );
 
             OPTIX_CHECK( optixPipelineDestroy( pipeline ) );
-            OPTIX_CHECK( optixProgramGroupDestroy( hitgroup_prog_group ) );
             OPTIX_CHECK( optixProgramGroupDestroy( miss_prog_group ) );
             OPTIX_CHECK( optixProgramGroupDestroy( raygen_prog_group ) );
             OPTIX_CHECK( optixModuleDestroy( module ) );

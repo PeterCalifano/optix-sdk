@@ -39,6 +39,8 @@
 #include <sutil/Exception.h>
 #include <sutil/sutil.h>
 
+#include <cuda/sphere.h>
+
 #include "optixSphere.h"
 
 #include <iomanip>
@@ -57,9 +59,9 @@ struct SbtRecord
     T data;
 };
 
-typedef SbtRecord<RayGenData>     RayGenSbtRecord;
-typedef SbtRecord<MissData>       MissSbtRecord;
-typedef SbtRecord<HitGroupData>   HitGroupSbtRecord;
+typedef SbtRecord<RayGenData>                 RayGenSbtRecord;
+typedef SbtRecord<MissData>                   MissSbtRecord;
+typedef SbtRecord<sphere::SphereHitGroupData> HitGroupSbtRecord;
 
 
 void configureCamera( sutil::Camera& cam, const uint32_t width, const uint32_t height )
@@ -234,6 +236,7 @@ int main( int argc, char* argv[] )
         // Create module
         //
         OptixModule module = nullptr;
+        OptixModule sphere_module = nullptr;
         OptixPipelineCompileOptions pipeline_compile_options = {};
         {
             OptixModuleCompileOptions module_compile_options = {};
@@ -244,11 +247,11 @@ int main( int argc, char* argv[] )
             pipeline_compile_options.usesMotionBlur        = false;
             pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
             pipeline_compile_options.numPayloadValues      = 3;
-            pipeline_compile_options.numAttributeValues    = 3;
+            pipeline_compile_options.numAttributeValues    = sphere::NUM_ATTRIBUTE_VALUES;
             pipeline_compile_options.exceptionFlags        = OPTIX_EXCEPTION_FLAG_NONE;  // TODO: should be OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
             pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
-            const std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixSphere.cu" );
+            std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixSphere.cu" );
             size_t sizeof_log = sizeof( log );
 
             OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
@@ -260,6 +263,18 @@ int main( int argc, char* argv[] )
                         log,
                         &sizeof_log,
                         &module
+                        ) );
+
+            ptx = sutil::getPtxString( nullptr, nullptr, "sphere.cu" );
+            OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
+                        context,
+                        &module_compile_options,
+                        &pipeline_compile_options,
+                        ptx.c_str(),
+                        ptx.size(),
+                        log,
+                        &sizeof_log,
+                        &sphere_module
                         ) );
         }
 
@@ -308,8 +323,8 @@ int main( int argc, char* argv[] )
             hitgroup_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__ch";
             hitgroup_prog_group_desc.hitgroup.moduleAH            = nullptr;
             hitgroup_prog_group_desc.hitgroup.entryFunctionNameAH = nullptr;
-            hitgroup_prog_group_desc.hitgroup.moduleIS            = module;
-            hitgroup_prog_group_desc.hitgroup.entryFunctionNameIS = "__intersection__is";
+            hitgroup_prog_group_desc.hitgroup.moduleIS            = sphere_module;
+            hitgroup_prog_group_desc.hitgroup.entryFunctionNameIS = "__intersection__sphere";
             sizeof_log = sizeof( log );
             OPTIX_CHECK_LOG( optixProgramGroupCreate(
                         context,
@@ -404,7 +419,8 @@ int main( int argc, char* argv[] )
             size_t      hitgroup_record_size = sizeof( HitGroupSbtRecord );
             CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &hitgroup_record ), hitgroup_record_size ) );
             HitGroupSbtRecord hg_sbt;
-            hg_sbt.data = { 1.5f };
+            hg_sbt.data.sphere.center = { 0.0f, 0.0f, 0.0f };
+            hg_sbt.data.sphere.radius = 1.5f;
             OPTIX_CHECK( optixSbtRecordPackHeader( hitgroup_prog_group, &hg_sbt ) );
             CUDA_CHECK( cudaMemcpy(
                         reinterpret_cast<void*>( hitgroup_record ),
@@ -482,6 +498,7 @@ int main( int argc, char* argv[] )
             OPTIX_CHECK( optixProgramGroupDestroy( miss_prog_group ) );
             OPTIX_CHECK( optixProgramGroupDestroy( raygen_prog_group ) );
             OPTIX_CHECK( optixModuleDestroy( module ) );
+            OPTIX_CHECK( optixModuleDestroy( sphere_module ) );
 
             OPTIX_CHECK( optixDeviceContextDestroy( context ) );
         }

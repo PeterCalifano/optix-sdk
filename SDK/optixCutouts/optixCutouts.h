@@ -30,6 +30,8 @@
 
 #include <sutil/vec_math.h>
 
+#include <cuda/sphere.h>
+
 enum RayType
 {
     RAY_TYPE_RADIANCE  = 0,
@@ -44,22 +46,6 @@ struct ParallelogramLight
     float3 v1, v2;
     float3 normal;
     float3 emission;
-};
-
-
-struct Sphere
-{
-    float3 center;
-    float  radius;
-
-    OptixAabb getAabb() const
-    {
-        float3 m_min = center - radius;
-        float3 m_max = center + radius;
-
-        OptixAabb aabb = {m_min.x, m_min.y, m_min.z, m_max.x, m_max.y, m_max.z};
-        return aabb;
-    }
 };
 
 
@@ -94,11 +80,10 @@ struct MissData
 };
 
 
-struct HitGroupData
+struct HitGroupData : sphere::SphereHitGroupData
 {
     float3   emission_color;
     float3   diffuse_color;
     float4*  vertices;
     float2*  tex_coords;
-    Sphere   sphere;
 };

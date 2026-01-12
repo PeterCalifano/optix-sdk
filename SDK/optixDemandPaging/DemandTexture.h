@@ -27,7 +27,7 @@
 //
 #pragma once
 
-#include "optixDemandTexture.h"
+#include "optixDemandPaging.h"
 #include <ImageReader.h>
 
 #include <cuda_runtime.h>

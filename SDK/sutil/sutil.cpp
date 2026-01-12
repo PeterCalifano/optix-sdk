@@ -60,9 +60,18 @@
 #include <memory>
 #include <sstream>
 #include <vector>
-#if !defined( _WIN32 )
-#include <dirent.h>
+#if defined(_WIN32)
+#    ifndef WIN32_LEAN_AND_MEAN
+#        define WIN32_LEAN_AND_MEAN 1
+#    endif
+#    include<windows.h>
+#    include<mmsystem.h>
+#else
+#    include<sys/time.h>
+#    include <unistd.h>
+#    include <dirent.h>
 #endif
+
 
 namespace sutil
 {
@@ -137,10 +146,16 @@ static bool fileExists( const std::string& path )
 static std::string existingFilePath( const char* directory, const char* relativeSubDir, const char* relativePath )
 {
     std::string path = directory ? directory : "";
-    path += '/';
-    path += relativeSubDir;
-    path += '/';
-    path += relativePath;
+    if( relativeSubDir )
+    {
+        path += '/';
+        path += relativeSubDir;
+    }
+    if( relativePath )
+    {
+        path += '/';
+        path += relativePath;
+    }
     return fileExists( path ) ? path : "";
 }
 
@@ -163,7 +178,7 @@ std::string getSampleDir()
     throw Exception( "sutil::getSampleDir couldn't locate an existing sample directory" );
 }
 
-const char* sampleDataFilePath( const char* relativePath )
+const char* sampleFilePath( const char* relativeSubDir, const char* relativePath )
 {
     static std::string s;
 
@@ -180,16 +195,20 @@ const char* sampleDataFilePath( const char* relativePath )
     {
         if( directory )
         {
-            s = existingFilePath( directory, "data", relativePath );
+            s = existingFilePath( directory, relativeSubDir, relativePath );
             if( !s.empty() )
             {
                 return s.c_str();
             }
         }
     }
-    throw Exception( ( std::string{"sutil::sampleDataFilePath couldn't locate "} + relativePath ).c_str() );
+    throw Exception( ( std::string{ "sutil::sampleDataFilePath couldn't locate " } +relativePath ).c_str() );
 }
 
+const char* sampleDataFilePath( const char* relativePath )
+{
+    return sampleFilePath( "data", relativePath );
+}
 
 size_t pixelFormatSize( BufferImageFormat format )
 {

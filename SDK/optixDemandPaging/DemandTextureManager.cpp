@@ -98,12 +98,12 @@ const DemandTexture& DemandTextureManager::createTexture( std::shared_ptr<ImageR
     // DemandTextureSampler array.  The texture holds a pointer to the image, from which miplevel
     // data is obtained on demand.
     unsigned int textureId = static_cast<unsigned int>( m_textures.size() );
-    m_textures.emplace_back( DemandTexture( textureId, imageReader ) );
+    m_textures.emplace_back( textureId, imageReader );
     DemandTexture& texture = m_textures.back();
 
     // Create texture sampler, which will be synched to the device in launchPrepare().  Note that we
     // don't set m_hostSamplersDirty when adding new samplers.
-    m_hostSamplers.emplace_back( texture.getSampler() );
+    m_hostSamplers.push_back( texture.getSampler() );
 
     return texture;
 }
@@ -199,8 +199,8 @@ int DemandTextureManager::processRequestsImpl( std::vector<unsigned int>& reques
     size_t numRequests = requestedPages.size();
     for( size_t i = 0; i < numRequests; /* nop */ )
     {
-        unsigned int     pageId    = requestedPages[i];
-        unsigned int textureId = getTextureId( pageId );
+        unsigned int pageId     = requestedPages[i];
+        unsigned int textureId  = getTextureId( pageId );
 
         // Initialize the texture if necessary, e.g. reading image info from file header.
         DemandTexture* texture = &m_textures[textureId];
@@ -216,11 +216,10 @@ int DemandTextureManager::processRequestsImpl( std::vector<unsigned int>& reques
         // Accumulate requests for other miplevels from the same texture.
         for( ++i; i < numRequests && getTextureId( requestedPages[i] ) == textureId; ++i )
         {
-            unsigned int     pageId            = requestedPages[i];
-            unsigned int requestedMipLevel = getMipLevel( pageId );
+            const unsigned int otherLevel = getMipLevel( requestedPages[i] );
 
-            minMipLevel = std::min( minMipLevel, requestedMipLevel );
-            maxMipLevel = std::max( maxMipLevel, requestedMipLevel );
+            minMipLevel = std::min( minMipLevel, otherLevel );
+            maxMipLevel = std::max( maxMipLevel, otherLevel );
         }
 
         // Reallocate the texture's backing storage to accomodate the new miplevels.
@@ -236,7 +235,7 @@ int DemandTextureManager::processRequestsImpl( std::vector<unsigned int>& reques
     std::vector<PageMapping> filledPages;
     for( size_t i = 0; i < numRequests; ++i )
     {
-        unsigned int       pageId   = requestedPages[i];
+        unsigned int   pageId   = requestedPages[i];
         DemandTexture& texture  = m_textures[getTextureId( pageId )];
         unsigned int   mipLevel = getMipLevel( pageId );
         texture.fillMipLevel( mipLevel );

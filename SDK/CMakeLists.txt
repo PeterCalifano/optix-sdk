@@ -267,6 +267,8 @@ set(SAMPLES_SUPPORT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../SDK/support")
 set(SAMPLES_RELATIVE_INCLUDE_DIRS "\\
   \"cuda\", \\
   \"sutil\", \\
+  \"lib/optixPaging/include\", \\
+  \"lib/DemandLoading/include\", \\
   \".\", ")
 
 # NVRTC absolute include paths to the headers used to build the samples
@@ -374,13 +376,17 @@ endfunction()
 # If you wish to start your own sample, you can copy one of the sample's directories.
 # Just make sure you rename all the occurances of the sample's name in the C code as well
 # and the CMakeLists.txt file.
+add_subdirectory( optixBoundValues      )
 add_subdirectory( optixCallablePrograms )
 add_subdirectory( optixCurves           )
 add_subdirectory( optixCutouts          )
+add_subdirectory( optixDemandPaging     )
 add_subdirectory( optixDemandTexture    )
+add_subdirectory( optixDenoiser         )
+add_subdirectory( optixDynamicGeometry  )
 add_subdirectory( optixDynamicMaterials )
 add_subdirectory( optixHair             )
-add_subdirectory( optixHello            )
+add_subdirectory( optixHello            ) 
 add_subdirectory( optixMeshViewer       )
 add_subdirectory( optixMultiGPU         )
 add_subdirectory( optixNVLink           )
@@ -394,6 +400,7 @@ add_subdirectory( optixWhitted          )
 # Our sutil library.  The rules to build it are found in the subdirectory.
 add_subdirectory(sutil)
 # Our other libraries.
+add_subdirectory( lib/DemandLoading )
 add_subdirectory( lib/optixPaging )
 # Third-party support libraries.
 add_subdirectory(support)

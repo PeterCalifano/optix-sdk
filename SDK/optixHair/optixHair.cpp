@@ -292,11 +292,11 @@ void makeProgramGroups( HairState* pState )
 
     // add raygen group
     {
-        OptixProgramGroupDesc programGroupDesc    = {};
-        programGroupDesc.kind                     = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
-        programGroupDesc.raygen.module            = pState->pProgramGroups->m_whittedModule;
-        programGroupDesc.raygen.entryFunctionName = "__raygen__pinhole";
-        pState->pProgramGroups->add( programGroupDesc, "raygen" );
+        OptixProgramGroupDesc raygenProgramGroupDesc    = {};
+        raygenProgramGroupDesc.kind                     = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
+        raygenProgramGroupDesc.raygen.module            = pState->pProgramGroups->m_whittedModule;
+        raygenProgramGroupDesc.raygen.entryFunctionName = "__raygen__pinhole";
+        pState->pProgramGroups->add( raygenProgramGroupDesc, "raygen" );
     }
     if( pState->pHair )
         pState->pHair->gatherProgramGroups( pState->pProgramGroups );

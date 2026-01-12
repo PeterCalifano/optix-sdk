@@ -101,7 +101,8 @@ extern "C" __global__ void __raygen__rg()
     const int    subframe_index = params.subframe_index;
 
     unsigned int seed = tea<4>( idx.y*w + idx.x, subframe_index );
-    const float2 subpixel_jitter = make_float2( rnd( seed )-0.5f, rnd( seed )-0.5f );
+    // The center of each pixel is at fraction (0.5,0.5)
+    const float2 subpixel_jitter = make_float2( rnd( seed ), rnd( seed ) );
 
     const float2 d = 2.0f * make_float2(
             ( static_cast<float>( idx.x ) + subpixel_jitter.x ) / static_cast<float>( w ),

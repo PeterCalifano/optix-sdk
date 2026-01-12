@@ -75,6 +75,10 @@ struct Texture
 // The pointer returned may point to a static array.
 SUTILAPI const char* sampleDataFilePath( const char* relativeFilePath );
 
+// Return a path to a sample file inside a sub directory, or NULL if the file cannot be located.
+// The pointer returned may point to a static array.
+SUTILAPI const char* sampleFilePath( const char* relativeSubDir, const char* relativePath );
+
 SUTILAPI size_t pixelFormatSize( BufferImageFormat format );
 
 // Create a cudaTextureObject_t for the given image file.  If the filename is

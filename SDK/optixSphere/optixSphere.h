@@ -49,8 +49,3 @@ struct MissData
     float r, g, b;
 };
 
-
-struct HitGroupData
-{
-    float radius;
-};

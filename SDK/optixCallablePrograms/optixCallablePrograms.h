@@ -28,15 +28,14 @@
 
 #pragma once
 
-#include <cuda/GeometryData.h>
+#include <cuda/sphere.h>
 
 struct EmptyData
 {
 };
 
-struct HitGroupData
+struct HitGroupData : sphere::SphereHitGroupData
 {
-    GeometryData::Sphere sphere;
-    unsigned int         dc_index;
+    unsigned int dc_index;
 };
 

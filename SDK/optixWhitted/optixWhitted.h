@@ -29,6 +29,7 @@
 #include <vector_types.h>
 #include <optix_types.h>
 #include <sutil/vec_math.h>
+#include <cuda/GeometryData.h>
 
 enum RayType
 {
@@ -74,13 +75,6 @@ struct CameraData
 struct MissData
 {
     float3 bg_color;
-};
-
-
-struct Sphere
-{
-	float3	center;
-	float 	radius;
 };
 
 
@@ -161,9 +155,9 @@ struct HitGroupData
 {
     union
     {
-        Sphere          sphere;
-        SphereShell     sphere_shell;
-        Parallelogram   parallelogram;
+        GeometryData::Sphere sphere;
+        SphereShell          sphere_shell;
+        Parallelogram        parallelogram;
     } geometry;
 
     union

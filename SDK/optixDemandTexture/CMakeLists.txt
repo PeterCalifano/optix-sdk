@@ -26,24 +26,26 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-set( EXP_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../lib" )
-include_directories(
-  .
-  "${EXP_LIB_DIR}"
-)
+if( CUDA_VERSION VERSION_LESS "11.1" )
+  return()
+endif()
+
+set( LIB_DIR "../lib" )
+
+# CUDA code includes from lib/DemandLoading, but the library target doesn't set the CUDA include path.
+include_directories( 
+  ${LIB_DIR}/optixPaging/include
+  ${LIB_DIR}/DemandLoading/include
+  )
 
 OPTIX_add_sample_executable( optixDemandTexture target_name
   ${SAMPLES_CUDA_DIR}/helpers.h
   optixDemandTexture.cpp
   optixDemandTexture.cu
   optixDemandTexture.h
-  CheckerBoardImage.cpp
-  CheckerBoardImage.h
-  DemandTexture.cpp
-  DemandTexture.h
-  DemandTextureManager.cpp
-  DemandTextureManager.h
-  ImageReader.h
   )
 
-target_link_libraries( ${target_name} optixPaging ${CUDA_LIBRARIES} )
+target_link_libraries( ${target_name} 
+  optixPaging 
+  DemandLoading_exp 
+  )

@@ -84,7 +84,7 @@ GLuint createGLProgram(
         return 0;
 
     GLuint frag_shader = createGLShader( frag_source, GL_FRAGMENT_SHADER );
-    if( vert_shader == 0 )
+    if( frag_shader == 0 )
     {
         glDeleteShader( vert_shader );
         return 0;

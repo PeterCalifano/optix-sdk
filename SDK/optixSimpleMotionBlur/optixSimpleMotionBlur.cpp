@@ -672,25 +672,6 @@ void buildInstanceAccel( SimpleMotionBlurState& state )
     optix_instances[InstanceType::TRI].traversableHandle    = state.tri_gas_handle;
     memcpy( optix_instances[InstanceType::TRI].transform, instance.transform, sizeof( float ) * 12 );
 
-    OptixAabb aabbs[2] =
-    {
-        // NOTE: instead of using a motion IAS, we are using a static IAS with expanded AABBs
-        //       to enclose the motion path.  See comments below on the IAS's accel options.
-        { -1.5f, -1.0f, -0.5f,
-          -0.5f,  0.5f,  0.5f  },
-        {  0.5f,  0.0f, -0.01f,   // NOTE: the bbox for the triangle geom is being ignored.  Should it be???
-           1.5f,  1.5f,  0.01f }  //
-    };
-    CUdeviceptr  d_aabbs;
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_aabbs), 2*sizeof(OptixAabb ) ) );
-    CUDA_CHECK( cudaMemcpy(
-                reinterpret_cast<void*>( d_aabbs),
-                aabbs,
-                2*sizeof(OptixAabb),
-                cudaMemcpyHostToDevice
-                ) );
-
-
     CUdeviceptr  d_instances;
     CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_instances ), instance_size_in_bytes) );
     CUDA_CHECK( cudaMemcpy(
@@ -704,20 +685,15 @@ void buildInstanceAccel( SimpleMotionBlurState& state )
     instance_input.type                       = OPTIX_BUILD_INPUT_TYPE_INSTANCES;
     instance_input.instanceArray.instances    = d_instances;
     instance_input.instanceArray.numInstances = InstanceType::COUNT;
-    instance_input.instanceArray.aabbs        = d_aabbs;
-    instance_input.instanceArray.numAabbs     = InstanceType::COUNT; // * NUM_KEYS; NOTE: need AABB per key per instance if using motion Accel
 
     OptixAccelBuildOptions accel_options = {};
     accel_options.buildFlags              = OPTIX_BUILD_FLAG_NONE;
     accel_options.operation               = OPTIX_BUILD_OPERATION_BUILD;
-    // Note: Instead of using padded AABBs above, we could make the IAS into a motion BVH and, provide AABBs
-    //       for each of the motion keys
-    /*
+
     accel_options.motionOptions.numKeys   = 2;
     accel_options.motionOptions.timeBegin = 0.0f;
     accel_options.motionOptions.timeEnd   = 1.0f;
     accel_options.motionOptions.flags     = OPTIX_MOTION_FLAG_NONE;
-    */
 
     OptixAccelBufferSizes ias_buffer_sizes;
     OPTIX_CHECK( optixAccelComputeMemoryUsage(
@@ -755,7 +731,6 @@ void buildInstanceAccel( SimpleMotionBlurState& state )
 
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_temp_buffer ) ) );
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_instances   ) ) );
-    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_aabbs       ) ) );
 }
 
 

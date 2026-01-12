@@ -48,11 +48,11 @@ extern "C" __global__ void __raygen__pinhole_camera()
     unsigned int       seed        = tea<16>( image_index, params.subframe_index );
 
     // Subpixel jitter: send the ray through a different position inside the pixel each time,
-    // to provide antialiasing.
+    // to provide antialiasing. The center of each pixel is at fraction (0.5,0.5)
     float2 subpixel_jitter = params.subframe_index == 0 ?
-        make_float2(0.0f, 0.0f) : make_float2(rnd( seed ) - 0.5f, rnd( seed ) - 0.5f);
+        make_float2(0.5f, 0.5f) : make_float2(rnd( seed ), rnd( seed ));
 
-    float2 d = (make_float2(idx.x, idx.y) + subpixel_jitter) / make_float2(params.width, params.height) * 2.f - 1.f;
+    float2 d = ((make_float2(idx.x, idx.y) + subpixel_jitter) / make_float2(params.width, params.height)) * 2.f - 1.f;
     float3 ray_origin = camera->eye;
     float3 ray_direction = normalize(d.x*camera->U + d.y*camera->V + camera->W);
 

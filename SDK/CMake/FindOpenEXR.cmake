@@ -115,6 +115,9 @@ foreach( LIB ${OpenEXR_LIB_NAMES} )
                 IMPORTED_LOCATION_DEBUG ${OpenEXR_${LIB}_DEBUG}
                 MAP_IMPORTED_CONFIG_MINSIZEREL Release
                 MAP_IMPORTED_CONFIG_RELWITHDEBINFO Release )
+            # We don't have PDB files for debug builds, so ignore
+            # LNK4099 PDB 'filename' was not found with 'object/library' or at 'path'; linking object as if no debug info
+            set_property( TARGET ${target} APPEND PROPERTY INTERFACE_LINK_OPTIONS $<$<CONFIG:Debug>:/ignore:4099> )
         else()
             set_target_properties( ${target} PROPERTIES
                 IMPORTED_LOCATION ${OpenEXR_${LIB}_RELEASE}

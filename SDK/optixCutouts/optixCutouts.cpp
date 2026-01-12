@@ -122,6 +122,7 @@ struct CutoutsState
     CUdeviceptr                 d_ias_output_buffer          = 0;  // Instance AS memory
 
     OptixModule                 ptx_module                   = 0;
+    OptixModule                 sphere_module                = 0;
 
     OptixPipelineCompileOptions pipeline_compile_options     = {};
     OptixPipeline               pipeline                     = 0;
@@ -378,9 +379,9 @@ const std::array<float2, TRIANGLE_COUNT* 3> g_tex_coords =
 } };
 
 
-const Sphere g_sphere                = { 410.0f, 90.0f, 110.0f, 90.0f };
-const float3 g_sphere_emission_color = { 0.0f };
-const float3 g_sphere_diffuse_color  = { 0.1f, 0.2f, 0.8f };
+const GeometryData::Sphere g_sphere                = {410.0f, 90.0f, 110.0f, 90.0f};
+const float3               g_sphere_emission_color = {0.0f};
+const float3               g_sphere_diffuse_color  = {0.1f, 0.2f, 0.8f};
 
 //------------------------------------------------------------------------------
 //
@@ -755,7 +756,10 @@ void buildGeomAccel( CutoutsState& state )
         accel_options.operation              = OPTIX_BUILD_OPERATION_BUILD;
 
         // AABB build input
-        OptixAabb   aabb = g_sphere.getAabb();
+        float3    m_min = g_sphere.center - g_sphere.radius;
+        float3    m_max = g_sphere.center + g_sphere.radius;
+        OptixAabb aabb  = {m_min.x, m_min.y, m_min.z, m_max.x, m_max.y, m_max.z};
+
         CUdeviceptr d_aabb_buffer;
         CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_aabb_buffer ), sizeof( OptixAabb ) ) );
         CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( d_aabb_buffer ), &aabb, sizeof( OptixAabb ),
@@ -902,7 +906,7 @@ void createModule( CutoutsState& state )
     state.pipeline_compile_options.usesMotionBlur            = false;
     state.pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_ANY;
     state.pipeline_compile_options.numPayloadValues          = 2;
-    state.pipeline_compile_options.numAttributeValues        = 4;
+    state.pipeline_compile_options.numAttributeValues        = sphere::NUM_ATTRIBUTE_VALUES;
     state.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE; // should be OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
     state.pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
@@ -918,6 +922,18 @@ void createModule( CutoutsState& state )
                 log,
                 &sizeof_log,
                 &state.ptx_module
+                ) );
+
+    ptx = sutil::getPtxString( nullptr, nullptr, "sphere.cu" );
+    OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
+                state.context,
+                &module_compile_options,
+                &state.pipeline_compile_options,
+                ptx.c_str(),
+                ptx.size(),
+                log,
+                &sizeof_log,
+                &state.sphere_module
                 ) );
 }
 
@@ -967,7 +983,7 @@ void createProgramGroups( CutoutsState& state )
     hit_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__radiance";
     hit_prog_group_desc.hitgroup.moduleAH            = state.ptx_module;
     hit_prog_group_desc.hitgroup.entryFunctionNameAH = "__anyhit__ah";
-    hit_prog_group_desc.hitgroup.moduleIS            = state.ptx_module;
+    hit_prog_group_desc.hitgroup.moduleIS            = state.sphere_module;
     hit_prog_group_desc.hitgroup.entryFunctionNameIS = "__intersection__sphere";
     sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context,
@@ -984,7 +1000,7 @@ void createProgramGroups( CutoutsState& state )
     hit_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__occlusion";
     hit_prog_group_desc.hitgroup.moduleAH            = state.ptx_module;
     hit_prog_group_desc.hitgroup.entryFunctionNameAH = "__anyhit__ah";
-    hit_prog_group_desc.hitgroup.moduleIS            = state.ptx_module;
+    hit_prog_group_desc.hitgroup.moduleIS            = state.sphere_module;
     hit_prog_group_desc.hitgroup.entryFunctionNameIS = "__intersection__sphere";
     sizeof_log = sizeof( log );
     OPTIX_CHECK( optixProgramGroupCreate( state.context,
@@ -1142,6 +1158,7 @@ void cleanupState( CutoutsState& state )
     OPTIX_CHECK( optixProgramGroupDestroy( state.occlusion_hit_group ) );
     OPTIX_CHECK( optixProgramGroupDestroy( state.occlusion_miss_group ) );
     OPTIX_CHECK( optixModuleDestroy( state.ptx_module ) );
+    OPTIX_CHECK( optixModuleDestroy( state.sphere_module ) );
     OPTIX_CHECK( optixDeviceContextDestroy( state.context ) );
 
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( state.sbt.raygenRecord ) ) );

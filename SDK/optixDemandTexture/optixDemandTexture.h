@@ -29,62 +29,65 @@
 
 #include <optix.h>
 #include <optixPaging/optixPaging.h>
-#include <sutil/vec_math.h>
 
-/// DemandTextureSampler contains the device-side info required for a demand texture fetch.
-/// The index of a DemandTextureSampler is passed to the closest hit shader via a hit group
-/// record in the SBT, and a table of samplers is available as a launch parameter.
-struct DemandTextureSampler
+#include <DemandLoading/DemandTextureContext.h>
+
+enum RayType
 {
-    /// The CUDA texture object.
-    cudaTextureObject_t texture;
+    RAY_TYPE_RADIANCE = 0,
+    RAY_TYPE_COUNT
 };
-
-struct Sphere
-{
-    float3 center;
-    float  radius;
-
-    OptixAabb bounds() const
-    {
-        float3 m_min = center - radius;
-        float3 m_max = center + radius;
-
-        OptixAabb aabb = {m_min.x, m_min.y, m_min.z, m_max.x, m_max.y, m_max.z};
-        return aabb;
-    }
-};
-
 
 struct Params
 {
-    uchar4*                     image;
-    unsigned int                image_width;
-    unsigned int                image_height;
-    int                         origin_x;
-    int                         origin_y;
-    OptixTraversableHandle      handle;
-    OptixPagingContext          pagingContext;
-    const DemandTextureSampler* demandTextures;
+    // Render buffer
+    uchar4*      result_buffer;
+    unsigned int image_width;
+    unsigned int image_height;
+
+    // Device-related data for multi-gpu rendering
+    unsigned int device_idx;
+    unsigned int num_devices;
+    int          origin_x;
+    int          origin_y;
+
+    // Handle to scene description for ray traversal
+    OptixTraversableHandle handle;
+
+    // Camera parameters
+    float3 eye;
+    float3 U;
+    float3 V;
+    float3 W;
+
+    // Texture data
+    float                               mipLevelBias;
+    demandLoading::DemandTextureContext demandTextureContext;
+    cudaMipmappedArray_t                nonDemandTextureArray;
+    cudaTextureObject_t                 nonDemandTexture;
+
+    // Render mode
+    float      diffScale;
+    int        numTextureTaps;
 };
 
 
 struct RayGenData
 {
-    float3 cam_eye;
-    float3 camera_u, camera_v, camera_w;
+    // Empty
 };
 
 
 struct MissData
 {
+    // Background color
     float r, g, b;
 };
 
 
 struct HitGroupData
 {
-    Sphere       sphere;
+    float        radius;
     unsigned int demand_texture_id;
     float        texture_scale;
     float        texture_lod;

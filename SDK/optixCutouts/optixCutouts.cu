@@ -218,7 +218,8 @@ extern "C" __global__ void __raygen__rg()
     int i = params.samples_per_launch;
     do
     {
-        const float2 subpixel_jitter = make_float2( rnd( seed )-0.5f, rnd( seed )-0.5f );
+        // The center of each pixel is at fraction (0.5,0.5)
+        const float2 subpixel_jitter = make_float2( rnd( seed ), rnd( seed ) );
 
         const float2 d = 2.0f * make_float2(
                 ( static_cast<float>( idx.x ) + subpixel_jitter.x ) / static_cast<float>( w ),
@@ -414,91 +415,4 @@ extern "C" __global__ void __closesthit__radiance()
     }
 
     prd->radiance += light.emission * weight;
-}
-
-
-//------------------------------------------------------------------------------
-//
-//
-//
-//
-//------------------------------------------------------------------------------
-
-extern "C" __global__ void __intersection__sphere()
-{
-    HitGroupData* hg_data  = reinterpret_cast<HitGroupData*>( optixGetSbtDataPointer() );
-    const int     prim_idx = optixGetPrimitiveIndex();
-    const Sphere  sphere   = hg_data->sphere;
-
-    const float3 ray_orig = optixGetWorldRayOrigin();
-    const float3 ray_dir  = optixGetWorldRayDirection();
-    const float  ray_tmin = optixGetRayTmin();
-    const float  ray_tmax = optixGetRayTmax();
-
-    const float3 O      = ray_orig - sphere.center;
-    const float  l      = 1.0f / length( ray_dir );
-    const float3 D      = ray_dir * l;
-    const float  radius = sphere.radius;
-
-    float b    = dot( O, D );
-    float c    = dot( O, O ) - radius * radius;
-    float disc = b * b - c;
-    if( disc > 0.0f )
-    {
-        float sdisc        = sqrtf( disc );
-        float root1        = ( -b - sdisc );
-        float root11       = 0.0f;
-        bool  check_second = true;
-
-        const bool do_refine = fabsf( root1 ) > ( 10.0f * radius );
-
-        if( do_refine )
-        {
-            // refine root10
-            float3 O1 = O + root1 * D;
-            b         = dot( O1, D );
-            c         = dot( O1, O1 ) - radius * radius;
-            disc      = b * b - c;
-
-            if( disc > 0.0f )
-            {
-                sdisc  = sqrtf( disc );
-                root11 = ( -b - sdisc );
-            }
-        }
-
-        float  t;
-        float3 normal;
-        t = ( root1 + root11 ) * l;
-        if( t > ray_tmin && t < ray_tmax )
-        {
-            normal = ( O + ( root1 + root11 ) * D ) / radius;
-
-            unsigned int p0, p1, p2, p3;
-            p0 = float_as_int( normal.x );
-            p1 = float_as_int( normal.y );
-            p2 = float_as_int( normal.z );
-            p3 = float_as_int( radius );
-
-            if( optixReportIntersection( t, 0, p0, p1, p2, p3 ) )
-                check_second = false;
-        }
-
-        if( check_second )
-        {
-            float root2 = ( -b + sdisc ) + ( do_refine ? root1 : 0 );
-            t           = root2 * l;
-            normal      = ( O + root2 * D ) / radius;
-            if( t > ray_tmin && t < ray_tmax )
-            {
-                unsigned int p0, p1, p2, p3;
-                p0 = float_as_int( normal.x );
-                p1 = float_as_int( normal.y );
-                p2 = float_as_int( normal.z );
-                p3 = float_as_int( radius );
-
-                optixReportIntersection( t, 0, p0, p1, p2, p3 );
-            }
-        }
-    }
 }

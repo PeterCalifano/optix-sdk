@@ -80,9 +80,9 @@ class DemandTextureManager
 
     // Device memory used to call OptiX paging library routines.
     // These allocations are retained to reduce allocation overhead.
-    unsigned int* m_devRequestedPages   = nullptr;
-    unsigned int* m_devNumPagesReturned = nullptr;
-    PageMapping*  m_devFilledPages      = nullptr;
+    unsigned int*   m_devRequestedPages   = nullptr;
+    unsigned int*   m_devNumPagesReturned = nullptr;
+    PageMapping* m_devFilledPages      = nullptr;
 
     // Get page requests from the device (via optixPagingPullRequests).
     void pullRequests( std::vector<unsigned int>& requestedPages );

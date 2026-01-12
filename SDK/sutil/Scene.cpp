@@ -871,28 +871,28 @@ void Scene::buildMeshAccels( uint32_t triangle_input_flags )
             mesh->normals.size()   == num_subMeshes &&
             mesh->texcoords.size() == num_subMeshes);
 
-        for(size_t i = 0; i < num_subMeshes; ++i)
+        for(size_t j = 0; j < num_subMeshes; ++j)
         {
-            OptixBuildInput& triangle_input                          = buildInputs[i];
+            OptixBuildInput& triangle_input                          = buildInputs[j];
             memset(&triangle_input, 0, sizeof(OptixBuildInput));
             triangle_input.type                                      = OPTIX_BUILD_INPUT_TYPE_TRIANGLES;
             triangle_input.triangleArray.vertexFormat                = OPTIX_VERTEX_FORMAT_FLOAT3;
             triangle_input.triangleArray.vertexStrideInBytes         =
-                mesh->positions[i].byte_stride ?
-                mesh->positions[i].byte_stride :
+                mesh->positions[j].byte_stride ?
+                mesh->positions[j].byte_stride :
                 sizeof(float3),
-                triangle_input.triangleArray.numVertices             = mesh->positions[i].count;
-            triangle_input.triangleArray.vertexBuffers               = &(mesh->positions[i].data);
+                triangle_input.triangleArray.numVertices             = mesh->positions[j].count;
+            triangle_input.triangleArray.vertexBuffers               = &(mesh->positions[j].data);
             triangle_input.triangleArray.indexFormat                 =
-                mesh->indices[i].elmt_byte_size == 2 ?
+                mesh->indices[j].elmt_byte_size == 2 ?
                 OPTIX_INDICES_FORMAT_UNSIGNED_SHORT3 :
                 OPTIX_INDICES_FORMAT_UNSIGNED_INT3;
             triangle_input.triangleArray.indexStrideInBytes          =
-                mesh->indices[i].byte_stride ?
-                mesh->indices[i].byte_stride :
-                mesh->indices[i].elmt_byte_size*3;
-            triangle_input.triangleArray.numIndexTriplets            = mesh->indices[i].count / 3;
-            triangle_input.triangleArray.indexBuffer                 = mesh->indices[i].data;
+                mesh->indices[j].byte_stride ?
+                mesh->indices[j].byte_stride :
+                mesh->indices[j].elmt_byte_size*3;
+            triangle_input.triangleArray.numIndexTriplets            = mesh->indices[j].count / 3;
+            triangle_input.triangleArray.indexBuffer                 = mesh->indices[j].data;
             triangle_input.triangleArray.flags                       = &triangle_input_flags;
             triangle_input.triangleArray.numSbtRecords               = 1;
         }

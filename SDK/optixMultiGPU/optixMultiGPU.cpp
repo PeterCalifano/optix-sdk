@@ -565,6 +565,7 @@ void launchSubframe( sutil::CUDAOutputBuffer<uchar4>& output_buffer, std::vector
     for( auto& state : states )
     {
         // Launch
+        CUDA_CHECK( cudaSetDevice( state.device_idx ) );
         state.params.result_buffer = result_buffer_data;
         CUDA_CHECK( cudaMemcpyAsync( reinterpret_cast<void*>( state.d_params ),
                     &state.params,
