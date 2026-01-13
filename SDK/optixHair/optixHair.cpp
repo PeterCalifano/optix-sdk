@@ -1,33 +1,8 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2020 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+
 #include <optix.h>
 #include <optix_stack_size.h>
 #include <optix_stubs.h>
@@ -36,8 +11,6 @@
 #include <cstring>
 #include <iomanip>
 #include <iterator>
-
-#include <cuda/whitted.h>
 
 #include <sutil/Exception.h>
 #include <sutil/sutil.h>
@@ -208,7 +181,7 @@ void makeInstanceAccelerationStructure( HairState* pState )
         memcpy( instance.transform, yUpTransform.getData(), sizeof( float ) * 12 );
         instance.sbtOffset         = sbtOffset;
         instance.traversableHandle = pState->pHead->traversable();
-        sbtOffset += whitted::RAY_TYPE_COUNT;
+        sbtOffset += RAY_TYPE_COUNT;
         instances.push_back( instance );
         sutil::Aabb bb = pState->pHead->aabb();
         bb.transform( yUpTransform );
@@ -220,7 +193,7 @@ void makeInstanceAccelerationStructure( HairState* pState )
         memcpy( instance.transform, yUpTransform.getData(), sizeof( float ) * 12 );
         instance.sbtOffset         = sbtOffset;
         instance.traversableHandle = pState->hHairGAS;
-        sbtOffset += whitted::RAY_TYPE_COUNT;
+        sbtOffset += RAY_TYPE_COUNT;
         instances.push_back( instance );
         sutil::Aabb bb = pState->pHair->aabb();
         bb.transform( yUpTransform );
@@ -322,13 +295,13 @@ void makeProgramGroups( HairState* pState )
     // Miss program groups
     OptixProgramGroupDesc programGroupDesc  = {};
     programGroupDesc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
-    programGroupDesc.miss.module            = pState->pProgramGroups->m_whittedModule;
+    programGroupDesc.miss.module            = pState->pProgramGroups->m_shadingModule;
     programGroupDesc.miss.entryFunctionName = "__miss__constant_radiance";
     pState->pProgramGroups->add( programGroupDesc, "miss" );
 
     memset( &programGroupDesc, 0, sizeof( OptixProgramGroupDesc ) );
     programGroupDesc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
-    programGroupDesc.miss.module            = pState->pProgramGroups->m_whittedModule;
+    programGroupDesc.miss.module            = pState->pProgramGroups->m_shadingModule;
     programGroupDesc.miss.entryFunctionName = "__miss__occlusion";
     pState->pProgramGroups->add( programGroupDesc, "missOcclude" );
 
@@ -336,7 +309,7 @@ void makeProgramGroups( HairState* pState )
     {
         OptixProgramGroupDesc raygenProgramGroupDesc    = {};
         raygenProgramGroupDesc.kind                     = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
-        raygenProgramGroupDesc.raygen.module            = pState->pProgramGroups->m_whittedModule;
+        raygenProgramGroupDesc.raygen.module            = pState->pProgramGroups->m_shadingModule;
         raygenProgramGroupDesc.raygen.entryFunctionName = "__raygen__pinhole";
         pState->pProgramGroups->add( raygenProgramGroupDesc, "raygen" );
     }
@@ -428,7 +401,7 @@ void makeSBT( HairState* pState )
     // Head first
     if( pState->pHead )
     {
-        std::vector<HitRecord> headRecords = pState->pHead->sbtHitRecords( *pState->pProgramGroups, whitted::RAY_TYPE_COUNT );
+        std::vector<HitRecord> headRecords = pState->pHead->sbtHitRecords( *pState->pProgramGroups, RAY_TYPE_COUNT );
         std::copy( headRecords.begin(), headRecords.end(), std::back_inserter( hitRecords ) );
     }
     // Hair second
@@ -480,24 +453,12 @@ void makePipeline( HairState* pState )
                                           &LOG_SIZE,
                                           &pState->pipeline ) );
 
-    OptixStackSizes stack_sizes = {};
-    for( unsigned int i = 0; i < pState->pProgramGroups->size(); ++i )
-    {
-        OPTIX_CHECK( optixUtilAccumulateStackSizes( pState->pProgramGroups->data()[i], &stack_sizes, pState->pipeline ) );
-    }
-
-    uint32_t direct_callable_stack_size_from_traversal;
-    uint32_t direct_callable_stack_size_from_state;
-    uint32_t continuation_stack_size;
-    OPTIX_CHECK( optixUtilComputeStackSizes( &stack_sizes, max_trace_depth,
-                                             0,  // maxCCDepth
-                                             0,  // maxDCDEpth
-                                             &direct_callable_stack_size_from_traversal,
-                                             &direct_callable_stack_size_from_state, &continuation_stack_size ) );
-    OPTIX_CHECK( optixPipelineSetStackSize( pState->pipeline, direct_callable_stack_size_from_traversal,
-                                            direct_callable_stack_size_from_state, continuation_stack_size,
-                                            2  // maxTraversableDepth
-                                            ) );
+    unsigned int ccDepth             = 0;
+    unsigned int dcDepthState        = 0;
+    unsigned int dcDepthTraversal    = 0;
+    unsigned int maxTraversableDepth = 2;
+    OPTIX_CHECK( optixPipelineSetStackSizeFromCallDepths( pState->pipeline, max_trace_depth, ccDepth, dcDepthState,
+                                                          dcDepthTraversal, maxTraversableDepth ) );
 }
 
 void printLogMessage( unsigned int level, const char* tag, const char* message, void* /* cbdata */ )
@@ -533,18 +494,18 @@ void initializeParams( HairState* pState )
     pState->params.eye        = pState->camera.eye();
     pState->camera.UVWFrame( pState->params.U, pState->params.V, pState->params.W );
 
-    pState->lights[0].type            = Light::Type::POINT;
+    pState->lights[0].type            = sutil::Light::Type::POINT;
     pState->lights[0].point.color     = {1.0f, 1.0f, 1.0f};
     pState->lights[0].point.intensity = 2.0f;
     pState->lights[0].point.position  = pState->aabb.center() + make_float3( loffset );
-    pState->lights[0].point.falloff   = Light::Falloff::QUADRATIC;
+    pState->lights[0].point.falloff   = sutil::Light::Falloff::QUADRATIC;
 
-    pState->lights[1].type            = Light::Type::POINT;
+    pState->lights[1].type            = sutil::Light::Type::POINT;
     pState->lights[1].point.color     = {1.0f, 1.0f, 1.0f};
     pState->lights[1].point.intensity = 2.0f;
     // headlight...slightly offset to the side of eye.
     pState->lights[1].point.position  = pState->camera.eye() + pState->params.U;
-    pState->lights[1].point.falloff   = Light::Falloff::QUADRATIC;
+    pState->lights[1].point.falloff   = sutil::Light::Falloff::QUADRATIC;
 
     pState->params.lights.count = 2;
     createOnDevice( pState->lights, &pState->params.lights.data );
@@ -573,7 +534,7 @@ void renderFrame( HairState* pState )
     pState->params.accum_buffer = pState->accumBuffer.map();
     CUDA_CHECK( cudaMemcpyAsync( reinterpret_cast<void*>( pState->deviceParams ),
                                  &pState->params,
-                                 sizeof( whitted::LaunchParams ),
+                                 sizeof( LaunchParams ),
                                  cudaMemcpyHostToDevice,
                                  0  // stream
                                  ) );
@@ -581,7 +542,7 @@ void renderFrame( HairState* pState )
     OPTIX_CHECK( optixLaunch( pState->pipeline,
                               0,  // stream
                               reinterpret_cast<CUdeviceptr>( pState->deviceParams ),
-                              sizeof( whitted::LaunchParams ),
+                              sizeof( LaunchParams ),
                               &( pState->SBT ),
                               pState->width,   // launch width
                               pState->height,  // launch height

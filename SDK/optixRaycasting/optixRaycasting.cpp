@@ -1,34 +1,7 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2019 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-
 
 #include <cuda_runtime.h>
 
@@ -39,7 +12,6 @@
 
 #include <sampleConfig.h>
 
-#include "cuda/whitted.h"
 #include <sutil/CUDAOutputBuffer.h>
 #include <sutil/Matrix.h>
 #include <sutil/Record.h>
@@ -77,7 +49,7 @@ struct RaycastingState
 };
 
 
-typedef sutil::Record<whitted::HitGroupData> HitGroupRecord;
+typedef sutil::Record<HitGroupData> HitGroupRecord;
 
 
 void printUsageAndExit( const char* argv0 )
@@ -167,35 +139,14 @@ void createPipelines( RaycastingState& state )
                                           program_groups, sizeof( program_groups ) / sizeof( program_groups[0] ), LOG,
                                           &LOG_SIZE, &state.pipeline_2 ) );
 
-    OptixStackSizes stack_sizes_1 = {};
-    OptixStackSizes stack_sizes_2 = {};
-    for( auto& prog_group : program_groups )
-    {
-        OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes_1, state.pipeline_1 ) );
-        OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes_2, state.pipeline_2 ) );
-    }
-
-    uint32_t direct_callable_stack_size_from_traversal;
-    uint32_t direct_callable_stack_size_from_state;
-    uint32_t continuation_stack_size;
-    OPTIX_CHECK( optixUtilComputeStackSizes( &stack_sizes_1, max_trace_depth,
-                                             0,  // maxCCDepth
-                                             0,  // maxDCDEpth
-                                             &direct_callable_stack_size_from_traversal,
-                                             &direct_callable_stack_size_from_state, &continuation_stack_size ) );
-    OPTIX_CHECK( optixPipelineSetStackSize( state.pipeline_1, direct_callable_stack_size_from_traversal,
-                                            direct_callable_stack_size_from_state, continuation_stack_size,
-                                            2  // maxTraversableDepth
-                                            ) );
-    OPTIX_CHECK( optixUtilComputeStackSizes( &stack_sizes_2, max_trace_depth,
-                                             0,  // maxCCDepth
-                                             0,  // maxDCDEpth
-                                             &direct_callable_stack_size_from_traversal,
-                                             &direct_callable_stack_size_from_state, &continuation_stack_size ) );
-    OPTIX_CHECK( optixPipelineSetStackSize( state.pipeline_2, direct_callable_stack_size_from_traversal,
-                                            direct_callable_stack_size_from_state, continuation_stack_size,
-                                            2  // maxTraversableDepth
-                                            ) );
+    unsigned int   max_cc_depth           = 0;
+    unsigned int   max_dc_depth_state     = 0;
+    unsigned int   max_dc_depth_traversal = 0;
+    const uint32_t max_traversal_depth    = 2;
+    OPTIX_CHECK( optixPipelineSetStackSizeFromCallDepths( state.pipeline_1, pipeline_link_options.maxTraceDepth, max_cc_depth,
+                                                          max_dc_depth_state, max_dc_depth_traversal, max_traversal_depth ) );
+    OPTIX_CHECK( optixPipelineSetStackSizeFromCallDepths( state.pipeline_2, pipeline_link_options.maxTraceDepth, max_cc_depth,
+                                                          max_dc_depth_state, max_dc_depth_traversal, max_traversal_depth ) );
 }
 
 
@@ -227,13 +178,13 @@ void createSBT( RaycastingState& state )
         {
             HitGroupRecord rec = {};
             OPTIX_CHECK( optixSbtRecordPackHeader( state.hit_prog_group, &rec ) );
-            GeometryData::TriangleMesh triangle_mesh = {};
+            sutil::TriangleMesh triangle_mesh = {};
             triangle_mesh.positions                  = mesh->positions[i];
             triangle_mesh.normals                    = mesh->normals[i];
-            for( size_t j = 0; j < GeometryData::num_texcoords; ++j )
+            for( size_t j = 0; j < sutil::TriangleMesh::num_texcoords; ++j )
                 triangle_mesh.texcoords[j] = mesh->texcoords[j][i];
-            triangle_mesh.indices = mesh->indices[i];
-            rec.data.geometry_data.setTriangleMesh( triangle_mesh );
+            triangle_mesh.indices  = mesh->indices[i];
+            rec.data.triangle_data = triangle_mesh;
             rec.data.material_data = state.scene.materials()[mesh->material_idx[i]];
             hitgroup_records.push_back( rec );
         }

@@ -1,38 +1,14 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2019 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+
 #include "optixCutouts.h"
 
-#include <cuda/random.h>
+#include <sutil/cuda/geometry.h>
+#include <sutil/cuda/helpers.h>
+#include <sutil/cuda/random.h>
 #include <sutil/vec_math.h>
-#include <cuda/helpers.h>
 
 extern "C" {
 __constant__ Params params;
@@ -213,14 +189,14 @@ extern "C" __global__ void __raygen__rg()
     const uint3  idx = optixGetLaunchIndex();
     const int    subframe_index = params.subframe_index;
 
-    unsigned int seed = tea<4>( idx.y*w + idx.x, subframe_index );
+    unsigned int seed = sutil::tea<4>( idx.y*w + idx.x, subframe_index );
 
     float3 result = make_float3( 0.0f );
     int i = params.samples_per_launch;
     do
     {
         // The center of each pixel is at fraction (0.5,0.5)
-        const float2 subpixel_jitter = make_float2( rnd( seed ), rnd( seed ) );
+        const float2 subpixel_jitter = make_float2( sutil::rnd( seed ), sutil::rnd( seed ) );
 
         const float2 d = 2.0f * make_float2(
                 ( static_cast<float>( idx.x ) + subpixel_jitter.x ) / static_cast<float>( w ),
@@ -255,8 +231,8 @@ extern "C" __global__ void __raygen__rg()
                 break;
 
             // russian roulette in linear color space
-            const float rr = rnd( prd.seed );
-            float lumAttenuation = luminance( prd.attenuation );
+            const float rr = sutil::rnd( prd.seed );
+            float lumAttenuation = sutil::luminance( prd.attenuation );
             if( lumAttenuation > rr )
                 prd.attenuation /= min(1.f, lumAttenuation);
             else
@@ -281,7 +257,7 @@ extern "C" __global__ void __raygen__rg()
         accum_color = lerp( accum_color_prev, accum_color, a );
     }
     params.accum_buffer[ image_index ] = make_float4( accum_color, 1.0f);
-    params.frame_buffer[ image_index ] = make_color ( accum_color );
+    params.frame_buffer[ image_index ] = sutil::make_color ( accum_color );
 }
 
 
@@ -297,9 +273,9 @@ extern "C" __global__ void __miss__radiance()
 
 extern "C" __global__ void __anyhit__ah_checkerboard()
 {
-    const unsigned int   hit_kind = optixGetHitKind();
-    CutoutsHitGroupData* rt_data  = (CutoutsHitGroupData*)optixGetSbtDataPointer();
-    const int            prim_idx = optixGetPrimitiveIndex();
+    const unsigned int  hit_kind = optixGetHitKind();
+    HitGroupData*       rt_data  = reinterpret_cast<HitGroupData*>( optixGetSbtDataPointer() );
+    const int           prim_idx = optixGetPrimitiveIndex();
 
     // The texture coordinates are defined per-vertex for built-in triangles,
     // and are derived from the surface normal for our custom sphere geometry.
@@ -339,8 +315,8 @@ extern "C" __global__ void __anyhit__ah_checkerboard()
 
 extern "C" __global__ void __anyhit__ah_circle()
 {
-    CutoutsHitGroupData* rt_data  = (CutoutsHitGroupData*)optixGetSbtDataPointer();
-    const int            prim_idx = optixGetPrimitiveIndex();
+    HitGroupData* rt_data  = reinterpret_cast<HitGroupData*>( optixGetSbtDataPointer() );
+    const int     prim_idx = optixGetPrimitiveIndex();
 
     // The texture coordinates are defined per-vertex for built-in triangles
     float2 texcoord;
@@ -373,15 +349,15 @@ extern "C" __global__ void __miss__occlusion()
 
 extern "C" __global__ void __closesthit__radiance()
 {
-    CutoutsHitGroupData* rt_data = (CutoutsHitGroupData*)optixGetSbtDataPointer();
-    RadiancePRD*         prd     = getPRD();
+    HitGroupData* rt_data  = reinterpret_cast<HitGroupData*>( optixGetSbtDataPointer() );
+    RadiancePRD*  prd      = getPRD();
 
     const int          prim_idx        = optixGetPrimitiveIndex();
     const float3       ray_dir         = optixGetWorldRayDirection();
     const int          vert_idx_offset = prim_idx*3;
     const unsigned int hit_kind        = optixGetHitKind();
 
-    float3 N;    
+    float3 N;
     if( optixIsTriangleHit() )
     {
         const float3 v0  = make_float3( rt_data->vertices[vert_idx_offset + 0] );
@@ -405,8 +381,8 @@ extern "C" __global__ void __closesthit__radiance()
     unsigned int seed = prd->seed;
 
     {
-        const float z1 = rnd(seed);
-        const float z2 = rnd(seed);
+        const float z1 = sutil::rnd(seed);
+        const float z2 = sutil::rnd(seed);
 
         float3 w_in;
         cosine_sample_hemisphere( z1, z2, w_in );
@@ -419,8 +395,8 @@ extern "C" __global__ void __closesthit__radiance()
         prd->countEmitted = false;
     }
 
-    const float z1 = rnd(seed);
-    const float z2 = rnd(seed);
+    const float z1 = sutil::rnd(seed);
+    const float z2 = sutil::rnd(seed);
     prd->seed = seed;
 
     ParallelogramLight light     = params.light;
@@ -451,4 +427,11 @@ extern "C" __global__ void __closesthit__radiance()
     }
 
     prd->radiance += light.emission * weight;
+}
+
+
+extern "C" __global__ void __intersection__sphere()
+{
+    const HitGroupData* hit_group_data = reinterpret_cast<HitGroupData*>( optixGetSbtDataPointer() );
+    sutil::intersectSphere( hit_group_data->sphere.center, hit_group_data->sphere.radius );
 }

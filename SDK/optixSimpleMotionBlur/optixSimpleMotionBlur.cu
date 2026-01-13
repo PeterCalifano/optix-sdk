@@ -1,40 +1,16 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2019 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+
 #include <optix.h>
 
 #include "optixSimpleMotionBlur.h"
-#include "random.h"
 
+#include <sutil/cuda/helpers.h>
+#include <sutil/cuda/random.h>
 #include <sutil/vec_math.h>
-#include <cuda/helpers.h>
+
 
 extern "C" {
 __constant__ Params params;
@@ -103,9 +79,9 @@ extern "C" __global__ void __raygen__rg()
     const uint3  idx = optixGetLaunchIndex();
     const int    subframe_index = params.subframe_index;
 
-    unsigned int seed = tea<4>( idx.y*w + idx.x, subframe_index );
+    unsigned int seed = sutil::tea<4>( idx.y*w + idx.x, subframe_index );
     // The center of each pixel is at fraction (0.5,0.5)
-    const float2 subpixel_jitter = make_float2( rnd( seed ), rnd( seed ) );
+    const float2 subpixel_jitter = make_float2( sutil::rnd( seed ), sutil::rnd( seed ) );
 
     const float2 d = 2.0f * make_float2(
             ( static_cast<float>( idx.x ) + subpixel_jitter.x ) / static_cast<float>( w ),
@@ -114,7 +90,7 @@ extern "C" __global__ void __raygen__rg()
     float3 ray_direction = normalize(d.x*U + d.y*V + W);
     float3 ray_origin    = eye;
 
-    const float3 result        = traceCamera( params.handle, ray_origin, ray_direction, rnd( seed ) );
+    const float3 result        = traceCamera( params.handle, ray_origin, ray_direction, sutil::rnd( seed ) );
 
     const int image_index = idx.y*w + idx.x;
     float3 accum_color = result;
@@ -125,7 +101,7 @@ extern "C" __global__ void __raygen__rg()
         accum_color = lerp( accum_color_prev, accum_color, a );
     }
     params.accum_buffer[ image_index ] = make_float4( accum_color, 1.0f);
-    params.frame_buffer[ image_index ] = make_color ( accum_color );
+    params.frame_buffer[ image_index ] = sutil::make_color ( accum_color );
 }
 
 

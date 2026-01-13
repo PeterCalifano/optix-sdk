@@ -1,46 +1,23 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2020 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+
 #pragma once
 
-#include "whitted.h"
-#include <sutil/CUDAOutputBuffer.h>
-#include <cuda/BufferView.h>
-#include <cuda_runtime.h>
 #include <sutil/Aabb.h>
+#include <sutil/CUDAOutputBuffer.h>
 #include <sutil/Record.h>
 #include <sutil/Camera.h>
+#include <sutil/cuda/BufferView.h>
 
-typedef sutil::EmptyRecord                   RayGenRecord;
-typedef sutil::EmptyRecord                   MissRecord;
-typedef sutil::Record<whitted::HitGroupData> HitRecord;
+#include <cuda_runtime.h>
+
+#include "optixHair.cuh"
+
+typedef sutil::EmptyRecord           RayGenRecord;
+typedef sutil::EmptyRecord           MissRecord;
+typedef sutil::Record<HitGroupData>  HitRecord;
 
 //
 // forward declarations
@@ -70,10 +47,10 @@ struct HairState
 
     sutil::Aabb aabb;
 
-    whitted::LaunchParams  params       = {};
-    whitted::LaunchParams* deviceParams = nullptr;
+    LaunchParams  params       = {};
+    LaunchParams* deviceParams = nullptr;
 
-    Light lights[2] = {};
+    sutil::Light lights[2] = {};
 
     OptixTraversableHandle hHairGAS            = 0;
     CUdeviceptr            deviceBufferHairGAS = 0;
@@ -82,7 +59,7 @@ struct HairState
     CUdeviceptr            deviceBufferIAS = 0;
 
     // for curves SBT record
-    GeometryData::Curves curves = {};
+    sutil::Curves curves = {};
 
     //ShaderBindingTable* pSBT           = nullptr;
     HairProgramGroups*  pProgramGroups = nullptr;

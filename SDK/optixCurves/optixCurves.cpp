@@ -1,31 +1,6 @@
 /*
  * SPDX-FileCopyrightText: Copyright (c) 2019 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <optix.h>
@@ -618,6 +593,13 @@ int main( int argc, char* argv[] )
                                                   program_groups, sizeof( program_groups ) / sizeof( program_groups[0] ),
                                                   LOG, &LOG_SIZE, &pipeline ) );
 
+            // This is an example where the explicit computation of the stack sizes is superior to the more convenient
+            // optixPipelineSetStackSizeFromCallDepths() or relying on the default implementation - as long as motion
+            // blur is not enabled. Why? Because the motion blur raygen has higher continuation stack size requirements
+            // than the default basic raygen. But as both raygen programs are part of the same module, the default or the
+            // stack size settings via optixPipelineSetStackSizeFromCallDepths() consider the max of all the programs,
+            // whether they are actually used or not. On the other hand, the collection of all stack sizes via
+            // optixUtilAccumulateStackSizes() iterates only through the used programs (groups).
             OptixStackSizes stack_sizes = {};
             for( auto& prog_group : program_groups )
             {

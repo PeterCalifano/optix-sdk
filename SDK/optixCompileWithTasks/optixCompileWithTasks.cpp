@@ -1,32 +1,6 @@
 /*
-
- * SPDX-FileCopyrightText: Copyright (c) 2019 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2019 - 2025  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <optix.h>
@@ -142,7 +116,8 @@ void compileModules( const std::vector<std::string>& input, int numIters = 1 )
 
 void compileModulesWithTasks( const std::vector<std::string>& input, int numIters = 1 )
 {
-    std::vector<OptixModule> modules( input.size() );
+    std::vector<OptixModule>             modules( input.size() );
+    std::vector<OptixModuleCompileState> states( input.size() );
     Timer                    overallTimer;
     for( int i = 0; i < numIters; ++i )
     {
@@ -152,9 +127,10 @@ void compileModulesWithTasks( const std::vector<std::string>& input, int numIter
             OptixTask initialTask;
             OPTIX_CHECK( optixModuleCreateWithTasks( s_context, &s_moduleCompileOptions, &s_pipelineCompileOptions,
                                                      input[idx].c_str(), input[idx].size(), 0, 0, &modules[idx], &initialTask ) );
-            g_pool.addTaskAndExecute( initialTask );
+            OPTIX_CHECK( optixModuleGetCompilationState( modules[idx], &states[idx] ) );
+            g_pool.addTaskAndExecute( initialTask, modules[idx], states[idx] );
         }
-        OPTIX_CHECK( g_pool.waitForModuleTasks( modules ) );
+        OPTIX_CHECK( g_pool.waitForModuleTasks( states.data(), states.size() ) );
         if( i == 0 )
         {
             SetLoggingLevel( 0 );
@@ -186,6 +162,7 @@ void printUsageAndExit( const std::string& argv0, bool doExit = true )
               << "  -nt  | --num-threads <N>          Number of threads (default 1)\n"
               << "  -mt  | --max-num-tasks <N>        Maximum number of additional tasks (default 2)\n"
               << "       | --filenames <list>         A quote-enclosed, semicolon delimited list of PTX input files\n"
+              << "  -ue  | --user-exceptions          Enable user exceptions (OPTIX_EXCEPTION_FLAG_USER)\n"
               << "  -g                                Enable debug support (implies -O0)\n"
         << std::endl;
 
@@ -277,6 +254,10 @@ int main( int argc, char** argv )
                 printUsageAndExit( argv[0] );
             maxNumTasks = atoi( argv[++i] );
         }
+        else if( arg == "-ue" || arg == "--user-exceptions" )
+        {
+            s_pipelineCompileOptions.exceptionFlags = OPTIX_EXCEPTION_FLAG_USER;
+        }
         else if( arg == "-g" )
         {
             s_moduleCompileOptions.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
@@ -296,13 +277,6 @@ int main( int argc, char** argv )
         }
         else
         {
-            if( !filenames.empty() )
-            {
-                std::cerr << "Only one filename is supported as a positional argument. ";
-                std::cerr << "Found additional filename: " << arg << ". ";
-                std::cerr << "Already found " << filenames.size() << " " << (filenames.size() > 1 ? "filenames" : "filename") << ".\n";
-                printUsageAndExit( argv[0] );
-            }
             filenames.push_back( arg );
         }
     }

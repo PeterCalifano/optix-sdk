@@ -1,37 +1,11 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2020 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-// This sample shows how to apply launch parameter specialization. 
-// That technique allows to replace loads from a given range of the launch parameters 
-// with a fixed value at compile time. Compiler optimization passes use those constant 
+// This sample shows how to apply launch parameter specialization.
+// That technique allows to replace loads from a given range of the launch parameters
+// with a fixed value at compile time. Compiler optimization passes use those constant
 // values which may result in improved optimization results.
 // The sample demonstrates the usage of the OptixModuleCompileBoundValueEntry struct
 // and the OptixModuleCompileOptions::boundValues field.
@@ -63,10 +37,8 @@
 
 #include <array>
 #include <cstring>
-#include <fstream>
 #include <iomanip>
 #include <iostream>
-#include <sstream>
 #include <string>
 
 
@@ -900,39 +872,12 @@ void createPipeline( PathTracerState& state )
                 &state.pipeline
                 ) );
 
-    // We need to specify the max traversal depth.  Calculate the stack sizes, so we can specify all
-    // parameters to optixPipelineSetStackSize.
-    OptixStackSizes stack_sizes = {};
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.raygen_prog_group,    &stack_sizes, state.pipeline ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.radiance_miss_group,  &stack_sizes, state.pipeline ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.occlusion_miss_group, &stack_sizes, state.pipeline ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.radiance_hit_group,   &stack_sizes, state.pipeline ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.occlusion_hit_group,  &stack_sizes, state.pipeline ) );
-
-    uint32_t max_trace_depth = 2;
-    uint32_t max_cc_depth = 0;
-    uint32_t max_dc_depth = 0;
-    uint32_t direct_callable_stack_size_from_traversal;
-    uint32_t direct_callable_stack_size_from_state;
-    uint32_t continuation_stack_size;
-    OPTIX_CHECK( optixUtilComputeStackSizes(
-                &stack_sizes,
-                max_trace_depth,
-                max_cc_depth,
-                max_dc_depth,
-                &direct_callable_stack_size_from_traversal,
-                &direct_callable_stack_size_from_state,
-                &continuation_stack_size
-                ) );
-
-    const uint32_t max_traversal_depth = 1;
-    OPTIX_CHECK( optixPipelineSetStackSize(
-                state.pipeline,
-                direct_callable_stack_size_from_traversal,
-                direct_callable_stack_size_from_state,
-                continuation_stack_size,
-                max_traversal_depth
-                ) );
+    uint32_t       max_cc_depth           = 0;
+    uint32_t       max_dc_depth_state     = 0;
+    uint32_t       max_dc_depth_traversal = 0;
+    const uint32_t max_traversal_depth    = 1;
+    OPTIX_CHECK( optixPipelineSetStackSizeFromCallDepths( state.pipeline, pipeline_link_options.maxTraceDepth, max_cc_depth,
+                                                          max_dc_depth_state, max_dc_depth_traversal, max_traversal_depth ) );
 }
 
 void allocateSBT( PathTracerState& state )

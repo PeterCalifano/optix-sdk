@@ -1,41 +1,28 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2019 - 2025  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-#pragma once 
 
-#include <cuda/helpers.h>
+#pragma once
+
+#include <sutil/cuda/helpers.h>
 #include <optix.h>
 #include <optix_device.h>
 
 #include <libntc/shaders/DecompressConstants.h>
 
+// Custom type_traits implementation since NVRTC does not support <type_traits> header
+template<bool B, typename T, typename F>
+struct conditional { typedef T type; };
+
+template<typename T, typename F>
+struct conditional<false, T, F> { typedef F type; };
+
+template<typename T, typename U>
+struct is_same { static const bool value = false; };
+
+template<typename T>
+struct is_same<T, T> { static const bool value = true; };
 
 constexpr OptixCoopVecMatrixLayout MAT_LAYOUT = OPTIX_COOP_VEC_MATRIX_LAYOUT_INFERENCING_OPTIMAL;
 
@@ -50,6 +37,12 @@ __device__ __forceinline__ half4  make_half4 ( float x ) { return { half(x), hal
 __device__ __forceinline__ half4  make_half4 ( int x   ) { return { half(x), half(x), half(x), half(x) }; }
 __device__ __forceinline__ half4  make_half4 ( float a, float b, float c, float d ) { return { half(a), half(b), half(c), half(d) }; }
 __device__ __forceinline__ float4 make_float4( half4 v ) { return { float(v.x), float(v.y), float(v.z), float(v.w) }; }
+
+#ifdef __CUDACC_RTC__
+// NVRTC compatibility - use float conversion
+__device__ __forceinline__ half operator+( const half& a, const half& b ) { return half(float(a) + float(b)); }
+__device__ __forceinline__ half operator*( const half& a, const half& b ) { return half(float(a) * float(b)); }
+#endif
 
 __device__ __forceinline__ half4 operator+( const half4& a, const half4& b ) { return { a.x+b.x, a.y+b.y, a.z+b.z, a.w+b.w }; }
 __device__ __forceinline__ half4 operator*( const half4& a, const half4& b ) { return { a.x*b.x, a.y*b.y, a.z*b.z, a.w*b.w }; }
@@ -110,12 +103,12 @@ bool IsHalfSpecial( half f )
 
 template<typename T>
 using PackedType = typename
-std::conditional<
-    std::is_same<T, half>::value, half2,
-    std::conditional<
-    std::is_same<T, char>::value, char4,
-    std::conditional<
-    std::is_same<T, unsigned char>::value, uchar4, T
+conditional<
+    is_same<T, half>::value, half2,
+    conditional<
+    is_same<T, char>::value, char4,
+    conditional<
+    is_same<T, unsigned char>::value, uchar4, T
     >
     >
 >::type;
@@ -574,14 +567,11 @@ void EvaluateLayer_CoopVec(
         false,                             // transpose
         N_OUT,                             // N
         N_IN,                              // K
-        OPTIX_COOP_VEC_ELEM_TYPE_INT8,     // matrixElementType
-        OPTIX_COOP_VEC_ELEM_TYPE_INT32     // biasElementType
+        OPTIX_COOP_VEC_ELEM_TYPE_INT8      // matrixElementType
         >(
             inputArray,                    // inputVector
             (CUdeviceptr)weights,          // matrix
-            weightOffset,                  // matrixOffsetInBytes
-            0,                             // bias
-            0                              // biasOffsetInBytes
+            weightOffset                   // matrixOffsetInBytes
         );
 
     outputArray = optixCoopVecCvt<T_VEC_OUT>( z_i1 );
@@ -659,14 +649,11 @@ void EvaluateOutputLayer_CoopVec_FP8(
         false,                             // transpose
         N_OUT,                             // N
         N_IN,                              // K
-        OPTIX_COOP_VEC_ELEM_TYPE_INT8,     // matrixElementType
-        OPTIX_COOP_VEC_ELEM_TYPE_INT32     // biasElementType
+        OPTIX_COOP_VEC_ELEM_TYPE_INT8      // matrixElementType
         >(
             inputArray,                    // inputVector
             (CUdeviceptr)weights,          // matrix
-            weightsOffsetInBytes,
-            0,                             // bias
-            0                              // biasOffsetInBytes
+            weightsOffsetInBytes
         );
 
     outputArray = optixCoopVecCvt<T_VEC_OUT>( z_i1 );
@@ -693,7 +680,7 @@ float2 getStochasticTexelWeights(int2 imgSize, float2 uv, int2& outTopLeftPos)
     outTopLeftPos           = make_int2( topLeftPos );
     return d;
 }
- 
+
 
 template <class T_VEC_OUTPUT, int NETWORK_VERSION>
 __device__ __forceinline__
@@ -711,11 +698,11 @@ bool inferTexelCoopVec_fp8( T_VEC_OUTPUT& outputLayer, NtcTextureSetConstants& t
         Params::HIDDEN_LAYER_CHANNELS,
         Params::HIDDEN_LAYER_CHANNELS,
         Params::HIDDEN_LAYER_CHANNELS,
-        Params::OUTPUT_CHANNELS 
+        Params::OUTPUT_CHANNELS
     };
 
     // For info about buffer layouts (mat weights, scales, biases), see NTC's TextureSet.cpp.
-    // Here we are using NTC's GenericFP8 format, but we have converted the mats to inference_optimal layout 
+    // Here we are using NTC's GenericFP8 format, but we have converted the mats to inference_optimal layout
     // see convertWeights() in optixNeuralTexture.cpp
 
     const int weightOffset0   = 0;
@@ -752,7 +739,7 @@ bool inferTexelCoopVec_fp8( T_VEC_OUTPUT& outputLayer, NtcTextureSetConstants& t
 }
 
 
-template <class T_VEC_OUTPUT, int NETWORK_VERSION> 
+template <class T_VEC_OUTPUT, int NETWORK_VERSION>
 __device__ __forceinline__
 bool inferTexelCoopVec_int8( T_VEC_OUTPUT& outputLayer, NtcTextureSetConstants& tsc, uint8_t* latents, uint8_t* mlpWeights, int x, int y, int lod )
 {
@@ -770,8 +757,8 @@ bool inferTexelCoopVec_int8( T_VEC_OUTPUT& outputLayer, NtcTextureSetConstants& 
         Params::HIDDEN_LAYER_CHANNELS,
         Params::OUTPUT_CHANNELS };
 
-    // The matrix weights for all layers are stored in Int8 format and densely packed one after another. 
-    // Then the scale vectors for all layers are stored in Float32 format and are densely packed one after another. 
+    // The matrix weights for all layers are stored in Int8 format and densely packed one after another.
+    // Then the scale vectors for all layers are stored in Float32 format and are densely packed one after another.
     // Finally, the bias vectors for all layers are stored in Float32 format and also densely packed.
 
     int weightSize[4] = {
@@ -781,7 +768,7 @@ bool inferTexelCoopVec_int8( T_VEC_OUTPUT& outputLayer, NtcTextureSetConstants& 
         int( optixCoopVecGetMatrixSize<layerSize[4], layerSize[3], OPTIX_COOP_VEC_ELEM_TYPE_INT8, MAT_LAYOUT>() ) };
 
     // Compute offsets for weights, scales, and biases. Compute pointers for scales and biases
-    // We skip pointer for weights because it's preferable to to the same weights pointer 
+    // We skip pointer for weights because it's preferable to to the same weights pointer
     // with a different offset for successive matmul calls
 
     constexpr int numWeights                   = 4;

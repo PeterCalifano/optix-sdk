@@ -1,32 +1,6 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2022 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <optix.h>
@@ -38,11 +12,11 @@
 
 #include <sampleConfig.h>
 
+#include <sutil/Camera.h>
 #include <sutil/CUDAOutputBuffer.h>
 #include <sutil/Exception.h>
+#include <sutil/Trackball.h>
 #include <sutil/sutil.h>
-
-#include <cuda/whitted.h>
 
 #include "optixCustomPrimitive.h"
 
@@ -50,8 +24,6 @@
 #include <iostream>
 #include <string>
 
-#include <sutil/Camera.h>
-#include <sutil/Trackball.h>
 
 
 
@@ -62,9 +34,9 @@ struct SbtRecord
     T data;
 };
 
-typedef SbtRecord<RayGenData>            RayGenSbtRecord;
-typedef SbtRecord<MissData>              MissSbtRecord;
-typedef SbtRecord<whitted::HitGroupData> HitGroupSbtRecord;
+typedef SbtRecord<RayGenData>    RayGenSbtRecord;
+typedef SbtRecord<MissData>      MissSbtRecord;
+typedef SbtRecord<HitGroupData>  HitGroupSbtRecord;
 
 
 void configureCamera( sutil::Camera& cam, const uint32_t width, const uint32_t height )
@@ -236,7 +208,6 @@ int main( int argc, char* argv[] )
         // Create module
         //
         OptixModule module = nullptr;
-        OptixModule sphere_module = nullptr;
         OptixPipelineCompileOptions pipeline_compile_options = {};
         {
             OptixModuleCompileOptions module_compile_options = {};
@@ -248,7 +219,7 @@ int main( int argc, char* argv[] )
             pipeline_compile_options.usesMotionBlur        = false;
             pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
             pipeline_compile_options.numPayloadValues      = 3;
-            pipeline_compile_options.numAttributeValues    = whitted::NUM_ATTRIBUTE_VALUES;
+            pipeline_compile_options.numAttributeValues    = NUM_ATTRIBUTE_VALUES;
             pipeline_compile_options.exceptionFlags        = OPTIX_EXCEPTION_FLAG_NONE;  // TODO: should be OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
             pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
@@ -263,17 +234,6 @@ int main( int argc, char* argv[] )
                         inputSize,
                         LOG, &LOG_SIZE,
                         &module
-                        ) );
-
-            input = sutil::getInputData( nullptr, nullptr, "sphere.cu", inputSize );
-            OPTIX_CHECK_LOG( optixModuleCreate(
-                        context,
-                        &module_compile_options,
-                        &pipeline_compile_options,
-                        input,
-                        inputSize,
-                        LOG, &LOG_SIZE,
-                        &sphere_module
                         ) );
         }
 
@@ -318,7 +278,7 @@ int main( int argc, char* argv[] )
             hitgroup_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__ch";
             hitgroup_prog_group_desc.hitgroup.moduleAH            = nullptr;
             hitgroup_prog_group_desc.hitgroup.entryFunctionNameAH = nullptr;
-            hitgroup_prog_group_desc.hitgroup.moduleIS            = sphere_module;
+            hitgroup_prog_group_desc.hitgroup.moduleIS            = module;
             hitgroup_prog_group_desc.hitgroup.entryFunctionNameIS = "__intersection__sphere";
             OPTIX_CHECK_LOG( optixProgramGroupCreate(
                         context,
@@ -350,24 +310,12 @@ int main( int argc, char* argv[] )
                         &pipeline
                         ) );
 
-            OptixStackSizes stack_sizes = {};
-            for( auto& prog_group : program_groups )
-            {
-                OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes, pipeline ) );
-            }
-
-            uint32_t direct_callable_stack_size_from_traversal;
-            uint32_t direct_callable_stack_size_from_state;
-            uint32_t continuation_stack_size;
-            OPTIX_CHECK( optixUtilComputeStackSizes( &stack_sizes, max_trace_depth,
-                                                     0,  // maxCCDepth
-                                                     0,  // maxDCDEpth
-                                                     &direct_callable_stack_size_from_traversal,
-                                                     &direct_callable_stack_size_from_state, &continuation_stack_size ) );
-            OPTIX_CHECK( optixPipelineSetStackSize( pipeline, direct_callable_stack_size_from_traversal,
-                                                    direct_callable_stack_size_from_state, continuation_stack_size,
-                                                    1  // maxTraversableDepth
-                                                    ) );
+            unsigned int ccDepth             = 0;
+            unsigned int dcDepthState        = 0;
+            unsigned int dcDepthTraversal    = 0;
+            unsigned int maxTraversableDepth = 1;
+            OPTIX_CHECK( optixPipelineSetStackSizeFromCallDepths( pipeline, max_trace_depth, ccDepth, dcDepthState,
+                                                                  dcDepthTraversal, maxTraversableDepth ) );
         }
 
         //
@@ -409,10 +357,8 @@ int main( int argc, char* argv[] )
             size_t      hitgroup_record_size = sizeof( HitGroupSbtRecord );
             CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &hitgroup_record ), hitgroup_record_size ) );
             HitGroupSbtRecord hg_sbt;
-            GeometryData::Sphere sphere = {};
-            sphere.center = { 0.0f, 0.0f, 0.0f };
-            sphere.radius = 1.5f;
-            hg_sbt.data.geometry_data.setSphere( sphere );
+            hg_sbt.data.sphere.center = { 0.0f, 0.0f, 0.0f };
+            hg_sbt.data.sphere.radius = 1.5f;
             OPTIX_CHECK( optixSbtRecordPackHeader( hitgroup_prog_group, &hg_sbt ) );
             CUDA_CHECK( cudaMemcpy(
                         reinterpret_cast<void*>( hitgroup_record ),
@@ -491,7 +437,6 @@ int main( int argc, char* argv[] )
             OPTIX_CHECK( optixProgramGroupDestroy( miss_prog_group ) );
             OPTIX_CHECK( optixProgramGroupDestroy( raygen_prog_group ) );
             OPTIX_CHECK( optixModuleDestroy( module ) );
-            OPTIX_CHECK( optixModuleDestroy( sphere_module ) );
 
             OPTIX_CHECK( optixDeviceContextDestroy( context ) );
         }

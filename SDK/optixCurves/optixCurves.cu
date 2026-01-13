@@ -1,46 +1,20 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2019 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+
 #include <optix.h>
 
 #include "optixCurves.h"
-#include <cuda/helpers.h>
-#include <random.h>
-
+#include <sutil/cuda/helpers.h>
+#include <sutil/cuda/random.h>
 #include <sutil/vec_math.h>
 
 extern "C" {
 __constant__ Params params;
 }
 
-// ROCAPS_TUNE_CURVE_PARAMETER encloses the example code for rocaps curve parameter tuning. 
+// ROCAPS_TUNE_CURVE_PARAMETER encloses the example code for rocaps curve parameter tuning.
 // #define ROCAPS_TUNE_CURVE_PARAMETER
 
 static __forceinline__ __device__ void setPayload( float3 p )
@@ -98,7 +72,7 @@ extern "C" __global__ void __raygen__basic()
     result.z = __uint_as_float( p2 );
 
     // Record results in our output raster
-    params.image[idx.y * params.image_width + idx.x] = make_color( result );
+    params.image[idx.y * params.image_width + idx.x] = sutil::make_color( result );
 }
 
 
@@ -117,10 +91,10 @@ extern "C" __global__ void __raygen__motion_blur()
     unsigned int p0, p1, p2;
     const int NUM_SAMPLES = 100;
     float3 result = {};
-    unsigned int seed = tea<4>(idx.y * dim.y + dim.x, idx.x);
+    unsigned int seed = sutil::tea<4>(idx.y * dim.y + dim.x, idx.x);
     for( int i = 0; i < NUM_SAMPLES; ++i )
     {
-        const float ray_time = rnd(seed); // compute next random ray time in [0, 1[
+        const float ray_time = sutil::rnd(seed); // compute next random ray time in [0, 1[
         optixTrace( params.handle, ray_origin, ray_direction,
                     0.0f,                        // Min intersection distance
                     1e16f,                       // Max intersection distance
@@ -137,7 +111,7 @@ extern "C" __global__ void __raygen__motion_blur()
     }
 
     // Record results in our output raster
-    params.image[idx.y * params.image_width + idx.x] = make_color( result / NUM_SAMPLES );
+    params.image[idx.y * params.image_width + idx.x] = sutil::make_color( result / NUM_SAMPLES );
 }
 
 
@@ -277,7 +251,7 @@ static __forceinline__ __device__ void capsuleTune( float4* p, float3 raypos, fl
     u = u < 0 ? 0 : u > 1 ? 1 : u;
 }
 
-static __forceinline__ __device__ void tuneCurveParameter( float&  u ) 
+static __forceinline__ __device__ void tuneCurveParameter( float&  u )
 {
     OptixPrimitiveType primType = optixGetPrimitiveType();
 

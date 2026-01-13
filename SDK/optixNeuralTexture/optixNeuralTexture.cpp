@@ -1,32 +1,6 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2019 - 2025  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <glad/glad.h> // Needs to be included before gl_interop
@@ -42,7 +16,7 @@
 
 #include <sampleConfig.h>
 
-#include <cuda/Light.h>
+#include <sutil/cuda/Light.h>
 
 #include <sutil/Camera.h>
 #include <sutil/Trackball.h>
@@ -102,8 +76,8 @@ static ntc::IContext* g_ntcContext;
 
 uint32_t g_max_reg_count = 168;
 
-struct Span 
-{ 
+struct Span
+{
     uint8_t* data;
     size_t size;
 };
@@ -467,24 +441,24 @@ void initLaunchParams( const sutil::Scene& scene )
 
     const float loffset = scene.aabb().maxExtent();
 
-    std::vector<Light> lights( 2 );
-    lights[0].type            = Light::Type::POINT;
+    std::vector<sutil::Light> lights( 2 );
+    lights[0].type            = sutil::Light::Type::POINT;
     lights[0].point.color     = { 1.0f, 1.0f, 0.8f };
     lights[0].point.intensity = 5.0f;
     lights[0].point.position  = scene.aabb().center() + make_float3( loffset );
-    lights[0].point.falloff   = Light::Falloff::QUADRATIC;
-    lights[1].type            = Light::Type::POINT;
+    lights[0].point.falloff   = sutil::Light::Falloff::QUADRATIC;
+    lights[1].type            = sutil::Light::Type::POINT;
     lights[1].point.color     = { 0.8f, 0.8f, 1.0f };
     lights[1].point.intensity = 3.0f;
     lights[1].point.position  = scene.aabb().center() + make_float3( -loffset, 0.5f * loffset, -0.5f * loffset );
-    lights[1].point.falloff   = Light::Falloff::QUADRATIC;
+    lights[1].point.falloff   = sutil::Light::Falloff::QUADRATIC;
 
     g_params.lights.count = static_cast<uint32_t>( lights.size() );
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &g_params.lights.data ), lights.size() * sizeof( Light ) ) );
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &g_params.lights.data ), lights.size() * sizeof( sutil::Light ) ) );
     CUDA_CHECK( cudaMemcpy(
         reinterpret_cast<void*>( g_params.lights.data ),
         lights.data(),
-        lights.size() * sizeof( Light ),
+        lights.size() * sizeof( sutil::Light ),
         cudaMemcpyHostToDevice
         ) );
 
@@ -626,7 +600,17 @@ OptixModule createPTXModule( OptixDeviceContext& context, OptixPipelineCompileOp
     pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
     size_t input_size = 0;
+
+#if CUDA_NVRTC_ENABLED
+    // Add libntc and CUDA include paths for NVRTC compilation
+    std::vector<const char*> compilerOptions = {CUDA_NVRTC_OPTIONS};
+    std::string libntcIncludePath = std::string( "-I" ) + SAMPLES_DIR + "/" + OPTIX_SAMPLE_DIR + "/libntc/include";
+    compilerOptions.push_back(libntcIncludePath.c_str());
+
+    const char* input = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixNeuralTextureKernel.cu", input_size, nullptr, compilerOptions );
+#else
     const char* input = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixNeuralTextureKernel.cu", input_size );
+#endif
 
     // Use the boundValues struct for our module specialization,
     // i.e., everything in boundValues should be compiled as const
@@ -781,10 +765,12 @@ OptixPipeline createPipeline(OptixDeviceContext& context, OptixPipelineCompileOp
 }
 
 
-OptixShaderBindingTable createSBT( OptixDeviceContext&                                          context,
-                                   const std::vector<std::shared_ptr<sutil::Scene::Instance>>&  instances,
-                                   const std::vector<std::shared_ptr<sutil::Scene::MeshGroup>>& meshes,
-                                   const std::vector<MaterialData>&                             materials )
+OptixShaderBindingTable createSBT(
+    OptixDeviceContext&                                          context,
+    const std::vector<std::shared_ptr<sutil::Scene::Instance>>&  instances,
+    const std::vector<std::shared_ptr<sutil::Scene::MeshGroup>>& meshes,
+    const std::vector<sutil::MaterialData>&                      materials
+)
 {
     OptixShaderBindingTable m_sbt = {};
     {
@@ -811,7 +797,6 @@ OptixShaderBindingTable createSBT( OptixDeviceContext&                          
         sutil::EmptyRecord ms_sbt[ RAY_TYPE_COUNT ];
         OPTIX_CHECK( optixSbtRecordPackHeader( g_radiance_miss_group,  &ms_sbt[0] ) );
         OPTIX_CHECK( optixSbtRecordPackHeader( g_occlusion_miss_group, &ms_sbt[1] ) );
-
         CUDA_CHECK( cudaMemcpy(
                     reinterpret_cast<void*>( m_sbt.missRecordBase ),
                     ms_sbt,
@@ -831,10 +816,10 @@ OptixShaderBindingTable createSBT( OptixDeviceContext&                          
             {
                 HitGroupRecord rec = {};
                 OPTIX_CHECK( optixSbtRecordPackHeader( g_radiance_hit_group, &rec ) );
-                GeometryData::TriangleMesh triangle_mesh = {};
+                sutil::TriangleMesh triangle_mesh = {};
                 triangle_mesh.normals                    = mesh->normals[i];
                 triangle_mesh.positions                  = mesh->positions[i];
-                for( size_t j = 0; j < GeometryData::num_texcoords; ++j )
+                for( size_t j = 0; j < sutil::TriangleMesh::num_texcoords; ++j )
                     triangle_mesh.texcoords[j] = mesh->texcoords[j][i];
                 triangle_mesh.colors  = mesh->colors[i];
                 triangle_mesh.indices = mesh->indices[i];
@@ -844,7 +829,7 @@ OptixShaderBindingTable createSBT( OptixDeviceContext&                          
                 if( mat_idx >= 0 )
                     rec.data.material_data = materials[mat_idx];
                 else
-                    rec.data.material_data = MaterialData();
+                    rec.data.material_data = sutil::MaterialData();
                 hitgroup_records.push_back( rec );
 
                 OPTIX_CHECK( optixSbtRecordPackHeader( g_occlusion_hit_group, &rec ) );
@@ -960,12 +945,12 @@ int main( int argc, char* argv[] )
 
         //
         // Initialize our pipeline & SBT, since we didn't use the scene class built-in pipeline/SBT
-        // 
+        //
         OptixPipelineCompileOptions pipeline_compile_options = {};
 
         const std::vector<std::shared_ptr<sutil::Scene::Instance>>&  instances = scene.instances();
         const std::vector<std::shared_ptr<sutil::Scene::MeshGroup>>& meshes    = scene.meshes();
-        const std::vector<MaterialData>&                             materials = scene.materials();
+        const std::vector<sutil::MaterialData>&                      materials = scene.materials();
 
         OptixModule module = createPTXModule( context, pipeline_compile_options );
         createProgramGroups( context, module );

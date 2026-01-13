@@ -57,8 +57,8 @@
 #                            date, simply touch the output file instead of
 #                            generating it.
 
-# Support IN_LIST
-cmake_policy(SET CMP0057 NEW)
+# Match main project
+cmake_policy(VERSION 3.14)
 
 if(NOT generated_file)
   message(FATAL_ERROR "You must specify generated_file on the command line")
@@ -118,20 +118,6 @@ if (nvcc_host_compiler_flags)
 endif()
 #message("nvcc_host_compiler_flags = \"${nvcc_host_compiler_flags}\"")
 
-set(depends_nvcc_host_compiler_flags "")
-foreach(flag ${CMAKE_HOST_FLAGS} )
-  # Extra quotes are added around each flag to help nvcc parse out flags with spaces.
-  if ("${depends_nvcc_host_compiler_flags}" STREQUAL "")
-    set(depends_nvcc_host_compiler_flags "\"${flag}\"")
-  else()
-    set(depends_nvcc_host_compiler_flags "${depends_nvcc_host_compiler_flags},\"${flag}\"")
-  endif()
-endforeach()
-if (depends_nvcc_host_compiler_flags)
-  set(depends_nvcc_host_compiler_flags "-Xcompiler" ${depends_nvcc_host_compiler_flags})
-endif()
-
-list(APPEND depends_CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS})
 # Add the build specific configuration flags
 list(APPEND CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS_${build_configuration}})
 
@@ -191,23 +177,10 @@ macro(cuda_execute_process status command)
   execute_process(COMMAND ${_arguments} RESULT_VARIABLE CUDA_result )
 endmacro()
 
-# For CUDA 2.3 and below, -G -M doesn't work, so remove the -G flag
-# for dependency generation and hope for the best.
 set(CUDA_VERSION @CUDA_VERSION@)
-if(CUDA_VERSION VERSION_LESS "3.0")
-  cmake_policy(PUSH)
-  # CMake policy 0007 NEW states that empty list elements are not
-  # ignored.  I'm just setting it to avoid the warning that's printed.
-  cmake_policy(SET CMP0007 NEW)
-  # Note that this will remove all occurances of -G.
-  list(REMOVE_ITEM depends_CUDA_NVCC_FLAGS "-G")
-  cmake_policy(POP)
+if(CUDA_VERSION VERSION_LESS "10.2")
+  message(SEND_ERROR "Need at least version 10.2 for the -MD flag" )
 endif()
-
-# If we need to create relocatible code, the dependency phase doesn't like this argument.
-# We need to filter it out here.
-list(REMOVE_ITEM depends_CUDA_NVCC_FLAGS "-dc")
-list(REMOVE_ITEM depends_CUDA_NVCC_FLAGS "--device-c")
 
 # nvcc doesn't define __CUDACC__ for some reason when generating dependency files.  This
 # can cause incorrect dependencies when #including files based on this macro which is
@@ -251,66 +224,6 @@ if (check_dependencies)
 endif()
 
 
-# Generate the dependency file
-cuda_execute_process(
-  "Generating dependency file: ${NVCC_generated_dependency_file}"
-  COMMAND "${CUDA_NVCC_EXECUTABLE}"
-  -M
-  ${CUDACC_DEFINE}
-  "${source_file}"
-  -o "${NVCC_generated_dependency_file}"
-  ${CCBIN}
-  ${nvcc_flags}
-  ${depends_nvcc_host_compiler_flags}
-  ${depends_CUDA_NVCC_FLAGS}
-  -DNVCC
-  ${CUDA_NVCC_INCLUDE_ARGS}
-  )
-
-if(CUDA_result)
-  message(FATAL_ERROR "Error generating ${generated_file}")
-endif()
-
-# Generate the cmake readable dependency file to a temp file.  Don't put the
-# quotes just around the filenames for the input_file and output_file variables.
-# CMake will pass the quotes through and not be able to find the file.
-cuda_execute_process(
-  "Generating temporary cmake readable file: ${cmake_dependency_file}.tmp"
-  COMMAND "${CMAKE_COMMAND}"
-  -D "input_file:FILEPATH=${NVCC_generated_dependency_file}"
-  -D "output_file:FILEPATH=${cmake_dependency_file}.tmp"
-  -P "${CUDA_make2cmake}"
-  )
-
-if(CUDA_result)
-  message(FATAL_ERROR "Error generating ${generated_file}")
-endif()
-
-# Copy the file if it is different
-cuda_execute_process(
-  "Copy if different ${cmake_dependency_file}.tmp to ${cmake_dependency_file}"
-  COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${cmake_dependency_file}.tmp" "${cmake_dependency_file}"
-  )
-
-if(CUDA_result)
-  message(FATAL_ERROR "Error generating ${generated_file}")
-endif()
-
-# Delete the temporary file
-cuda_execute_process(
-  "Removing ${cmake_dependency_file}.tmp"
-  COMMAND "${CMAKE_COMMAND}" -E remove "${cmake_dependency_file}.tmp"
-  )
-
-if(CUDA_result)
-  message(FATAL_ERROR "Error generating ${generated_file}")
-endif()
-
-if (generate_dependency_only)
-  return()
-endif()
-
-
 if(CUDA_REMOVE_GLOBAL_MEMORY_SPACE_WARNING)
   set(get_error ERROR_VARIABLE stderr)
 endif()
@@ -321,13 +234,22 @@ cuda_execute_process(
   COMMAND "${CMAKE_COMMAND}" -E remove "${generated_file}"
   )
 
+set(format_flags)
+if( generate_dependency_only )
+  # -M: --generate-dependencies
+  set(format_flags -M -MF "${NVCC_generated_dependency_file}" )
+else()
+  # -MD: --generate-dependencies-with-compile
+  set(format_flags ${format_flag} -o "${generated_file}" -MD -MF "${NVCC_generated_dependency_file}")
+endif()
+
 # Generate the code
 cuda_execute_process(
   "Generating ${generated_file}"
   COMMAND "${CUDA_NVCC_EXECUTABLE}"
   "${source_file}"
   ${cuda_language_flag}
-  ${format_flag} -o "${generated_file}"
+  ${format_flags}
   ${CCBIN}
   ${nvcc_flags}
   ${nvcc_host_compiler_flags}
@@ -370,6 +292,41 @@ else()
   if(verbose)
     message("Generated ${generated_file} successfully.")
   endif()
+endif()
+
+# Generate the cmake readable dependency file to a temp file.  Don't put the
+# quotes just around the filenames for the input_file and output_file variables.
+# CMake will pass the quotes through and not be able to find the file.
+cuda_execute_process(
+  "Generating temporary cmake readable file: ${cmake_dependency_file}.tmp"
+  COMMAND "${CMAKE_COMMAND}"
+  -D "input_file:FILEPATH=${NVCC_generated_dependency_file}"
+  -D "output_file:FILEPATH=${cmake_dependency_file}.tmp"
+  -P "${CUDA_make2cmake}"
+  )
+
+if(CUDA_result)
+  message(FATAL_ERROR "Error generating ${generated_file}")
+endif()
+
+# Copy the file if it is different
+cuda_execute_process(
+  "Copy if different ${cmake_dependency_file}.tmp to ${cmake_dependency_file}"
+  COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${cmake_dependency_file}.tmp" "${cmake_dependency_file}"
+  )
+
+if(CUDA_result)
+  message(FATAL_ERROR "Error generating ${generated_file}")
+endif()
+
+# Delete the temporary file
+cuda_execute_process(
+  "Removing ${cmake_dependency_file}.tmp"
+  COMMAND "${CMAKE_COMMAND}" -E remove "${cmake_dependency_file}.tmp"
+  )
+
+if(CUDA_result)
+  message(FATAL_ERROR "Error generating ${generated_file}")
 endif()
 
 # Cubin resource report commands.

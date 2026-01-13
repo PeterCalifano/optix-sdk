@@ -1,32 +1,6 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2019 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <glad/glad.h>  // Needs to be included before gl_interop
@@ -93,9 +67,9 @@ struct Record
     T data;
 };
 
-typedef Record<RayGenData>          RayGenRecord;
-typedef Record<MissData>            MissRecord;
-typedef Record<CutoutsHitGroupData> HitGroupRecord;
+typedef Record<RayGenData>   RayGenRecord;
+typedef Record<MissData>     MissRecord;
+typedef Record<HitGroupData> HitGroupRecord;
 
 
 struct Vertex
@@ -127,7 +101,6 @@ struct CutoutsState
     CUdeviceptr            d_ias_output_buffer = 0;  // Instance AS memory
 
     OptixModule module        = 0;
-    OptixModule sphere_module = 0;
 
     OptixPipelineCompileOptions pipeline_compile_options = {};
     OptixPipeline               pipeline                 = 0;
@@ -412,9 +385,9 @@ const std::array<float2, TRIANGLE_COUNT* 3> g_tex_coords =
 } };
 
 
-const GeometryData::Sphere g_sphere                = {410.0f, 90.0f, 110.0f, 90.0f};
-const float3               g_sphere_emission_color = {0.0f};
-const float3               g_sphere_diffuse_color  = {0.1f, 0.2f, 0.8f};
+const sutil::Sphere g_sphere                = {410.0f, 90.0f, 110.0f, 90.0f};
+const float3        g_sphere_emission_color = {0.0f};
+const float3        g_sphere_diffuse_color  = {0.1f, 0.2f, 0.8f};
 
 // decl
 void buildInstanceAccel( CutoutsState& state );
@@ -1153,22 +1126,22 @@ void buildCheckerboardOpacityMicromap( CutoutsState& state )
     // this is fairly simple, two OMMs, both with the same layout
     std::vector<OptixOpacityMicromapDesc> ommDescs =
     {
-        { 
+        {
             0,
-            CHECKERBOARD_OMM_SUBDIV_LEVEL, 
-            OPTIX_OPACITY_MICROMAP_FORMAT_2_STATE 
-        },
-        { 
-            static_cast<unsigned int>(ommDataCheckerboard[0].size() * sizeof(unsigned short) ), 
             CHECKERBOARD_OMM_SUBDIV_LEVEL,
             OPTIX_OPACITY_MICROMAP_FORMAT_2_STATE
         },
-        { 
+        {
+            static_cast<unsigned int>(ommDataCheckerboard[0].size() * sizeof(unsigned short) ),
+            CHECKERBOARD_OMM_SUBDIV_LEVEL,
+            OPTIX_OPACITY_MICROMAP_FORMAT_2_STATE
+        },
+        {
             omm_data_checkerboard_size_in_bytes,
             CIRCLE_OMM_SUBDIV_LEVEL,
             OPTIX_OPACITY_MICROMAP_FORMAT_4_STATE
         },
-        { 
+        {
             static_cast<unsigned int>(omm_data_checkerboard_size_in_bytes + ommDataCircle[0].size() * sizeof(unsigned short) ),
             CIRCLE_OMM_SUBDIV_LEVEL,
             OPTIX_OPACITY_MICROMAP_FORMAT_4_STATE
@@ -1285,7 +1258,7 @@ void createModule( CutoutsState& state )
     state.pipeline_compile_options.usesMotionBlur        = false;
     state.pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING;
     state.pipeline_compile_options.numPayloadValues      = 2;
-    state.pipeline_compile_options.numAttributeValues    = whitted::NUM_ATTRIBUTE_VALUES;
+    state.pipeline_compile_options.numAttributeValues    = NUM_ATTRIBUTE_VALUES;
     state.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
     state.pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
     state.pipeline_compile_options.allowOpacityMicromaps            = 1;
@@ -1300,17 +1273,6 @@ void createModule( CutoutsState& state )
                 inputSize,
                 LOG, &LOG_SIZE,
                 &state.module
-                ) );
-
-    input = sutil::getInputData( nullptr, nullptr, "sphere.cu", inputSize );
-    OPTIX_CHECK_LOG( optixModuleCreate(
-                state.context,
-                &module_compile_options,
-                &state.pipeline_compile_options,
-                input,
-                inputSize,
-                LOG, &LOG_SIZE,
-                &state.sphere_module
                 ) );
 }
 
@@ -1364,7 +1326,7 @@ void createProgramGroups( CutoutsState& state )
     }
     {
         hit_prog_group_desc.hitgroup.entryFunctionNameAH = "__anyhit__ah_checkerboard";
-        hit_prog_group_desc.hitgroup.moduleIS            = state.sphere_module;
+        hit_prog_group_desc.hitgroup.moduleIS            = state.module;
         hit_prog_group_desc.hitgroup.entryFunctionNameIS = "__intersection__sphere";
         OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context, &hit_prog_group_desc,
                                                   1,  // num program groups
@@ -1398,24 +1360,12 @@ void createPipeline( CutoutsState& state )
                                           LOG, &LOG_SIZE,
                                           &state.pipeline ) );
 
-    OptixStackSizes stack_sizes = {};
-    for( auto& prog_group : program_groups )
-    {
-        OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes, state.pipeline ) );
-    }
-
-    uint32_t direct_callable_stack_size_from_traversal;
-    uint32_t direct_callable_stack_size_from_state;
-    uint32_t continuation_stack_size;
-    OPTIX_CHECK( optixUtilComputeStackSizes( &stack_sizes, max_trace_depth,
-                                             0,  // maxCCDepth
-                                             0,  // maxDCDEpth
-                                             &direct_callable_stack_size_from_traversal,
-                                             &direct_callable_stack_size_from_state, &continuation_stack_size ) );
-    OPTIX_CHECK( optixPipelineSetStackSize( state.pipeline, direct_callable_stack_size_from_traversal,
-                                            direct_callable_stack_size_from_state, continuation_stack_size,
-                                            2  // maxTraversableDepth
-                                            ) );
+    unsigned int ccDepth             = 0;
+    unsigned int dcDepthState        = 0;
+    unsigned int dcDepthTraversal    = 0;
+    unsigned int maxTraversableDepth = 2;
+    OPTIX_CHECK( optixPipelineSetStackSizeFromCallDepths( state.pipeline, max_trace_depth, ccDepth, dcDepthState,
+                                                          dcDepthTraversal, maxTraversableDepth ) );
 }
 
 
@@ -1484,7 +1434,7 @@ void createSBT( CutoutsState& state )
         OPTIX_CHECK( optixSbtRecordPackHeader( state.sphere_checkerboard_hit_group, &hitgroup_records[sbt_idx] ) );
         hitgroup_records[sbt_idx].data.emission_color = g_sphere_emission_color;
         hitgroup_records[sbt_idx].data.diffuse_color  = g_sphere_diffuse_color;
-        hitgroup_records[sbt_idx].data.geometry_data.setSphere( g_sphere );
+        hitgroup_records[sbt_idx].data.sphere         = g_sphere;
     }
 
     CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( d_hitgroup_records ), hitgroup_records,
@@ -1511,7 +1461,6 @@ void cleanupState( CutoutsState& state )
     OPTIX_CHECK( optixProgramGroupDestroy( state.sphere_checkerboard_hit_group ) );
     OPTIX_CHECK( optixProgramGroupDestroy( state.occlusion_miss_group ) );
     OPTIX_CHECK( optixModuleDestroy( state.module ) );
-    OPTIX_CHECK( optixModuleDestroy( state.sphere_module ) );
     OPTIX_CHECK( optixDeviceContextDestroy( state.context ) );
 
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( state.sbt.raygenRecord ) ) );

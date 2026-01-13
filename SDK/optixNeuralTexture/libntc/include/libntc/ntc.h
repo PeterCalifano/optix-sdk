@@ -12,8 +12,17 @@
 
 #pragma once
 
+#ifdef __CUDACC_RTC__
+// For NVRTC compilation - define the types manually since standard headers aren't available
+typedef unsigned char      uint8_t;
+typedef unsigned int       uint32_t;
+typedef unsigned long long uint64_t;
+typedef signed char        int8_t;
+typedef signed int         int32_t;
+#else
 #include <cstdint>
 #include <cstddef>
+#endif
 
 #ifdef NTC_BUILD_SHARED
     #ifdef _MSC_VER
@@ -37,7 +46,7 @@ namespace ntc
 {
 
 // Update the interface version whenever changes to the LibNTC API are made.
-constexpr uint32_t InterfaceVersion = 0x24'11'27'00; // Year, month, day, ordinal
+constexpr uint32_t InterfaceVersion = 0x24112700; // Year, month, day, ordinal
 
 enum class Status
 { 
@@ -107,6 +116,10 @@ struct StreamRange
 {
     uint64_t offset = 0;
     uint64_t size = 0;
+    
+    // Add constexpr constructors for C++ literal type compatibility
+    constexpr StreamRange() : offset(0), size(0) {}
+    constexpr StreamRange(uint64_t o, uint64_t s) : offset(o), size(s) {}
 };
 
 constexpr StreamRange EntireStream = StreamRange{0, ~0ull};
@@ -125,6 +138,11 @@ struct LatentShape
     int lowResFeatures = 16;
     int highResQuantBits = 2;
     int lowResQuantBits = 4;
+    
+    // Add constexpr constructors for C++ literal type compatibility
+    constexpr LatentShape() = default;
+    constexpr LatentShape(int _gridSizeScale, int _highResFeatures, int _lowResFeatures, int _highResQuantBits, int _lowResQuantBits) 
+        : gridSizeScale(_gridSizeScale), highResFeatures(_highResFeatures), lowResFeatures(_lowResFeatures), highResQuantBits(_highResQuantBits), lowResQuantBits(_lowResQuantBits) {}
 
     bool operator==(const LatentShape& other) const
     {

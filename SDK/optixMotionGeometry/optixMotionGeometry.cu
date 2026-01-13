@@ -1,41 +1,15 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2021 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <optix.h>
 
 #include "optixMotionGeometry.h"
-#include "random.h"
 
 #include <sutil/vec_math.h>
-#include <cuda/helpers.h>
+#include <sutil/cuda/helpers.h>
+#include <sutil/cuda/random.h>
 
 constexpr unsigned int SBT_STRIDE_COLLAPSE = 0;
 
@@ -177,19 +151,19 @@ extern "C" __global__ void __raygen__rg()
     const float3 W = params.W;
 
     Payload payload;
-    payload.cseed.seed = tea<4>( idx.y * dim.x + idx.x, 12346789 + params.subframe_index );
+    payload.cseed.seed = sutil::tea<4>( idx.y * dim.x + idx.x, 12346789 + params.subframe_index );
 
     float3 final_c = make_float3( 0 );
 #pragma unroll 1
     for( int x = 1; x <= params.spp; ++x )
     {
         const float2 d = 2.0f * make_float2(
-            ( static_cast< float >( idx.x ) + rnd( payload.cseed.seed ) ) / static_cast< float >( dim.x ),
-            ( static_cast< float >( idx.y ) + rnd( payload.cseed.seed ) ) / static_cast< float >( dim.y )
+            ( static_cast< float >( idx.x ) + sutil::rnd( payload.cseed.seed ) ) / static_cast< float >( dim.x ),
+            ( static_cast< float >( idx.y ) + sutil::rnd( payload.cseed.seed ) ) / static_cast< float >( dim.y )
         ) - 1.0f;
         float3 direction = normalize( d.x * U + d.y * V + W );
 
-        float time = rnd( payload.cseed.seed );
+        float time = sutil::rnd( payload.cseed.seed );
 
         payload.cseed.c = make_float3( 0.5f, 0.5f, 0.5f );
         trace( params.handle,
@@ -202,7 +176,7 @@ extern "C" __global__ void __raygen__rg()
         final_c += payload.cseed.c;
     }
     final_c /= params.spp;
-    params.frame_buffer[idx.y * params.width + idx.x] = make_color( final_c );
+    params.frame_buffer[idx.y * params.width + idx.x] = sutil::make_color( final_c );
 }
 
 
@@ -243,8 +217,8 @@ extern "C" __global__ void __closesthit__ch()
     float shade = 1.0f;
     if( params.ao )
     {
-        const float z1 = rnd( p.cseed.seed );
-        const float z2 = rnd( p.cseed.seed );
+        const float z1 = sutil::rnd( p.cseed.seed );
+        const float z2 = sutil::rnd( p.cseed.seed );
 
         unsigned int occluded = 1;
         float3 w_in;

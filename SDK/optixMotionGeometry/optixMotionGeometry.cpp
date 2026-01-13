@@ -1,32 +1,6 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2021 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <glad/glad.h>  // Needs to be included before gl_interop
@@ -567,7 +541,7 @@ void addFume( MotionGeometryState& state )
     fume.lastRotationDegree = plane.lastRotationDegree;
     fume.relativeEjectionSpeed = randf() * 0.4f + 0.6f;
 
-    // using an array is overkill here, but 
+    // using an array is overkill here, but
     fume.srt_animation = SRTMotionTransformArray( 1, 2 );
     CUDA_CHECK( cudaMalloc( (void**)&fume.d_srt, fume.srt_animation.byteSize() ) );
 
@@ -909,7 +883,7 @@ void buildMergedGAS( MotionGeometryState& state, const sutil::Scene& scene, CUde
 
         assert( mesh->positions.size() == num_subMeshes && mesh->normals.size() == num_subMeshes && mesh->colors.size() == num_subMeshes );
 
-        for( size_t j = 0; j < GeometryData::num_texcoords; ++j )
+        for( size_t j = 0; j < sutil::TriangleMesh::num_texcoords; ++j )
             assert( mesh->texcoords[j].size() == num_subMeshes );
 
         for( size_t j = 0; j < num_subMeshes; ++j )
@@ -1412,7 +1386,7 @@ void createPipeline( MotionGeometryState& state )
     };
 
     OptixPipelineLinkOptions pipeline_link_options = {};
-    pipeline_link_options.maxTraceDepth            = 20;
+    pipeline_link_options.maxTraceDepth            = 2;  // Primary ray + AO secondary ray
 
     OPTIX_CHECK_LOG( optixPipelineCreate(
         state.context,
@@ -1424,40 +1398,13 @@ void createPipeline( MotionGeometryState& state )
         &state.pipeline
     ) );
 
-    // We need to specify the max traversal depth.  Calculate the stack sizes, so we can specify all
-    // parameters to optixPipelineSetStackSize.
-    OptixStackSizes stack_sizes = {};
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.raygen_prog_group, &stack_sizes, state.pipeline ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.miss_group, &stack_sizes, state.pipeline ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.miss_group_occlusion, &stack_sizes, state.pipeline ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.hit_group, &stack_sizes, state.pipeline ) );
-
-    uint32_t max_trace_depth = pipeline_link_options.maxTraceDepth;
-    uint32_t max_cc_depth = 0;
-    uint32_t max_dc_depth = 0;
-    uint32_t direct_callable_stack_size_from_traversal;
-    uint32_t direct_callable_stack_size_from_state;
-    uint32_t continuation_stack_size;
-    OPTIX_CHECK( optixUtilComputeStackSizes(
-        &stack_sizes,
-        max_trace_depth,
-        max_cc_depth,
-        max_dc_depth,
-        &direct_callable_stack_size_from_traversal,
-        &direct_callable_stack_size_from_state,
-        &continuation_stack_size
-    ) );
-
-    // This is 4 since the largest depth is IAS->MT->MT->GAS
-    const uint32_t max_traversable_graph_depth = 4;
-
-    OPTIX_CHECK( optixPipelineSetStackSize(
-        state.pipeline,
-        direct_callable_stack_size_from_traversal,
-        direct_callable_stack_size_from_state,
-        continuation_stack_size,
-        max_traversable_graph_depth
-    ) );
+    uint32_t maxTraceDepth                       = pipeline_link_options.maxTraceDepth;
+    uint32_t maxContinuationCallableDepth        = 0;  // No continuation callables used
+    uint32_t maxDirectCallableDepthFromState     = 0;  // No direct callables used
+    uint32_t maxDirectCallableDepthFromTraversal = 0;  // No direct callables used
+    uint32_t maxTraversableGraphDepth            = 4;  // IAS->MT->MT->GAS
+    OPTIX_CHECK( optixPipelineSetStackSizeFromCallDepths( state.pipeline, maxTraceDepth, maxContinuationCallableDepth, maxDirectCallableDepthFromState,
+                                                          maxDirectCallableDepthFromTraversal, maxTraversableGraphDepth ) );
 }
 
 

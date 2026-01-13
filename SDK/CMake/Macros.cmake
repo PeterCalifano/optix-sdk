@@ -1063,3 +1063,27 @@ macro( optixSharedLibraryResources outputName )
     source_group( Resources FILES ${resourceFiles} )
   endif()
 endmacro()
+
+################################################################
+# Function that compares an SM architecture string with another number
+# and returns the larger value
+#
+# Parameters:
+#   SM_VAR     - Input variable containing "sm_<num>" format
+#   COMPARE_TO - Number to compare with
+#   RESULT_VAR - Output variable to store the larger number
+#
+function(compare_sm_value SM_VAR COMPARE_TO RESULT_VAR)
+  # Extract the number part after "sm_"
+  string(REGEX REPLACE "sm_([0-9]+)" "\\1" SM_NUM "${SM_VAR}")
+
+  # Convert to number (in case there are leading zeros)
+  math(EXPR SM_NUM "${SM_NUM}")
+
+  # Compare and set the result to the larger value
+  if(SM_NUM GREATER COMPARE_TO)
+    set(${RESULT_VAR} sm_${SM_NUM} PARENT_SCOPE)
+  else()
+    set(${RESULT_VAR} sm_${COMPARE_TO} PARENT_SCOPE)
+  endif()
+endfunction()

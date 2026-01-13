@@ -1,32 +1,6 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2019 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <glad/glad.h> // Needs to be included before gl_interop
@@ -40,8 +14,6 @@
 #include <optix_stubs.h>
 
 #include <sampleConfig.h>
-
-#include <cuda/whitted.h>
 
 #include <sutil/Camera.h>
 #include <sutil/Trackball.h>
@@ -57,6 +29,7 @@
 #include <iomanip>
 #include <cstring>
 
+#include "optixWhitted.h"
 
 //------------------------------------------------------------------------------
 //
@@ -83,7 +56,7 @@ const int         max_trace = 12;
 // TODO: some of these should move to sutil or optix util header
 //
 //------------------------------------------------------------------------------
-typedef sutil::Record<whitted::HitGroupData> HitGroupRecord;
+typedef sutil::Record<HitGroupData> HitGroupRecord;
 
 const uint32_t OBJ_COUNT = 3;
 
@@ -93,10 +66,7 @@ struct WhittedState
     OptixTraversableHandle      gas_handle                = {};
     CUdeviceptr                 d_gas_output_buffer       = {};
 
-    OptixModule                 geometry_module           = 0;
-    OptixModule                 camera_module             = 0;
-    OptixModule                 shading_module            = 0;
-    OptixModule                 sphere_module             = 0;
+    OptixModule                 module            = 0;
 
     OptixProgramGroup           raygen_prog_group         = 0;
     OptixProgramGroup           radiance_miss_prog_group  = 0;
@@ -112,8 +82,8 @@ struct WhittedState
     OptixPipelineCompileOptions pipeline_compile_options  = {};
 
     CUstream                    stream                    = 0;
-    whitted::LaunchParams       params;
-    whitted::LaunchParams*      d_params                  = nullptr;
+    LaunchParams                params;
+    LaunchParams*               d_params                  = nullptr;
 
     OptixShaderBindingTable     sbt                       = {};
 };
@@ -125,16 +95,16 @@ struct WhittedState
 //------------------------------------------------------------------------------
 
 // Metal sphere, glass sphere, floor
-const GeometryData::Sphere g_sphere = {
+const sutil::Sphere g_sphere = {
     { 2.0f, 1.5f, -2.5f }, // center
     1.0f                   // radius
 };
-const GeometryData::SphereShell g_sphere_shell = {
+const sutil::SphereShell g_sphere_shell = {
     { 4.0f, 2.3f, -4.0f }, // center
     0.96f,                 // radius1
     1.0f                   // radius2
 };
-const GeometryData::Parallelogram g_floor(
+const sutil::Parallelogram g_floor(
     make_float3( 32.0f, 0.0f, 0.0f ),    // v1
     make_float3( 0.0f, 0.0f, 16.0f ),    // v2
     make_float3( -16.0f, 0.01f, -8.0f )  // anchor
@@ -165,7 +135,7 @@ static void mouseButtonCallback( GLFWwindow* window, int button, int action, int
 
 static void cursorPosCallback( GLFWwindow* window, double xpos, double ypos )
 {
-    whitted::LaunchParams* params = static_cast<whitted::LaunchParams*>( glfwGetWindowUserPointer( window ) );
+    LaunchParams* params = static_cast<LaunchParams*>( glfwGetWindowUserPointer( window ) );
 
     if( mouse_button == GLFW_MOUSE_BUTTON_LEFT )
     {
@@ -191,7 +161,7 @@ static void windowSizeCallback( GLFWwindow* window, int32_t res_x, int32_t res_y
     // Output dimensions must be at least 1 in both x and y.
     sutil::ensureMinimumSize( res_x, res_y );
 
-    whitted::LaunchParams* params = static_cast<whitted::LaunchParams*>( glfwGetWindowUserPointer( window ) );
+    LaunchParams* params = static_cast<LaunchParams*>( glfwGetWindowUserPointer( window ) );
     params->width  = res_x;
     params->height = res_y;
     camera_changed = true;
@@ -259,26 +229,26 @@ void initLaunchParams( WhittedState& state )
     state.params.subframe_index = 0u;
 
     // Set ambient light color and point light position
-    std::vector<Light> lights( 2 );
-    lights[0].type            = Light::Type::AMBIENT;
+    std::vector<sutil::Light> lights( 2 );
+    lights[0].type            = sutil::Light::Type::AMBIENT;
     lights[0].ambient.color   = make_float3( 0.4f, 0.4f, 0.4f );
-    lights[1].type            = Light::Type::POINT;
+    lights[1].type            = sutil::Light::Type::POINT;
     lights[1].point.color     = make_float3( 1.0f, 1.0f, 1.0f );
     lights[1].point.intensity = 1.0f;
     lights[1].point.position  = make_float3( 60.0f, 40.0f, 0.0f );
-    lights[1].point.falloff   = Light::Falloff::QUADRATIC;
+    lights[1].point.falloff   = sutil::Light::Falloff::QUADRATIC;
 
     state.params.lights.count = static_cast<unsigned int>( lights.size() );
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &state.params.lights.data ), lights.size() * sizeof( Light ) ) );
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &state.params.lights.data ), lights.size() * sizeof( sutil::Light ) ) );
     CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( state.params.lights.data ), lights.data(),
-                            lights.size() * sizeof( Light ), cudaMemcpyHostToDevice ) );
+                            lights.size() * sizeof( sutil::Light ), cudaMemcpyHostToDevice ) );
     state.params.miss_color = { 0.34f, 0.55f, 0.85f };
 
     state.params.max_depth = max_trace;
     state.params.scene_epsilon = 1.e-4f;
 
     CUDA_CHECK( cudaStreamCreate( &state.stream ) );
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &state.d_params ), sizeof( whitted::LaunchParams ) ) );
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &state.d_params ), sizeof( LaunchParams ) ) );
 
     state.params.handle = state.gas_handle;
 }
@@ -461,7 +431,7 @@ void createModules( WhittedState &state )
 
     {
         size_t      inputSize = 0;
-        const char* input     = sutil::getInputData( nullptr, nullptr, "geometry.cu", inputSize );
+        const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixWhitted.cu", inputSize );
         OPTIX_CHECK_LOG( optixModuleCreate(
             state.context,
             &module_compile_options,
@@ -469,46 +439,7 @@ void createModules( WhittedState &state )
             input,
             inputSize,
             LOG, &LOG_SIZE,
-            &state.geometry_module ) );
-    }
-
-    {
-        size_t      inputSize = 0;
-        const char* input     = sutil::getInputData( nullptr, nullptr, "camera.cu", inputSize );
-        OPTIX_CHECK_LOG( optixModuleCreate(
-            state.context,
-            &module_compile_options,
-            &state.pipeline_compile_options,
-            input,
-            inputSize,
-            LOG, &LOG_SIZE,
-            &state.camera_module ) );
-    }
-
-    {
-        size_t      inputSize = 0;
-        const char* input     = sutil::getInputData( nullptr, nullptr, "shading.cu", inputSize );
-        OPTIX_CHECK_LOG( optixModuleCreate(
-            state.context,
-            &module_compile_options,
-            &state.pipeline_compile_options,
-            input,
-            inputSize,
-            LOG, &LOG_SIZE,
-            &state.shading_module ) );
-    }
-
-    {
-        size_t      inputSize = 0;
-        const char* input     = sutil::getInputData( nullptr, nullptr, "sphere.cu", inputSize );
-        OPTIX_CHECK_LOG( optixModuleCreate(
-            state.context,
-            &module_compile_options,
-            &state.pipeline_compile_options,
-            input,
-            inputSize,
-            LOG, &LOG_SIZE,
-            &state.sphere_module ) );
+            &state.module ) );
     }
 }
 
@@ -518,7 +449,7 @@ static void createCameraProgram( WhittedState &state, std::vector<OptixProgramGr
     OptixProgramGroupOptions    cam_prog_group_options = {};
     OptixProgramGroupDesc       cam_prog_group_desc = {};
     cam_prog_group_desc.kind = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
-    cam_prog_group_desc.raygen.module = state.camera_module;
+    cam_prog_group_desc.raygen.module = state.module;
     cam_prog_group_desc.raygen.entryFunctionName = "__raygen__pinhole_camera";
 
     OPTIX_CHECK_LOG( optixProgramGroupCreate(
@@ -539,9 +470,9 @@ static void createGlassSphereProgram( WhittedState &state, std::vector<OptixProg
     OptixProgramGroupOptions    radiance_sphere_prog_group_options = {};
     OptixProgramGroupDesc       radiance_sphere_prog_group_desc = {};
     radiance_sphere_prog_group_desc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-    radiance_sphere_prog_group_desc.hitgroup.moduleIS            = state.geometry_module;
+    radiance_sphere_prog_group_desc.hitgroup.moduleIS            = state.module;
     radiance_sphere_prog_group_desc.hitgroup.entryFunctionNameIS = "__intersection__sphere_shell";
-    radiance_sphere_prog_group_desc.hitgroup.moduleCH            = state.shading_module;
+    radiance_sphere_prog_group_desc.hitgroup.moduleCH            = state.module;
     radiance_sphere_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__glass_radiance";
     radiance_sphere_prog_group_desc.hitgroup.moduleAH            = nullptr;
     radiance_sphere_prog_group_desc.hitgroup.entryFunctionNameAH = nullptr;
@@ -561,11 +492,11 @@ static void createGlassSphereProgram( WhittedState &state, std::vector<OptixProg
     OptixProgramGroupOptions    occlusion_sphere_prog_group_options = {};
     OptixProgramGroupDesc       occlusion_sphere_prog_group_desc = {};
     occlusion_sphere_prog_group_desc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-    occlusion_sphere_prog_group_desc.hitgroup.moduleIS            = state.geometry_module;
+    occlusion_sphere_prog_group_desc.hitgroup.moduleIS            = state.module;
     occlusion_sphere_prog_group_desc.hitgroup.entryFunctionNameIS = "__intersection__sphere_shell";
     occlusion_sphere_prog_group_desc.hitgroup.moduleCH            = nullptr;
     occlusion_sphere_prog_group_desc.hitgroup.entryFunctionNameCH = nullptr;
-    occlusion_sphere_prog_group_desc.hitgroup.moduleAH            = state.shading_module;
+    occlusion_sphere_prog_group_desc.hitgroup.moduleAH            = state.module;
     occlusion_sphere_prog_group_desc.hitgroup.entryFunctionNameAH = "__anyhit__glass_occlusion";
 
     OPTIX_CHECK_LOG( optixProgramGroupCreate(
@@ -586,9 +517,9 @@ static void createMetalSphereProgram( WhittedState &state, std::vector<OptixProg
     OptixProgramGroupOptions    radiance_sphere_prog_group_options = {};
     OptixProgramGroupDesc       radiance_sphere_prog_group_desc = {};
     radiance_sphere_prog_group_desc.kind   = OPTIX_PROGRAM_GROUP_KIND_HITGROUP,
-        radiance_sphere_prog_group_desc.hitgroup.moduleIS           = state.sphere_module;
+        radiance_sphere_prog_group_desc.hitgroup.moduleIS           = state.module;
     radiance_sphere_prog_group_desc.hitgroup.entryFunctionNameIS    = "__intersection__sphere";
-    radiance_sphere_prog_group_desc.hitgroup.moduleCH               = state.shading_module;
+    radiance_sphere_prog_group_desc.hitgroup.moduleCH               = state.module;
     radiance_sphere_prog_group_desc.hitgroup.entryFunctionNameCH    = "__closesthit__metal_radiance";
     radiance_sphere_prog_group_desc.hitgroup.moduleAH               = nullptr;
     radiance_sphere_prog_group_desc.hitgroup.entryFunctionNameAH    = nullptr;
@@ -608,9 +539,9 @@ static void createMetalSphereProgram( WhittedState &state, std::vector<OptixProg
     OptixProgramGroupOptions    occlusion_sphere_prog_group_options = {};
     OptixProgramGroupDesc       occlusion_sphere_prog_group_desc = {};
     occlusion_sphere_prog_group_desc.kind   = OPTIX_PROGRAM_GROUP_KIND_HITGROUP,
-        occlusion_sphere_prog_group_desc.hitgroup.moduleIS           = state.sphere_module;
+        occlusion_sphere_prog_group_desc.hitgroup.moduleIS           = state.module;
     occlusion_sphere_prog_group_desc.hitgroup.entryFunctionNameIS    = "__intersection__sphere";
-    occlusion_sphere_prog_group_desc.hitgroup.moduleCH               = state.shading_module;
+    occlusion_sphere_prog_group_desc.hitgroup.moduleCH               = state.module;
     occlusion_sphere_prog_group_desc.hitgroup.entryFunctionNameCH    = "__closesthit__full_occlusion";
     occlusion_sphere_prog_group_desc.hitgroup.moduleAH               = nullptr;
     occlusion_sphere_prog_group_desc.hitgroup.entryFunctionNameAH    = nullptr;
@@ -633,9 +564,9 @@ static void createFloorProgram( WhittedState &state, std::vector<OptixProgramGro
     OptixProgramGroupOptions    radiance_floor_prog_group_options = {};
     OptixProgramGroupDesc       radiance_floor_prog_group_desc = {};
     radiance_floor_prog_group_desc.kind   = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-    radiance_floor_prog_group_desc.hitgroup.moduleIS               = state.geometry_module;
+    radiance_floor_prog_group_desc.hitgroup.moduleIS               = state.module;
     radiance_floor_prog_group_desc.hitgroup.entryFunctionNameIS    = "__intersection__parallelogram";
-    radiance_floor_prog_group_desc.hitgroup.moduleCH               = state.shading_module;
+    radiance_floor_prog_group_desc.hitgroup.moduleCH               = state.module;
     radiance_floor_prog_group_desc.hitgroup.entryFunctionNameCH    = "__closesthit__checker_radiance";
     radiance_floor_prog_group_desc.hitgroup.moduleAH               = nullptr;
     radiance_floor_prog_group_desc.hitgroup.entryFunctionNameAH    = nullptr;
@@ -655,9 +586,9 @@ static void createFloorProgram( WhittedState &state, std::vector<OptixProgramGro
     OptixProgramGroupOptions    occlusion_floor_prog_group_options = {};
     OptixProgramGroupDesc       occlusion_floor_prog_group_desc = {};
     occlusion_floor_prog_group_desc.kind   = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-    occlusion_floor_prog_group_desc.hitgroup.moduleIS               = state.geometry_module;
+    occlusion_floor_prog_group_desc.hitgroup.moduleIS               = state.module;
     occlusion_floor_prog_group_desc.hitgroup.entryFunctionNameIS    = "__intersection__parallelogram";
-    occlusion_floor_prog_group_desc.hitgroup.moduleCH               = state.shading_module;
+    occlusion_floor_prog_group_desc.hitgroup.moduleCH               = state.module;
     occlusion_floor_prog_group_desc.hitgroup.entryFunctionNameCH    = "__closesthit__full_occlusion";
     occlusion_floor_prog_group_desc.hitgroup.moduleAH               = nullptr;
     occlusion_floor_prog_group_desc.hitgroup.entryFunctionNameAH    = nullptr;
@@ -679,7 +610,7 @@ static void createMissProgram( WhittedState &state, std::vector<OptixProgramGrou
     OptixProgramGroupOptions    miss_prog_group_options = {};
     OptixProgramGroupDesc       miss_prog_group_desc = {};
     miss_prog_group_desc.kind   = OPTIX_PROGRAM_GROUP_KIND_MISS;
-    miss_prog_group_desc.miss.module             = state.shading_module;
+    miss_prog_group_desc.miss.module             = state.module;
     miss_prog_group_desc.miss.entryFunctionName  = "__miss__constant_bg";
 
     OPTIX_CHECK_LOG( optixProgramGroupCreate(
@@ -789,27 +720,27 @@ void createSBT( WhittedState &state )
         size_t sizeof_miss_record = sizeof( sutil::EmptyRecord );
         CUDA_CHECK( cudaMalloc(
             reinterpret_cast<void**>( &d_miss_record ),
-            sizeof_miss_record*whitted::RAY_TYPE_COUNT ) );
+            sizeof_miss_record*RAY_TYPE_COUNT ) );
 
-        sutil::EmptyRecord ms_sbt[whitted::RAY_TYPE_COUNT];
+        sutil::EmptyRecord ms_sbt[RAY_TYPE_COUNT];
         optixSbtRecordPackHeader( state.radiance_miss_prog_group, &ms_sbt[0] );
         optixSbtRecordPackHeader( state.occlusion_miss_prog_group, &ms_sbt[1] );
 
         CUDA_CHECK( cudaMemcpy(
             reinterpret_cast<void*>( d_miss_record ),
             ms_sbt,
-            sizeof_miss_record*whitted::RAY_TYPE_COUNT,
+            sizeof_miss_record*RAY_TYPE_COUNT,
             cudaMemcpyHostToDevice
         ) );
 
         state.sbt.missRecordBase          = d_miss_record;
-        state.sbt.missRecordCount         = whitted::RAY_TYPE_COUNT;
+        state.sbt.missRecordCount         = RAY_TYPE_COUNT;
         state.sbt.missRecordStrideInBytes = static_cast<uint32_t>( sizeof_miss_record );
     }
 
     // Hitgroup program record
     {
-        const size_t count_records = whitted::RAY_TYPE_COUNT * OBJ_COUNT;
+        const size_t count_records = RAY_TYPE_COUNT * OBJ_COUNT;
         HitGroupRecord hitgroup_records[count_records];
 
         // Note: Fill SBT record array the same order like AS is built.
@@ -959,7 +890,7 @@ void handleCameraUpdate( WhittedState &state )
     camera.UVWFrame( state.params.U, state.params.V, state.params.W );
 }
 
-void handleResize( sutil::CUDAOutputBuffer<uchar4>& output_buffer, whitted::LaunchParams& params )
+void handleResize( sutil::CUDAOutputBuffer<uchar4>& output_buffer, LaunchParams& params )
 {
     if( !resize_dirty )
         return;
@@ -993,7 +924,7 @@ void launchSubframe( sutil::CUDAOutputBuffer<uchar4>& output_buffer, WhittedStat
     state.params.frame_buffer = result_buffer_data;
     CUDA_CHECK( cudaMemcpyAsync( reinterpret_cast<void*>( state.d_params ),
                                  &state.params,
-                                 sizeof( whitted::LaunchParams ),
+                                 sizeof( LaunchParams ),
                                  cudaMemcpyHostToDevice,
                                  state.stream
     ) );
@@ -1002,7 +933,7 @@ void launchSubframe( sutil::CUDAOutputBuffer<uchar4>& output_buffer, WhittedStat
         state.pipeline,
         state.stream,
         reinterpret_cast<CUdeviceptr>( state.d_params ),
-        sizeof( whitted::LaunchParams ),
+        sizeof( LaunchParams ),
         &state.sbt,
         state.params.width,  // launch width
         state.params.height, // launch height
@@ -1043,10 +974,7 @@ void cleanupState( WhittedState& state )
     OPTIX_CHECK( optixProgramGroupDestroy ( state.radiance_miss_prog_group         ) );
     OPTIX_CHECK( optixProgramGroupDestroy ( state.radiance_floor_prog_group        ) );
     OPTIX_CHECK( optixProgramGroupDestroy ( state.occlusion_floor_prog_group       ) );
-    OPTIX_CHECK( optixModuleDestroy       ( state.shading_module          ) );
-    OPTIX_CHECK( optixModuleDestroy       ( state.geometry_module         ) );
-    OPTIX_CHECK( optixModuleDestroy       ( state.camera_module           ) );
-    OPTIX_CHECK( optixModuleDestroy       ( state.sphere_module           ) );
+    OPTIX_CHECK( optixModuleDestroy       ( state.module          ) );
     OPTIX_CHECK( optixDeviceContextDestroy( state.context                 ) );
 
 

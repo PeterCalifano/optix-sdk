@@ -1,31 +1,7 @@
 #
 # SPDX-FileCopyrightText: Copyright (c) 2019 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
-# 
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
 #
-# 1. Redistributions of source code must retain the above copyright notice, this
-# list of conditions and the following disclaimer.
-#
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-# this list of conditions and the following disclaimer in the documentation
-# and/or other materials provided with the distribution.
-#
-# 3. Neither the name of the copyright holder nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 # Welcome to the OptiX SDK build.  We have chosen CMake, because it can generate multiple
 # build systems for multiple architectures from a single script.  There are many resources
@@ -78,13 +54,10 @@
 # https://devtalk.nvidia.com/default/board/90/
 
 
-# This sets up the name of our project.  For our purposes the main thing this controls is
-# the name of the VS solution file.
-project(OptiX-Samples)
 
 # This enforces a particular version of CMake that we require to process the script files
-# properly.  We rely on VERSION_GREATER_EQUAL which requires CMake v. 3.7.
-cmake_minimum_required(VERSION 3.7 FATAL_ERROR)
+# properly.
+cmake_minimum_required(VERSION 3.14 FATAL_ERROR)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -92,7 +65,16 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # As of CMake 2.6 policies were introduced in order to provide a mechanism for
 # adding backwards compatibility one feature at a time.  We will just specify
 # that all policies will use version 2.8.12 semantics.
-cmake_policy(VERSION 2.8.12)
+if(CMAKE_MAJOR_VERSION VERSION_GREATER_EQUAL "4")
+  cmake_policy(VERSION 3.14)
+else()
+  cmake_policy(VERSION 2.8.12)
+endif()
+
+if( POLICY CMP0048 )
+  # Use the new VERSION variables
+  cmake_policy(SET CMP0048 NEW)
+endif()
 
 if( POLICY CMP0072 )
   # FindOpenGL prefers GLVND by default when available
@@ -110,6 +92,10 @@ set(CMAKE_MODULE_PATH
   "${CMAKE_SOURCE_DIR}/../SDK/CMake"
   ${CMAKE_MODULE_PATH}
   )
+
+# This sets up the name of our project.  For our purposes the main thing this controls is
+# the name of the VS solution file.
+project(OptiX-Samples)
 
 # Set the default build to Release.  Note this doesn't do anything for the VS
 # default build target which defaults to Debug when you first start it.
@@ -245,7 +231,7 @@ endif(WIN32)
 # Present the CUDA_64_BIT_DEVICE_CODE on the default set of options.
 mark_as_advanced(CLEAR CUDA_64_BIT_DEVICE_CODE)
 
-set(CUDA_MIN_SM_TARGET sm_50 CACHE STRING "Minimum CUDA SM architecture to use for compilation.")
+set(CUDA_MIN_SM_TARGET sm_75 CACHE STRING "Minimum CUDA SM architecture to use for compilation.")
 
 function(optix_add_cuda_flag_config config flag)
   string(TOUPPER "${config}" config)
@@ -293,9 +279,6 @@ if( NOT PASSED_FIRST_CONFIGURE )
     endif()
   endforeach()
 
-  if( CUDA_VERSION VERSION_LESS "3.0" )
-    optix_add_cuda_flag("--keep")
-  endif()
 
   # Some CUDA 11.x toolkits erroneously complain about sm_50 being deprecated
   if(CUDA_VERSION VERSION_GREATER "11.0")
@@ -354,11 +337,6 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
-# Create a flag for mac which will allow apps to add the local cuda toolkit
-# install path to the app's rpath.
-if( APPLE )
-  set( CUDA_TOOLKIT_RPATH_FLAG "-Wl,-rpath,${CUDA_TOOLKIT_ROOT_DIR}/lib" )
-endif()
 
 # Locate the NVRT distribution.  Search the SDK first, then look in the system.
 set(OptiX_INSTALL_DIR "${CMAKE_SOURCE_DIR}/../" CACHE PATH "Path to OptiX installed location.")
@@ -389,12 +367,12 @@ set(CUDA_GENERATED_OUTPUT_DIR ${SAMPLES_PTX_DIR})
 if( WIN32 )
   string(REPLACE "/" "\\\\" SAMPLES_PTX_DIR ${SAMPLES_PTX_DIR})
 else( WIN32 )
-  if( USING_GNU_C AND NOT APPLE )
+  if( USING_GNU_C )
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DM_PI=3.14159265358979323846" )
   endif()
 endif( WIN32 )
 
-set(SAMPLES_CUDA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/cuda")
+set(SAMPLES_CUDA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/sutil/cuda")
 
 set(SAMPLES_SUPPORT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../SDK/support")
 
@@ -432,13 +410,10 @@ include_directories( ${CMAKE_CURRENT_SOURCE_DIR}
                      ${CUDA_INCLUDE_DIRS}
                      )
 
-set(SAMPLES_CUDA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/cuda)
-
 # Helper macro to generate PTX from the CUDA files in sutil.
 macro(OPTIX_sutil_compile_to_optix_input generated_files)
   if( NOT CUDA_NVRTC_ENABLED )
     if( SAMPLES_INPUT_GENERATE_OPTIXIR )
-      message("sutil OPTIXIR")
 
       set(CUDA_BUILD_CONFIGURATION ${OPTIX_OPTIXIR_BUILD_CONFIGURATION})
       CUDA_WRAP_SRCS( sutil OPTIXIR generated_files2 ${ARGN} )
@@ -447,12 +422,10 @@ macro(OPTIX_sutil_compile_to_optix_input generated_files)
       list(APPEND ${generated_files} ${generated_files2})
     endif()
     if( SAMPLES_INPUT_GENERATE_PTX )
-      message("sutil PTX")
       CUDA_WRAP_SRCS( sutil PTX generated_files3 ${ARGN} )
       list(APPEND ${generated_files} ${generated_files3})
     endif()
   endif()
-  message("${generated_files} = ${${generated_files}}")
 endmacro()
 
 # These calls will group PTX and CUDA files into their own directories in the Visual
@@ -538,7 +511,7 @@ function(OPTIX_add_sample_executable target_name_base target_name_var)
     COMPILE_DEFINITIONS
     "OPTIX_SAMPLE_NAME_DEFINE=${target_name};OPTIX_SAMPLE_DIR_DEFINE=${target_name}" )
 
-  if( UNIX AND NOT APPLE )
+  if( UNIX )
     # Force using RPATH instead of RUNPATH on Debian
     target_link_libraries( ${target_name} "-Wl,--disable-new-dtags" )
   endif()
@@ -558,9 +531,11 @@ add_subdirectory(optixBoundValues)
 add_subdirectory(optixCallablePrograms)
 add_subdirectory(optixClusterStructuredMesh)
 add_subdirectory(optixClusterUnstructuredMesh)
+add_subdirectory(optixCompileCancel)
 add_subdirectory(optixCompileWithTasks)
 add_subdirectory(optixConsole)
 add_subdirectory(optixCurves)
+add_subdirectory(optixCustomCache)
 add_subdirectory(optixCustomPrimitive)
 add_subdirectory(optixCutouts)
 add_subdirectory(optixDenoiser)

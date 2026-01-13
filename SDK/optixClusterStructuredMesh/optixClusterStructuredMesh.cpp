@@ -1,32 +1,6 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2019 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <glad/glad.h>  // Needs to be included before gl_interop
@@ -106,10 +80,10 @@ typedef Record<HitGroupData> HitGroupRecord;
 
 
 // The main goal of this sample is:
-//  1) demonstrate how to use cluster triangle API with structured input mesh 
+//  1) demonstrate how to use cluster triangle API with structured input mesh
 //  2) demonstrate the GAS build time difference between cluster triangle and flat triangle build
-// the mesh is anminated with some random waves, thus the cluster and cluster GAS are being built every frames. 
-// the flat triangle GAS is built every frames as well for comparison. 
+// the mesh is anminated with some random waves, thus the cluster and cluster GAS are being built every frames.
+// the flat triangle GAS is built every frames as well for comparison.
 // Cluster build achieves a dramatic performance improvement in terms of GAS build time (~ 14x with the default settings)
 // when compares to the falt triangle build
 
@@ -126,6 +100,7 @@ struct StructuredClusterState
     ClusterTessConfig                                   tessConfig;
     Cluster*                                            d_clusters       = nullptr;
     uint32_t                                            clusterCount     = 0;
+    std::vector<size_t>                                 clusterOffsets   = {};
     size_t*                                             d_clusterOffsets = nullptr;
 
     bool                                                isClusterInfoChanged = true;
@@ -137,13 +112,14 @@ struct StructuredClusterState
     uint32_t*                                           d_templateSizeData   = nullptr;     // template size buffer holds the worst case size of a cluster that can be created for each template
 
     // below variables are defined here for avoiding re-alloc every frame
-    size_t*                                             d_clasAddressOffsets = nullptr;     // CLAS address offsets related to the big CLAS buffer 
+    size_t*                                             d_clasAddressOffsets = nullptr;     // CLAS address offsets related to the big CLAS buffer
     CUdeviceptr                                         d_tempBuffer         = 0;           // temp buffer used in cluster and flat triangle build
-    size_t                                              tempBufferSize       = 0; 
+    size_t                                              tempBufferSize       = 0;
     OptixClusterAccelBuildInputTemplatesArgs*           d_templatesArgsData  = nullptr;     // used in buildCLASesFromTemplates()
     OptixClusterAccelBuildInputClustersArgs*            d_clustersArgs       = nullptr;
 
     // IAS
+    OptixInstance                                       instance            = {};
     OptixInstance*                                      d_instances         = nullptr;
     OptixBuildInput                                     iasInstanceInput    = {};
     OptixTraversableHandle                              iasHandle           = 0;
@@ -306,7 +282,7 @@ void initLaunchParams( StructuredClusterState& state )
     state.params.subframeIndex = 0u;
 
     CUDA_CHECK( cudaStreamCreate( &state.stream ) );
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &state.d_params ), sizeof( Params ) ) );
+    CUDA_CHECK( cudaMallocAsync( reinterpret_cast<void**>( &state.d_params ), sizeof( Params ), state.stream ) );
 }
 
 
@@ -349,18 +325,18 @@ void launchSubframe( sutil::CUDAOutputBuffer<uchar4>& outputBuffer, StructuredCl
     // Launch
     uchar4* resultBufferData = outputBuffer.map();
     state.params.frameBuffer = resultBufferData;
-    CUDA_CHECK( cudaMemcpyAsync( 
-        reinterpret_cast<void*>( state.d_params ), 
-        &state.params, 
+    CUDA_CHECK( cudaMemcpyAsync(
+        reinterpret_cast<void*>( state.d_params ),
+        &state.params,
         sizeof( Params ),
-        cudaMemcpyHostToDevice, 
-        state.stream 
+        cudaMemcpyHostToDevice,
+        state.stream
     ) );
 
-    OPTIX_CHECK( optixLaunch( 
-        state.pipeline, state.stream, 
+    OPTIX_CHECK( optixLaunch(
+        state.pipeline, state.stream,
         reinterpret_cast<CUdeviceptr>( state.d_params ),
-        sizeof( Params ), 
+        sizeof( Params ),
         &state.sbt,
         state.params.width,   // launch width
         state.params.height,  // launch height
@@ -423,19 +399,19 @@ void createContext( StructuredClusterState& state )
 
 //------------------------------------------------------------------------------
 //
-// Helper functions for creating templates, CLAS etc 
+// Helper functions for creating templates, CLAS etc
 //
 //------------------------------------------------------------------------------
-void inline resizeDeviceBuffer( CUdeviceptr& inOuputBuffer, size_t& oldSizeInByte, size_t newSizeInByte, CUstream stream = 0 )
+void inline resizeDeviceBuffer( CUdeviceptr& buffer, size_t& oldSizeInBytes, size_t newSizeInBytes, CUstream stream = 0 )
 {
-    if( oldSizeInByte < newSizeInByte )
+    if( oldSizeInBytes < newSizeInBytes )
     {
         CUdeviceptr tmpBuffer = 0;
-        CUDA_CHECK( cudaMallocAsync( reinterpret_cast<void**>( &tmpBuffer ), newSizeInByte, stream ) );
-        CUDA_CHECK( cudaMemcpyAsync( reinterpret_cast<void*>( tmpBuffer ), reinterpret_cast<void*>( inOuputBuffer ),
-                                     oldSizeInByte, cudaMemcpyDeviceToDevice, stream ) );
-        std::swap( inOuputBuffer, tmpBuffer );
-        std::swap( oldSizeInByte, newSizeInByte );
+        CUDA_CHECK( cudaMallocAsync( reinterpret_cast<void**>( &tmpBuffer ), newSizeInBytes, stream ) );
+        CUDA_CHECK( cudaMemcpyAsync( reinterpret_cast<void*>( tmpBuffer ), reinterpret_cast<void*>( buffer ),
+                                     oldSizeInBytes, cudaMemcpyDeviceToDevice, stream ) );
+        std::swap( buffer, tmpBuffer );
+        std::swap( oldSizeInBytes, newSizeInBytes );
         CUDA_CHECK( cudaFreeAsync( reinterpret_cast<void*>( tmpBuffer ), stream ) );
     }
 }
@@ -563,11 +539,11 @@ void inline buildCLASesFromTemplates( StructuredClusterState& state )
 
         calculateClasOutputBufferSizeAndOffsets(
             state.stream,
-            state.clusterCount, 
+            state.clusterCount,
             state.maxClusterEdgeSegments,
-            reinterpret_cast<uchar2*>( (unsigned char*)state.d_clusters + offsetof( Cluster, size ) ), 
+            reinterpret_cast<uchar2*>( (unsigned char*)state.d_clusters + offsetof( Cluster, size ) ),
             state.d_templateSizeData,
-            sizeof( Cluster ), 
+            sizeof( Cluster ),
             d_outputSizeInBytes,
             state.d_clasAddressOffsets
         );
@@ -626,7 +602,7 @@ void inline buildCLASesFromTemplates( StructuredClusterState& state )
 
     assignExplicitAddresses( state.stream, state.clusterCount, state.d_clasAddressOffsets, accel->d_clasBuffer, accel->d_clasPtrsBuffer );
 
-    // Here need to be EXPLICIT mode becuase we use the size estimates from a GET_SIZES call earlier. 
+    // Here need to be EXPLICIT mode becuase we use the size estimates from a GET_SIZES call earlier.
     // GET_SIZES is only valid to be used with explicit builds.
     OptixClusterAccelBuildModeDesc clasBuildDesc          = {};
     clasBuildDesc.mode                                    = OPTIX_CLUSTER_ACCEL_BUILD_MODE_EXPLICIT_DESTINATIONS;
@@ -646,18 +622,18 @@ void inline buildGASesFromCLASes( StructuredClusterState& state )
 {
     const std::vector<std::shared_ptr<sutil::Scene::Instance>>& instances = state.scene.instances();
     const uint32_t                                              instanceCount = (uint32_t)instances.size();
-    assert( instanceCount == 1 ); // will not change in this sample 
+    assert( instanceCount == 1 ); // will not change in this sample
 
-    std::vector<size_t> clusterOffsets( instanceCount + 1u, 0 );
+    state.clusterOffsets.resize( instanceCount + 1u, 0 );
     if( !state.d_clusterOffsets )
     {
         CUDA_CHECK( cudaMallocAsync( reinterpret_cast<void**>( &state.d_clusterOffsets ),
-                                     clusterOffsets.size() * sizeof( size_t ), state.stream ) );
+                                     state.clusterOffsets.size() * sizeof( size_t ), state.stream ) );
     }
 
-    clusterOffsets[1] = state.clusterCount;
-    CUDA_CHECK( cudaMemcpyAsync( state.d_clusterOffsets, clusterOffsets.data(),
-                                 clusterOffsets.size() * sizeof( size_t ), cudaMemcpyHostToDevice, state.stream ) );
+    state.clusterOffsets[1] = state.clusterCount;
+    CUDA_CHECK( cudaMemcpyAsync( state.d_clusterOffsets, state.clusterOffsets.data(),
+                                 state.clusterOffsets.size() * sizeof( size_t ), cudaMemcpyHostToDevice, state.stream ) );
 
     const uint32_t maxClusterCount        = state.clusterCount;
     const uint32_t maxClusterCountPerBlas = state.clusterCount;
@@ -720,7 +696,9 @@ void inline buildClusterAccel( StructuredClusterState& state )
     if( state.isClusterInfoChanged )
     {
         if( state.d_clusters )
+        {
             CUDA_CHECK( cudaFreeAsync( reinterpret_cast<void*>( state.d_clusters ), state.stream ) );
+        }
 
         uint32_t newClusterCount = state.tessConfig.gridDims.x * state.tessConfig.gridDims.y;
         CUDA_CHECK( cudaMallocAsync( reinterpret_cast<void**>( &state.d_clusters ), newClusterCount * sizeof( Cluster ),
@@ -762,8 +740,7 @@ void inline buildFlatTriangleAccel( StructuredClusterState& state )
     std::shared_ptr<sutil::Scene::MeshGroup> mesh = meshes[0];
     assert( mesh->name == "synthetic" && meshes.size() == 1 );
 
-    const size_t num_subMeshes = mesh->indices.size();
-    assert( num_subMeshes == 1 );
+    assert( mesh->indices.size() == 1 );
 
     state.totalTriangleCount = mesh->indices[0].count / 3;
 
@@ -774,7 +751,7 @@ void inline buildFlatTriangleAccel( StructuredClusterState& state )
     const uint32_t numVertices = quadCount * numVerticesPerCluster;
     if( mesh->positions[0].count != numVertices )
     {
-        // vertex buffer re-allocated only if the tessConfig is changed. 
+        // vertex buffer re-allocated only if the tessConfig is changed.
         mesh->positions[0].count = numVertices;
         CUDA_CHECK( cudaFreeAsync( reinterpret_cast<void*>( mesh->positions[0].data ), state.stream ) );
         CUDA_CHECK( cudaMallocAsync( reinterpret_cast<void**>( &mesh->positions[0].data ),
@@ -785,7 +762,7 @@ void inline buildFlatTriangleAccel( StructuredClusterState& state )
 
     const uint32_t trianglesPerCluster = 2 * state.tessConfig.clusterSize.x * state.tessConfig.clusterSize.y;
     const uint32_t numIndices          = quadCount * trianglesPerCluster * 3;
-    // indices re-generation only if the tessConfig is changed. 
+    // indices re-generation only if the tessConfig is changed.
     if( mesh->indices[0].count != numIndices )
     {
         mesh->indices[0].count = numIndices;
@@ -796,9 +773,9 @@ void inline buildFlatTriangleAccel( StructuredClusterState& state )
     }
 
     // Build an AS over the triangles.
-    std::vector<OptixBuildInput> buildInputs( num_subMeshes );
-    const unsigned int           triangleFlags = OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT;
-    OptixBuildInput&             triangleInput = buildInputs[0];
+    OptixBuildInput    buildInput;
+    const unsigned int triangleFlags = OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT;
+    OptixBuildInput&   triangleInput = buildInput;
     memset( &triangleInput, 0, sizeof( OptixBuildInput ) );
     triangleInput.type                        = OPTIX_BUILD_INPUT_TYPE_TRIANGLES;
     triangleInput.triangleArray.vertexFormat  = OPTIX_VERTEX_FORMAT_FLOAT3;
@@ -824,18 +801,18 @@ void inline buildFlatTriangleAccel( StructuredClusterState& state )
     accelOptions.operation = OPTIX_BUILD_OPERATION_BUILD;
 
     OptixAccelBufferSizes gasBufferSizes = {};
-    OPTIX_CHECK( optixAccelComputeMemoryUsage( state.context, &accelOptions, buildInputs.data(),
-                                               (uint32_t)buildInputs.size(), &gasBufferSizes ) );
+    OPTIX_CHECK( optixAccelComputeMemoryUsage( state.context, &accelOptions, &buildInput,
+                                               1 /*numBuildInputs*/, &gasBufferSizes ) );
 
     resizeDeviceBuffer( state.d_tempBuffer, state.tempBufferSize, gasBufferSizes.tempSizeInBytes, state.stream );
     resizeDeviceBuffer( accel->d_gasBuffer, accel->gasBufferSize, gasBufferSizes.outputSizeInBytes, state.stream );
 
-    OPTIX_CHECK( optixAccelBuild( 
-        state.context, 
-        state.stream, 
-        &accelOptions, 
-        buildInputs.data(),
-        (uint32_t)buildInputs.size(),
+    OPTIX_CHECK( optixAccelBuild(
+        state.context,
+        state.stream,
+        &accelOptions,
+        &buildInput,
+        1 /*numBuildInputs*/,
         state.d_tempBuffer,
         state.tempBufferSize,
         accel->d_gasBuffer,
@@ -869,38 +846,31 @@ void buildIAS( StructuredClusterState& state )
     const std::vector<std::shared_ptr<sutil::Scene::Instance>>& meshInstances = state.scene.instances();
     assert( meshInstances.size() == 1 );
 
-    std::vector<OptixInstance> instances( meshInstances.size() );
-    for( size_t i = 0; i < instances.size(); ++i )
-    {
-        memcpy( instances[i].transform, meshInstances[i]->transform.getData(), sizeof( float ) * 12 );
-        instances[i].sbtOffset      = static_cast<unsigned int>( i );
-        instances[i].visibilityMask = 255;
+    memcpy( state.instance.transform, meshInstances[0]->transform.getData(), sizeof( float ) * 12 );
+    state.instance.sbtOffset      = 0;
+    state.instance.visibilityMask = 255;
 
-        if( state.params.accelBuildMode == AccelBuildMode::FLAT_TRIANGLE )
-        {
-            instances[i].traversableHandle =
-                reinterpret_cast<FlatTriAccel*>( state.pAccel.get() )->gasHandle;
-        }
+    if( state.params.accelBuildMode == AccelBuildMode::FLAT_TRIANGLE )
+    {
+        state.instance.traversableHandle = reinterpret_cast<FlatTriAccel*>( state.pAccel.get() )->gasHandle;
     }
 
     if( !state.d_instances )
     {
-        CUDA_CHECK( cudaMallocAsync( reinterpret_cast<void**>( &state.d_instances ),
-                                     instances.size() * sizeof( OptixInstance ), state.stream ) );
+        CUDA_CHECK( cudaMallocAsync( reinterpret_cast<void**>( &state.d_instances ), sizeof( OptixInstance ), state.stream ) );
     }
-    CUDA_CHECK( cudaMemcpyAsync( state.d_instances, instances.data(), instances.size() * sizeof( OptixInstance ),
-                                 cudaMemcpyHostToDevice, state.stream ) );
+    CUDA_CHECK( cudaMemcpyAsync( state.d_instances, &state.instance, sizeof( OptixInstance ), cudaMemcpyHostToDevice,
+                                 state.stream ) );
 
     if( state.params.accelBuildMode == AccelBuildMode::CLUSTER )
     {
         ClusterAccel* accel = reinterpret_cast<ClusterAccel*>( state.pAccel.get() );
-        copyGasHandlesToInstanceArray( state.stream, state.d_instances, accel->d_gasPtrsBuffer,
-                                       static_cast<uint32_t>( instances.size() ) );
+        copyGasHandlesToInstanceArray( state.stream, state.d_instances, accel->d_gasPtrsBuffer, 1 /*instanceCount */ );
     }
 
     state.iasInstanceInput.type                       = OPTIX_BUILD_INPUT_TYPE_INSTANCES;
     state.iasInstanceInput.instanceArray.instances    = reinterpret_cast<CUdeviceptr>( state.d_instances );
-    state.iasInstanceInput.instanceArray.numInstances = static_cast<int>( instances.size() );
+    state.iasInstanceInput.instanceArray.numInstances = 1;
 
     OptixAccelBuildOptions iasAccelOptions = {};
     iasAccelOptions.buildFlags             = OPTIX_BUILD_FLAG_ALLOW_COMPACTION | OPTIX_BUILD_FLAG_ALLOW_UPDATE;
@@ -913,7 +883,7 @@ void buildIAS( StructuredClusterState& state )
     resizeDeviceBuffer( state.d_iasTempBuffer, state.iasTempBufferSize, iasBufferSizes.tempSizeInBytes, state.stream );
     resizeDeviceBuffer( state.d_iasOutputBuffer, state.iasOutputBufferSize, iasBufferSizes.outputSizeInBytes, state.stream );
 
-    OPTIX_CHECK( optixAccelBuild( 
+    OPTIX_CHECK( optixAccelBuild(
         state.context,
         state.stream,
         &iasAccelOptions,
@@ -925,7 +895,7 @@ void buildIAS( StructuredClusterState& state )
         state.iasOutputBufferSize,
         &state.iasHandle,
         NULL,
-        0 
+        0
     ) );
 
     state.params.handle = state.iasHandle;
@@ -950,7 +920,7 @@ void createModule( StructuredClusterState& state )
     size_t      inputSize = 0;
     const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixClusterStructuredMesh.cu", inputSize );
 
-    OPTIX_CHECK_LOG( optixModuleCreate( 
+    OPTIX_CHECK_LOG( optixModuleCreate(
         state.context,
         &moduleCompileOptions,
         &state.pipelineCompileOptions,
@@ -973,14 +943,14 @@ void createProgramGroups( StructuredClusterState& state )
         raygenProgramGroupDesc.raygen.module            = state.ptxModule;
         raygenProgramGroupDesc.raygen.entryFunctionName = "__raygen__rg";
 
-        OPTIX_CHECK_LOG( optixProgramGroupCreate( 
+        OPTIX_CHECK_LOG( optixProgramGroupCreate(
             state.context,
             &raygenProgramGroupDesc,
             1,  // num program groups
             &programGroupOptions,
             LOG,
             &LOG_SIZE,
-            &state.raygenProgGroup 
+            &state.raygenProgGroup
         ) );
     }
 
@@ -989,14 +959,14 @@ void createProgramGroups( StructuredClusterState& state )
         missProgramGroupDesc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
         missProgramGroupDesc.miss.module            = state.ptxModule;
         missProgramGroupDesc.miss.entryFunctionName = "__miss__ms";
-        OPTIX_CHECK_LOG( optixProgramGroupCreate( 
-            state.context, 
+        OPTIX_CHECK_LOG( optixProgramGroupCreate(
+            state.context,
             &missProgramGroupDesc,
             1,  // num program groups
             &programGroupOptions,
             LOG,
             &LOG_SIZE,
-            &state.missGroup 
+            &state.missGroup
         ) );
     }
 
@@ -1005,14 +975,14 @@ void createProgramGroups( StructuredClusterState& state )
         hitProgramGroupDesc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
         hitProgramGroupDesc.hitgroup.moduleCH            = state.ptxModule;
         hitProgramGroupDesc.hitgroup.entryFunctionNameCH = "__closesthit__ch";
-        OPTIX_CHECK_LOG( optixProgramGroupCreate( 
+        OPTIX_CHECK_LOG( optixProgramGroupCreate(
             state.context,
             &hitProgramGroupDesc,
             1,  // num program groups
             &programGroupOptions,
             LOG,
             &LOG_SIZE,
-            &state.hitGroup 
+            &state.hitGroup
         ) );
     }
 }
@@ -1129,6 +1099,28 @@ void createSBT( StructuredClusterState& state )
 
 void cleanupState( StructuredClusterState& state )
 {
+    // release the synthetic scene data that is allocated in buildClusterAccel()
+    for( const auto& mesh : state.scene.meshes() )
+    {
+        for( auto& position : mesh->positions )
+        {
+            if(position.data)
+            {
+                CUDA_CHECK( cudaFreeAsync( reinterpret_cast<void*>( position.data ), state.stream ) );
+                position.data = 0;
+            }
+        }
+
+        for( auto& index : mesh->indices )
+        {
+            if(index.data)
+            {
+                CUDA_CHECK( cudaFreeAsync( reinterpret_cast<void*>( index.data ), state.stream ) );
+                index.data = 0;
+            }
+        }
+    }
+
     state.scene.cleanup();
     CUDA_CHECK( cudaFreeAsync( reinterpret_cast<void*>( state.d_clusters ), state.stream ) );
     CUDA_CHECK( cudaFreeAsync( reinterpret_cast<void*>( state.d_clusterOffsets ), state.stream ) );
@@ -1175,7 +1167,8 @@ void cleanupState( StructuredClusterState& state )
     CUDA_CHECK( cudaFreeAsync( reinterpret_cast<void*>( state.sbt.hitgroupRecordBase ), state.stream ) );
     CUDA_CHECK( cudaFreeAsync( reinterpret_cast<void*>( state.d_params ), state.stream ) );
 
-    CUDA_CHECK( cudaStreamDestroy( state.stream ) );
+    if(state.stream)
+        CUDA_CHECK( cudaStreamDestroy( state.stream ) );
 }
 
 void displayStats( StructuredClusterState& state, float& accelBuildTime, float& renderTime )
@@ -1204,12 +1197,12 @@ void displayStats( StructuredClusterState& state, float& accelBuildTime, float& 
                  "\t1/2: decrease/increase cluster size\n"
                  "\t3/4: decrease/increase grid dimension\n",
                  lastUpdateFrames / std::chrono::duration<double>( curTime - lastUpdateTime ).count(),
-                 static_cast<float>( state.totalTriangleCount / 1000 / 1000 ), 
+                 static_cast<float>( state.totalTriangleCount / 1000 / 1000 ),
                  accelBuildTime / lastUpdateFrames,
-                 renderTime / lastUpdateFrames, 
+                 renderTime / lastUpdateFrames,
                  state.tessConfig.clusterSize.x,
-                 state.tessConfig.clusterSize.y, 
-                 state.tessConfig.gridDims.x, 
+                 state.tessConfig.clusterSize.y,
+                 state.tessConfig.gridDims.x,
                  state.tessConfig.gridDims.y );
 
         lastUpdateTime   = curTime;
@@ -1242,12 +1235,12 @@ void makeSyntheticSceneData( StructuredClusterState& state )
     mesh->object_aabb.invalidate();
     mesh->object_aabb.include( sutil::Aabb( make_float3( -1.f, 0.f, -1.f ), make_float3( 1.f, 0.f, 1.f ) ) );
 
-    BufferView<float3> verticesBufferView;
+    sutil::BufferView<float3> verticesBufferView;
     verticesBufferView.byte_stride    = static_cast<uint16_t>( 0 );
     verticesBufferView.elmt_byte_size = static_cast<uint16_t>( sizeof( float ) );
     mesh->positions.push_back( verticesBufferView );
 
-    GenericBufferView indicesBufferView;
+    sutil::GenericBufferView indicesBufferView;
     indicesBufferView.byte_stride    = static_cast<uint16_t>( 0 );
     indicesBufferView.elmt_byte_size = static_cast<uint16_t>( sizeof( uint32_t ) );
     mesh->indices.push_back( indicesBufferView );
@@ -1440,8 +1433,8 @@ int main( int argc, char* argv[] )
                         state.pAccel.reset();
                         g_isAccelBuildModeChanged = false;
 
-                        // pAccel is reset when we toggle from flat triangle build mode into cluster build mode. 
-                        // need to set the status here to allow re-calculating the CLAS output buffer size again once. 
+                        // pAccel is reset when we toggle from flat triangle build mode into cluster build mode.
+                        // need to set the status here to allow re-calculating the CLAS output buffer size again once.
                         if( g_accelBuildMode == AccelBuildMode::CLUSTER )
                         {
                             g_isClusterInfoChanged = true;
@@ -1500,14 +1493,21 @@ int main( int argc, char* argv[] )
                 handleCameraUpdate( state.params );
                 handleResize( outputBuffer, state.params );
 
+                state.tessConfig.mousePosInWorld = g_mousePosInWorld;
+                state.tessConfig.clusterSize     = g_edgeSegments;
+                state.tessConfig.gridDims        = g_gridDims;
+                state.params.accelBuildMode      = g_accelBuildMode;
+                state.params.gridDims            = g_gridDims;
+                state.isClusterInfoChanged       = g_isClusterInfoChanged;
                 // run animation frames
                 for( unsigned int i = 0; i < static_cast<unsigned int>( numFrames ); ++i )
                 {
-                    state.time = i * ( animationTime / ( numFrames - 1 ) );
-                    state.params.accelBuildMode = g_accelBuildMode;
+                    state.time                     = i * ( animationTime / ( numFrames - 1 ) );
+                    state.tessConfig.animationTime = state.time;
                     buildGAS( state );
                     buildIAS( state );
                     launchSubframe( outputBuffer, state );
+                    g_isClusterInfoChanged = false;
                 }
 
                 sutil::ImageBuffer buffer;
@@ -1525,6 +1525,10 @@ int main( int argc, char* argv[] )
         }
 
         cleanupState( state );
+        CUDA_CHECK( cudaEventDestroy( accelBuildTimeStart ) );
+        CUDA_CHECK( cudaEventDestroy( accelBuildTimeStop ) );
+        CUDA_CHECK( cudaEventDestroy( renderTimeStart ) );
+        CUDA_CHECK( cudaEventDestroy( renderTimeStop ) );
     }
     catch( std::exception& e )
     {

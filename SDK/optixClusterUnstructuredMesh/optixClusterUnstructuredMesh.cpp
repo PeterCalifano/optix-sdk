@@ -1,32 +1,6 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2019 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <assert.h>
@@ -109,6 +83,8 @@ struct UnstructuredClusterState
     Cluster*                                           d_clusters       = nullptr;
     uint32_t                                           clusterCount     = 0;
     size_t*                                            d_clusterOffsets = nullptr;
+
+    CUdeviceptr                                        d_allDeformedClusterPositions = 0;  // deformed positions buffer for all clusters
 
     CUdeviceptr*                                       d_clasPtrsBuffer     = nullptr;  // address of each CLAS in the cluster buffer
     CUdeviceptr                                        d_clasBuffer         = 0;
@@ -400,16 +376,16 @@ void createContext( UnstructuredClusterState& state )
 // Helper functions for creating templates, CLAS etc
 //
 //------------------------------------------------------------------------------
-void inline resizeDeviceBuffer( CUdeviceptr& inOuputBuffer, size_t& oldSize, size_t newSize, CUstream stream = 0 )
+void inline resizeDeviceBuffer( CUdeviceptr& buffer, size_t& oldSizeInBytes, size_t newSizeInBytes, CUstream stream = 0 )
 {
-    if( oldSize < newSize )
+    if( oldSizeInBytes < newSizeInBytes )
     {
         CUdeviceptr tmpBuffer = 0;
-        CUDA_CHECK( cudaMallocAsync( reinterpret_cast<void**>( &tmpBuffer ), newSize, stream ) );
-        CUDA_CHECK( cudaMemcpyAsync( reinterpret_cast<void*>( tmpBuffer ), reinterpret_cast<void*>( inOuputBuffer ),
-                                     oldSize, cudaMemcpyDeviceToDevice, stream ) );
-        std::swap( inOuputBuffer, tmpBuffer );
-        std::swap( oldSize, newSize );
+        CUDA_CHECK( cudaMallocAsync( reinterpret_cast<void**>( &tmpBuffer ), newSizeInBytes, stream ) );
+        CUDA_CHECK( cudaMemcpyAsync( reinterpret_cast<void*>( tmpBuffer ), reinterpret_cast<void*>( buffer ),
+                                     oldSizeInBytes, cudaMemcpyDeviceToDevice, stream ) );
+        std::swap( buffer, tmpBuffer );
+        std::swap( oldSizeInBytes, newSizeInBytes );
         CUDA_CHECK( cudaFreeAsync( reinterpret_cast<void*>( tmpBuffer ), stream ) );
     }
 }
@@ -566,6 +542,8 @@ void inline makeClusters( UnstructuredClusterState& state )
     std::vector<size_t> clusterOffsets( instances.size() + 1, 0 );
 
     std::vector<Cluster> clusters;
+    uint32_t totalVerticesCount = 0;
+    std::vector<uint32_t> clusterVertexOffsetInByte( 1, 0 );
     for( size_t i = 0; i < instances.size(); ++i )
     {
         std::shared_ptr<Scene::MeshGroup> mesh          = meshes[instances[i]->mesh_idx];
@@ -584,13 +562,23 @@ void inline makeClusters( UnstructuredClusterState& state )
             cluster.indexFormat              = static_cast<OptixClusterAccelIndicesFormat>( mesh->indices[j].elmt_byte_size );
             cluster.indexBufferStrideInBytes = mesh->indices[j].byte_stride;
             cluster.d_positions              = mesh->positions[j].data;
-            clusters.push_back( cluster );
 
+            clusters.push_back( cluster );
+            clusterVertexOffsetInByte.push_back( clusterVertexOffsetInByte.back() + cluster.vertexCount * sizeof( float3 ) );
+
+            totalVerticesCount += cluster.vertexCount;
             state.totalTriangleCount += cluster.triangleCount;
 
             state.maxTrianglesPerCluster = std::max( state.maxTrianglesPerCluster, cluster.triangleCount );
             state.maxVerticesPerCluster  = std::max( state.maxVerticesPerCluster, cluster.vertexCount );
         }
+    }
+
+    CUDA_CHECK( cudaMallocAsync( reinterpret_cast<void**>( &state.d_allDeformedClusterPositions ), totalVerticesCount * sizeof( float3 ),
+                                 state.stream ) );
+    for( size_t i = 0 ; i < clusters.size(); i++)
+    {
+        clusters[i].d_deformedPositions = state.d_allDeformedClusterPositions + clusterVertexOffsetInByte[i];
     }
 
     if( state.maxTrianglesPerCluster > g_maxTrianglesPerCluster )
@@ -940,6 +928,8 @@ void cleanupState( UnstructuredClusterState& state )
     CUDA_CHECK( cudaFreeAsync( reinterpret_cast<void*>( state.d_clusters ), state.stream ) );
     CUDA_CHECK( cudaFreeAsync( reinterpret_cast<void*>( state.d_clusterOffsets ), state.stream ) );
 
+    CUDA_CHECK( cudaFreeAsync( reinterpret_cast<void*>( state.d_allDeformedClusterPositions ), state.stream ) );
+
     CUDA_CHECK( cudaFreeAsync( reinterpret_cast<void*>( state.d_clasPtrsBuffer ), state.stream ) );
     CUDA_CHECK( cudaFreeAsync( reinterpret_cast<void*>( state.d_clasBuffer ), state.stream ) );
 
@@ -971,7 +961,8 @@ void cleanupState( UnstructuredClusterState& state )
     CUDA_CHECK( cudaFreeAsync( reinterpret_cast<void*>( state.sbt.hitgroupRecordBase ), state.stream ) );
     CUDA_CHECK( cudaFreeAsync( reinterpret_cast<void*>( state.d_params ), state.stream ) );
 
-    CUDA_CHECK( cudaStreamDestroy( state.stream ) );
+    if(state.stream)
+        CUDA_CHECK( cudaStreamDestroy( state.stream ) );
 }
 
 
@@ -1127,9 +1118,7 @@ int main( int argc, char* argv[] )
 
                     auto                          tnow = std::chrono::system_clock::now();
                     std::chrono::duration<double> time = tnow - tstart;
-                    tstart                             = tnow;
-
-                    state.time += (float)time.count();
+                    state.time = (float)time.count();
 
                     CUDA_CHECK( cudaEventRecord( accelBuildTimeStart, state.stream ) );
                     buildGAS( state );

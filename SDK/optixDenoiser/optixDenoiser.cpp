@@ -1,44 +1,16 @@
 /*
-
- * SPDX-FileCopyrightText: Copyright (c) 2020 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-FileCopyrightText: Copyright (c) 2020 - 2025  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-
 #include "OptiXDenoiser.h"
-
-#include <sutil/Exception.h>
-#include <sutil/sutil.h>
+#include "applyflow.h"
 
 #define TINYEXR_IMPLEMENTATION
 #include <tinyexr/tinyexr.h>
 
 #include <stdlib.h>
+#include <assert.h>
 #include <cmath>
 #include <cstdlib>
 #include <iomanip>
@@ -64,42 +36,34 @@ void printUsageAndExit( const std::string& argv0 )
               << "         -A | --AOV    <aov.exr | layer name>\n"
               << "         -S            <specular aov.exr | layer name>\n"
               << "         -T            <flowTrustworthiness.exr | layer name>\n"
-              << "         -o | --out    <out.exr> Defaults to 'denoised.exr'\n"
-              << "         -F | --Frames <int-int> first-last frame number in sequence\n"
+              << "         -o | --out    <out.exr>\n"
+              << "         -F | --Frames <int int> first and last frame number in sequence\n"
               << "         -e | --exposure <float> apply exposure on output images\n"
-              << "         -t | --tilesize <int> <int> use tiling to save GPU memory\n"
+              << "         -t | --tilesize <int int> use tiling to save GPU memory\n"
               << "         -alpha denoise alpha channel\n"
               << "         -fmul <x y> multiply flow vector components\n"
               << "         -fp32 write images with 32-bit precision, default 16 bit\n"
               << "         -up2 upscale image by factor of 2\n"
               << "         -z apply flow to input images (no denoising), for flow vector verification\n"
               << "in sequences, first occurrence of '+' characters substring in filenames is replaced by framenumber\n"
+              << "instead of EXR filenames layer names inside the given EXR file <color.exr> could be specified\n"
               << std::endl;
     exit( 0 );
-}
-
-static void freeImageBuffer( sutil::ImageBuffer& image )
-{
-    switch( image.pixel_format )
-    {
-        case sutil::FLOAT4:
-            delete[] reinterpret_cast<float4*>( image.data );
-            break;
-        case sutil::FLOAT3:
-            delete[] reinterpret_cast<float3*>( image.data );
-            break;
-        default:
-            break;
-    }
-    image.data   = nullptr;
-    image.width  = 0;
-    image.height = 0;
 }
 
 static double getCurrentTime()
 {
     return std::chrono::duration_cast< std::chrono::duration< double > >
         ( std::chrono::high_resolution_clock::now().time_since_epoch() ).count();
+}
+
+static void context_log_cb( uint32_t level, const char* tag, const char* message, void* /*cbdata*/ )
+{
+    if( level < 4 )
+    {
+        std::cerr << "[" << std::setw( 2 ) << level << "][" << std::setw( 12 ) << tag << "]: "
+                  << message << "\n";
+    }
 }
 
 // Layers given on the command line (-a, -n, -f, -b) are passed as 'layerName'. If 'layerName' is 0,
@@ -110,7 +74,7 @@ static double getCurrentTime()
 // Note that we use a modified tinyexr.h file which has an alternative component search for XYZ,
 // as this is used for normals and velocity. The original version searches only for RGB.
 
-static sutil::ImageBuffer loadImageLayer( const char* inputFileName, const char* layerName, EXRImage* cachedImage )
+static OptixImage2D loadImageLayer( const char* inputFileName, const char* layerName, EXRImage* cachedImage )
 {
     const char* err = nullptr;
     bool layerExists = false;
@@ -125,16 +89,14 @@ static sutil::ImageBuffer loadImageLayer( const char* inputFileName, const char*
         int32_t res = EXRLayers( inputFileName, &layerNames, &numLayers, &err);
         if( res != TINYEXR_SUCCESS )
         {
+            std::string emsg = baseErrorMessage;
             if( err )
             {
-                sutil::Exception e( ( baseErrorMessage + err ).c_str() );
+		emsg += err;
                 FreeEXRErrorMessage( err );
-                throw e;
             }
-            else
-            {
-                throw( sutil::Exception( baseErrorMessage.c_str() ) );
-            }
+	    fprintf( stderr, "Error loading EXR file (%s): %s\n", inputFileName, emsg.c_str() );
+	    exit( 1 );
         }
         for( int i=0; i < numLayers; i++ )
         {
@@ -143,10 +105,9 @@ static sutil::ImageBuffer loadImageLayer( const char* inputFileName, const char*
         }
         if( !layerExists )
         {
-            std::string estr = baseErrorMessage +
-                               std::string( ", layer \"" ) + std::string( layerName ) + std::string( "\" not found.\n" );
-            sutil::Exception e( estr.c_str() );
-            throw e;
+            std::string emsg = baseErrorMessage + std::string( ", layer \"" ) + std::string( layerName ) + std::string( "\" not found.\n" );
+	    fprintf( stderr, "Error loading EXR file (%s): %s\n", inputFileName, emsg.c_str() );
+	    exit( 1 );
         }
     }
 
@@ -160,24 +121,18 @@ static sutil::ImageBuffer loadImageLayer( const char* inputFileName, const char*
 
     if( res != TINYEXR_SUCCESS)
     {
+        std::string emsg = baseErrorMessage;
         if ( err )
         {
-            sutil::Exception e( ( baseErrorMessage + err ).c_str() );
+            emsg += err;
             FreeEXRErrorMessage( err );
-            throw e;
         }
-        else
-        {
-            throw sutil::Exception( baseErrorMessage.c_str() );
-        }
+        fprintf( stderr, "Error loading EXR file(%s): %s\n", inputFileName, emsg.c_str() );
+        exit( 1 );
     }
 
-    sutil::ImageBuffer image;
-    image.width  = w;
-    image.height = h;
-    image.data   = new float4[ image.width*image.height ];
-    image.pixel_format = sutil::FLOAT4;
-    memcpy( image.data, data, sizeof(float) * 4 * w * h );
+    OptixImage2D image = createOptixImage2D( w, h, OPTIX_PIXEL_FORMAT_FLOAT4 );
+    cudaMemcpy( (void*)image.data, (void*)data, sizeof(float) * 4 * w * h, cudaMemcpyHostToDevice );
 
     free( data );
 
@@ -186,17 +141,21 @@ static sutil::ImageBuffer loadImageLayer( const char* inputFileName, const char*
 
 // save image to EXR file
 
-static void saveImageEXR( const char* fname, const sutil::ImageBuffer& image, bool fp16 )
+static void saveImageEXR( const char* fname, const OptixImage2D& image, bool fp16 )
 {
     const std::string filename( fname );
 
-    switch( image.pixel_format )
+    std::vector<char> data( image.rowStrideInBytes * image.height );
+
+    cudaMemcpy( &data[0], (void*)image.data, image.rowStrideInBytes * image.height, cudaMemcpyDeviceToHost );
+
+    switch( image.format )
     {
-        case sutil::BufferImageFormat::FLOAT3:
+        case OPTIX_PIXEL_FORMAT_FLOAT3:
         {
             const char* err;
             int32_t ret = SaveEXR(
-                    reinterpret_cast<float*>( image.data ),
+                    reinterpret_cast<float*>( &data[0] ),
                     image.width,
                     image.height,
                     3, // num components
@@ -205,15 +164,17 @@ static void saveImageEXR( const char* fname, const sutil::ImageBuffer& image, bo
                     &err );
 
             if( ret != TINYEXR_SUCCESS )
-                throw sutil::Exception( ( "error saving image: " + std::string( err ) ).c_str() );
-
+            {
+                fprintf( stderr, "Error saving image (%s): %s\n", fname, err );
+		exit( 1 );
+            }	
         } break;
 
-        case sutil::BufferImageFormat::FLOAT4:
+	case OPTIX_PIXEL_FORMAT_FLOAT4:
         {
             const char* err;
             int32_t ret = SaveEXR(
-                    reinterpret_cast<float*>( image.data ),
+                    reinterpret_cast<float*>( &data[0] ),
                     image.width,
                     image.height,
                     4, // num components
@@ -222,12 +183,16 @@ static void saveImageEXR( const char* fname, const sutil::ImageBuffer& image, bo
                     &err );
 
             if( ret != TINYEXR_SUCCESS )
-                throw sutil::Exception( ( "error saving image: " + std::string( err ) ).c_str() );
+            {
+                fprintf( stderr, "Error saving image (%s): %s\n", fname, err );
+		exit( 1 );
+            }
         } break;
 
         default:
         {
-            throw sutil::Exception( "error saving image: Unrecognized image buffer pixel format.\n" );
+            fprintf(stderr, "Error saving image (%s): Unrecognized image buffer pixel format.\n", fname );
+	    exit( 1 );
         }
     }
 }
@@ -260,7 +225,7 @@ static bool getFrameFilename( std::string& result, const std::string& filename, 
     std::string fn = std::to_string( frame );
     if( fn.length() > nplus )
     {
-        std::cout << "illegal temporal filename, framenumber requires " << fn.length()
+        std::cerr << "illegal temporal filename, framenumber requires " << fn.length()
                   << " digits, \"+\" placeholder length: " << nplus << "too small" << std::endl;
         return false;
     }
@@ -276,100 +241,105 @@ int32_t main( int32_t argc, char** argv )
     if( argc < 2 )
         printUsageAndExit( argv[0] );
 
-    std::string color_filename = argv[argc - 1];
-
+    std::string              color_filename;
     std::string              beauty_filename;
     std::string              normal_filename;
     std::string              albedo_filename;
     std::string              flow_filename;
     std::string              flowtrust_filename;
-    std::string              output_filename = "denoised.exr";
+    std::string              output_filename;
     std::vector<std::string> aov_filenames;
-    bool                     kpMode     = true;
-    bool                     applyFlow  = false;
+    bool                     applyFlowMode  = false;
     float                    exposure   = 0.f;
     int                      firstFrame = -1, lastFrame = -1;
     unsigned int             tileWidth = 0, tileHeight = 0;
     bool                     upscale2x = false;
-    OptixDenoiserAlphaMode   alphaMode = OPTIX_DENOISER_ALPHA_MODE_COPY;
+    bool                     denoiseAlpha = false;
     bool                     specularMode = 0;
-    float                    xmul = 1.f, ymul = 1.f;
-    bool                     multiplyFlow = false;
+    float                    flowMulX = 1.f, flowMulY = 1.f;    // motion vectors are not scaled
     bool                     writeFP16 = true;
 
-    for( int32_t i = 1; i < argc - 1; ++i )
+    for( int32_t i = 1; i < argc; ++i )
     {
         std::string arg( argv[i] );
 
         if( arg == "-b" || arg == "--beauty" )
         {
-            if( i == argc - 2 )
+            if( i == argc - 1 )
                 printUsageAndExit( argv[0] );
             beauty_filename = argv[++i];
         }
         else if( arg == "-n" || arg == "--normal" )
         {
-            if( i == argc - 2 )
+            if( i == argc - 1 )
                 printUsageAndExit( argv[0] );
             normal_filename = argv[++i];
         }
         else if( arg == "-a" || arg == "--albedo" )
         {
-            if( i == argc - 2 )
+            if( i == argc - 1 )
                 printUsageAndExit( argv[0] );
             albedo_filename = argv[++i];
         }
         else if( arg == "-e" || arg == "--exposure" )
         {
-            if( i == argc - 2 )
+            if( i == argc - 1 )
                 printUsageAndExit( argv[0] );
             exposure = std::stof( argv[++i] );
         }
         else if( arg == "-f" || arg == "--flow" )
         {
-            if( i == argc - 2 )
+            if( i == argc - 1 )
                 printUsageAndExit( argv[0] );
             flow_filename = argv[++i];
         }
         else if( arg == "-T" )
         {
-            if( i == argc - 2 )
+            if( i == argc - 1 )
                 printUsageAndExit( argv[0] );
             flowtrust_filename = argv[++i];
         }
         else if( arg == "-o" || arg == "--out" )
         {
-            if( i == argc - 2 )
+            if( i == argc - 1 )
                 printUsageAndExit( argv[0] );
             output_filename = argv[++i];
         }
         else if( arg == "-t" || arg == "--tilesize" )
         {
-            if( i == argc - 3 )
+            try
+            {
+                size_t pos;
+                if( i == argc - 1 )
+                    printUsageAndExit( argv[0] );
+                std::string s1( argv[++i] );
+                tileWidth = unsigned( std::stoi( s1, &pos ) );
+                if( pos != s1.length() )
+                    printUsageAndExit( argv[0] );
+
+                if( i == argc - 1 )
+                    printUsageAndExit( argv[0] );
+                std::string s2( argv[++i] );
+                tileHeight = unsigned( std::stoi( s2, &pos ) );
+                if( pos != s2.length() )
+                    printUsageAndExit( argv[0] );
+            } catch( ... )
+            {
                 printUsageAndExit( argv[0] );
-            tileWidth  = atoi( argv[++i] );
-            tileHeight = atoi( argv[++i] );
+            }
         }
         else if( arg == "-A" || arg == "--AOV" )
         {
-            if( i == argc - 2 )
+            if( i == argc - 1 )
                 printUsageAndExit( argv[0] );
             aov_filenames.push_back( std::string( argv[++i] ) );
         }
         else if( arg == "-S" )
         {
-            if( i == argc - 2 )
+            if( i == argc - 1 )
                 printUsageAndExit( argv[0] );
             aov_filenames.push_back( std::string( argv[++i] ) );
             specularMode = true;
-        }
-        else if( arg == "-k" )
-        {
-            kpMode = true;
-        }
-        else if( arg == "-d" )
-        {
-            kpMode = false;
         }
         else if( arg == "-fp32" )
         {
@@ -377,7 +347,7 @@ int32_t main( int32_t argc, char** argv )
         }
         else if( arg == "-z" )
         {
-            applyFlow = true;
+            applyFlowMode = true;
         }
         else if( arg == "-up2" )
         {
@@ -385,37 +355,78 @@ int32_t main( int32_t argc, char** argv )
         }
         else if( arg == "-alpha" )
         {
-            alphaMode = OPTIX_DENOISER_ALPHA_MODE_DENOISE;
+            denoiseAlpha = true;
         }
         else if( arg == "-F" || arg == "--Frames" )
         {
-            if( i == argc - 2 )
+            if( i == argc - 1 )
                 printUsageAndExit( argv[0] );
             std::string s( argv[++i] );
-            size_t      cpos = s.find( '-' );
-            if( cpos == 0 || cpos == s.length() - 1 || cpos == std::string::npos )
-                printUsageAndExit( argv[0] );
-            firstFrame = atoi( s.substr( 0, cpos ).c_str() );
-            lastFrame  = atoi( s.substr( cpos + 1 ).c_str() );
+            size_t cpos = s.find( '-' );
+            if( cpos == std::string::npos )
+            {
+                size_t pos;
+                try
+                {
+                    firstFrame = std::stoi( s, &pos );
+                    if( pos != s.length() )
+                        printUsageAndExit( argv[0] );
+
+                    if( i == argc - 1 )
+                        printUsageAndExit( argv[0] );
+                    std::string s2( argv[++i] );
+                    lastFrame = std::stoi( s2, &pos );
+                    if( pos != s2.length() )
+                        printUsageAndExit( argv[0] );
+                } catch( ... )
+                {
+                    printUsageAndExit( argv[0] );
+                }
+            }
+            else 
+            {
+                if( cpos == 0 || cpos == s.length() - 1 )
+                    printUsageAndExit( argv[0] );
+                firstFrame = atoi( s.substr( 0, cpos ).c_str() );
+                lastFrame  = atoi( s.substr( cpos + 1 ).c_str() );
+            }
+
             if( firstFrame < 0 || lastFrame < 0 || firstFrame > lastFrame )
             {
-                std::cout << "illegal frame range, first frame must be <= last frame and >= 0" << std::endl;
-                exit( 0 );
+                fprintf( stderr, "Illegal frame range, first frame must be <= last frame and >= 0\n" );
+                exit( 1 );
             }
         }
         else if( arg == "-fmul" )
         {
-            if( i == argc - 2 )
+            try
+            {
+                size_t pos;
+                if( i == argc - 1 )
+                    printUsageAndExit( argv[0] );
+                std::string s1( argv[++i] );
+                flowMulX = std::stof( s1, &pos );
+                if( pos != s1.length() )
+                    printUsageAndExit( argv[0] );
+
+                if( i == argc - 1 )
+                    printUsageAndExit( argv[0] );
+                std::string s2( argv[++i] );
+                flowMulY = std::stof( s2, &pos );
+                if( pos != s2.length() )
+                    printUsageAndExit( argv[0] );
+            } catch( ... )
+            {
                 printUsageAndExit( argv[0] );
-            std::string s1( argv[++i] );
-            xmul = float( atof( s1.c_str() ) );
-            std::string s2( argv[++i] );
-            ymul = float( atof( s2.c_str() ) );
-            multiplyFlow = true;
+            }
+        }
+        else if( arg[0] == '-' )
+        {
+            printUsageAndExit( argv[0] );
         }
         else
         {
-            printUsageAndExit( argv[0] );
+            color_filename = arg;
         }
     }
 
@@ -423,239 +434,266 @@ int32_t main( int32_t argc, char** argv )
 
     if( temporalMode && flow_filename.empty() )
     {
-        std::cout << "temporal mode enabled, flow filename not specified" << std::endl;
-        exit( 0 );
+        fprintf( stderr, "Temporal mode enabled, flow filename not specified\n" );
+        exit( 1 );
     }
 
-    sutil::ImageBuffer              color     = {};
-    sutil::ImageBuffer              normal    = {};
-    sutil::ImageBuffer              albedo    = {};
-    sutil::ImageBuffer              flow      = {};
-    sutil::ImageBuffer              flowtrust = {};
+    OptixImage2D color     = {};
+    OptixImage2D normal    = {};
+    OptixImage2D albedo    = {};
+    OptixImage2D flow      = {};
+    OptixImage2D flowtrust = {};
+    
+    CUstream stream = 0;
 
-    unsigned int outScale = upscale2x ? 2 : 1;
-
-    try
+    //
+    // Initialize CUDA and create OptiX context
+    //
+    // Initialize CUDA
+    if( cudaFree( nullptr ) != cudaSuccess )
     {
-        EXRImage exrImage = {};
+        fprintf(stderr, "CUDA initialization failed\n");
+        exit( 1 );
+    }
 
-        OptiXDenoiser denoiser;
-        for( int frame = firstFrame; frame <= lastFrame; frame++ )
+    CUcontext cu_ctx = nullptr;  // zero means take the current context
+    if( optixInit() )
+    {
+        fprintf(stderr, "OptiX initialization failed\n");
+        exit( 1 );
+    }
+
+    OptixDeviceContext context;
+    OptixDeviceContextOptions co = {};
+    co.logCallbackFunction       = &context_log_cb;
+    co.logCallbackLevel          = 4;
+    if( optixDeviceContextCreate( cu_ctx, &co, &context ) )
+    {
+        fprintf(stderr, "OptiX device context creation failed\n");
+        exit( 1 );
+    }
+
+    OptiXDenoiser denoiser( context_log_cb, 0 );
+
+    ApplyFlow applyFlow;
+
+    for( int frame = firstFrame; frame <= lastFrame; frame++ )
+    {
+        EXRImage exrImage = {};                 // cached image if multilayer EXR given
+
+        std::vector<OptixImage2D> aovs;
+
+        printf( "Loading inputs " );
+        if( frame != -1 )
+            printf( "for frame %d", frame );
+        printf( "\n" );
+
+        std::string frame_filename;
+        if( !getFrameFilename( frame_filename, color_filename, std::string(""), frame ) )
         {
-            std::vector<sutil::ImageBuffer> aovs;
+            fprintf( stderr, "Error creating color filename for %s\n", color_filename.c_str() );
+            exit( 1 );
+        }
+        std::string frame_filename_input = frame_filename;
 
-            const double t0 = getCurrentTime();
-            std::cout << "Loading inputs ";
-            if( frame != -1 )
-                std::cout << "for frame " << frame;
-            std::cout << " ..." << std::endl;
+        color = loadImageLayer( frame_filename.c_str(), beauty_filename.empty() ? 0 : beauty_filename.c_str(), &exrImage );
+        printf( "Loaded color image %s, width %d, height %d\n", frame_filename.c_str(), color.width, color.height );
 
-            std::string frame_filename;
-            if( !getFrameFilename( frame_filename, color_filename, std::string(""), frame ) )
+        if( !normal_filename.empty() )
+        {
+            if( !getFrameFilename( frame_filename, normal_filename, frame_filename_input, frame ) )
             {
-                std::cout << "cannot open color file" << std::endl;
+                fprintf( stderr, "Error creating normal filename for %s\n", normal_filename.c_str() );
                 exit( 0 );
             }
-            std::string frame_filename_input = frame_filename;
 
-            color = loadImageLayer( frame_filename.c_str(), beauty_filename.empty() ? 0 : beauty_filename.c_str(), &exrImage );
-            std::cout << "\tLoaded color image " << frame_filename << " (" << color.width << "x" << color.height << ")"
-                      << std::endl;
+            // allocate four channels. only two/three channels used depending on model.
+            normal = loadImageLayer( frame_filename.c_str(), normal_filename.c_str(), &exrImage );
+            printf( "Loaded normal image %s\n", frame_filename.c_str() );
+        }
 
-            if( !normal_filename.empty() )
+        if( !albedo_filename.empty() )
+        {
+            if( !getFrameFilename( frame_filename, albedo_filename, frame_filename_input, frame ) )
             {
-                if( !getFrameFilename( frame_filename, normal_filename, frame_filename_input, frame ) )
-                {
-                    std::cout << "cannot open normal file" << std::endl;
-                    exit( 0 );
-                }
-
-                // allocate four channels. only two/three channels used depending on model.
-                normal = loadImageLayer( frame_filename.c_str(), normal_filename.c_str(), &exrImage );
-                std::cout << "\tLoaded normal image " << frame_filename << std::endl;
+                fprintf( stderr, "Error creating albedo filename for %s\n", albedo_filename.c_str() );
+                exit( 0 );
             }
+            // allocate four channels. only three channels used.
+            albedo = loadImageLayer( frame_filename.c_str(), albedo_filename.c_str(), &exrImage );
+            printf( "Loaded albedo image %s\n", frame_filename.c_str() );
+        }
 
-            if( !albedo_filename.empty() )
+        if( !flow_filename.empty() )
+        {
+            if( !getFrameFilename( frame_filename, flow_filename, frame_filename_input, frame ) )
             {
-                if( !getFrameFilename( frame_filename, albedo_filename, frame_filename_input, frame ) )
-                {
-                    std::cout << "cannot open albedo file" << std::endl;
-                    exit( 0 );
-                }
-                // allocate four channels. only three channels used.
-                albedo = loadImageLayer( frame_filename.c_str(), albedo_filename.c_str(), &exrImage );
-                std::cout << "\tLoaded albedo image " << frame_filename << std::endl;
+                fprintf( stderr, "Error creating flow filename for %s\n", flow_filename.c_str() );
+                exit( 1 );
             }
+            // allocate four channels. only two channels used.
+            flow = loadImageLayer( frame_filename.c_str(), flow_filename.c_str(), &exrImage );
+            printf( "Loaded flow image %s\n", frame_filename.c_str() );
+        }
 
-            if( frame > firstFrame && !flow_filename.empty() )
+        if( !flowtrust_filename.empty() )
+        {
+            if( !getFrameFilename( frame_filename, flowtrust_filename, frame_filename_input, frame ) )
             {
-                if( !getFrameFilename( frame_filename, flow_filename, frame_filename_input, frame ) )
-                {
-                    std::cout << "cannot open flow file" << std::endl;
-                    exit( 0 );
-                }
-                // allocate four channels. only two channels used.
-                // sutil::loadImage handles only 3 and 4 channels.
-                flow = loadImageLayer( frame_filename.c_str(), flow_filename.c_str(), &exrImage );
-                std::cout << "\tLoaded flow image " << frame_filename << std::endl;
-
-                if( multiplyFlow )
-                {
-                    float* data = (float*)flow.data;
-                    for( unsigned int i=0; i < flow.width * flow.height; i++ )
-                    {
-                        data[i*4+0] *= xmul;
-                        data[i*4+1] *= ymul;
-                    }
-                }
+                fprintf( stderr, "Error creating flowtrust filename for %s\n", flowtrust_filename.c_str() );
+                exit( 1 );
             }
+            // allocate four channels. only three channels used.
+            flowtrust = loadImageLayer( frame_filename.c_str(), flowtrust_filename.c_str(), &exrImage );
+            printf( "Loaded flowTrustworthiness image %s\n", frame_filename.c_str() );
+        }
 
-            if( !flowtrust_filename.empty() )
+        for( size_t i = 0; i < aov_filenames.size(); i++ )
+        {
+            if( !getFrameFilename( frame_filename, aov_filenames[i], frame_filename_input, frame ) )
             {
-                if( !getFrameFilename( frame_filename, flowtrust_filename, frame_filename_input, frame ) )
-                {
-                    std::cout << "cannot open flowTrustworthiness file" << std::endl;
-                    exit( 0 );
-                }
-                // allocate four channels. only three channels used.
-                flowtrust = loadImageLayer( frame_filename.c_str(), flowtrust_filename.c_str(), &exrImage );
-                std::cout << "\tLoaded flowTrustworthiness image " << frame_filename << std::endl;
+                fprintf( stderr, "Error creating aov filename for %s\n", aov_filenames[i].c_str() );
+                exit( 1 );
             }
+            aovs.push_back( loadImageLayer( frame_filename.c_str(), aov_filenames[i].c_str(), &exrImage ) );
+            printf( "Loaded aov image %s\n", frame_filename.c_str() );
+        }
 
-            for( size_t i = 0; i < aov_filenames.size(); i++ )
-            {
-                if( !getFrameFilename( frame_filename, aov_filenames[i], frame_filename_input, frame ) )
-                {
-                    std::cout << "cannot open aov file" << std::endl;
-                    exit( 0 );
-                }
-                aovs.push_back( loadImageLayer( frame_filename.c_str(), aov_filenames[i].c_str(), &exrImage ) );
-                std::cout << "\tLoaded aov image " << frame_filename << std::endl;
-            }
-
-            const double t1 = getCurrentTime();
-            std::cout << "\tLoad inputs from disk     :" << std::fixed << std::setw( 8 ) << std::setprecision( 2 )
-                      << ( t1 - t0 ) * 1000.0 << " ms" << std::endl;
-
-            SUTIL_ASSERT( color.pixel_format == sutil::FLOAT4 );
-            SUTIL_ASSERT( !albedo.data || albedo.pixel_format == sutil::FLOAT4 );
-            SUTIL_ASSERT( !normal.data || normal.pixel_format == sutil::FLOAT4 );
-            SUTIL_ASSERT( !flow.data || flow.pixel_format == sutil::FLOAT4 );
-            for( size_t i = 0; i < aov_filenames.size(); i++ )
-                SUTIL_ASSERT( aovs[i].pixel_format == sutil::FLOAT4 );
-
-            OptiXDenoiser::Data data;
-            data.width     = color.width;
-            data.height    = color.height;
-            data.color     = reinterpret_cast<float*>( color.data );
-            data.albedo    = reinterpret_cast<float*>( albedo.data );
-            data.normal    = reinterpret_cast<float*>( normal.data );
-            data.flow      = reinterpret_cast<float*>( flow.data );
-            data.flowtrust = reinterpret_cast<float*>( flowtrust.data );
-
-            // set AOVs
-            for( size_t i = 0; i < aovs.size(); i++ )
-                data.aovs.push_back( reinterpret_cast<float*>( aovs[i].data ) );
-
-            // allocate outputs
-            for( size_t i = 0; i < 1 + aovs.size(); i++ )
-                data.outputs.push_back( new float[outScale * color.width * outScale * color.height * 4] );
-
-            std::cout << "Denoising ..." << std::endl;
-
-            if( frame == firstFrame )
-            {
-                const double t0 = getCurrentTime();
-                denoiser.init( data, tileWidth, tileHeight, kpMode, temporalMode, applyFlow, upscale2x, alphaMode, specularMode );
-                const double t1 = getCurrentTime();
-                std::cout << "\tAPI Initialization        :" << std::fixed << std::setw( 8 ) << std::setprecision( 2 )
-                          << ( t1 - t0 ) * 1000.0 << " ms" << std::endl;
-            }
+        if( frame == firstFrame )
+        {
+            bool ret;
+            if( applyFlowMode )
+                ret = applyFlow.init( color, stream );
             else
+                ret = denoiser.init( context, stream, color.width, color.height, tileWidth, tileHeight,
+                                     upscale2x,
+                                     albedo.data != 0,
+                                     normal.data != 0, 
+                                     temporalMode,
+                                     denoiseAlpha );
+            if( !ret )
             {
-                denoiser.update( data );
-            }
-
-            {
-                const double t0 = getCurrentTime();
-                denoiser.exec();
-                const double t1 = getCurrentTime();
-                std::cout << "\tDenoise frame             :" << std::fixed << std::setw( 8 ) << std::setprecision( 2 )
-                          << ( t1 - t0 ) * 1000.0 << " ms" << std::endl;
-            }
-
-            {
-                const double t0 = getCurrentTime();               
-                denoiser.getResults();
-                const double t1 = getCurrentTime();
-                std::cout << "\tCleanup state/copy to host:" << std::fixed << std::setw( 8 ) << std::setprecision( 2 )
-                          << ( t1 - t0 ) * 1000.0 << " ms" << std::endl;
-            }
-
-            // AOVs are not written when speclarMode is set. A single specular AOV is expected in this mode,
-            // to keep the sample code simple.
-            size_t numOut = specularMode ? 1 : 1 + aovs.size();
-
-            {
-                const double t0 = getCurrentTime();
-
-                for( size_t i = 0; i < numOut; i++ )
-                {
-                    sutil::ImageBuffer output_image;
-                    output_image.width        = outScale * color.width;
-                    output_image.height       = outScale * color.height;
-                    output_image.data         = data.outputs[i];
-                    output_image.pixel_format = sutil::FLOAT4;
-
-                    frame_filename = output_filename;
-                    getFrameFilename( frame_filename, output_filename, std::string(""), frame );
-                    if( i > 0 )
-                    {
-                        std::string basename = aov_filenames[i - 1].substr( aov_filenames[i - 1].find_last_of( "/\\" ) + 1 );
-                        std::string::size_type const p( basename.find_last_of( '.' ) );
-                        std::string                  b = basename.substr( 0, p );
-                        frame_filename.insert( frame_filename.rfind( '.' ), "_" + b + "_denoised" );
-                    }
-                    if( exposure != 0.f )
-                    {
-                        for( unsigned int p = 0; p < output_image.width * output_image.height; p++ )
-                        {
-                            float* f = &( (float*)output_image.data )[p * 4 + 0];
-                            f[0] *= std::pow( 2.f, exposure );
-                            f[1] *= std::pow( 2.f, exposure );
-                            f[2] *= std::pow( 2.f, exposure );
-                        }
-                    }
-                    std::cout << "Saving results to '" << frame_filename << "'..." << std::endl;
-                    saveImageEXR( frame_filename.c_str(), output_image, writeFP16 );
-                }
-
-                const double t1 = getCurrentTime();
-                std::cout << "\tSave output to disk       :" << std::fixed << std::setw( 8 ) << std::setprecision( 2 )
-                          << ( t1 - t0 ) * 1000.0 << " ms" << std::endl;
-            }
-
-            freeImageBuffer( color );
-            freeImageBuffer( albedo );
-            freeImageBuffer( normal );
-            freeImageBuffer( flow );
-            freeImageBuffer( flowtrust );
-            for( size_t i = 0; i < aovs.size(); i++ )
-                freeImageBuffer( aovs[i] );
-            for( size_t i = 0; i < 1 + aovs.size(); i++ )
-                delete[]( data.outputs[i] );
-
-            if( exrImage.num_channels > 0 )
-            {
-                FreeEXRImage( &exrImage );
-                exrImage = {};
+                fprintf(stderr, "Error initializing denoiser\n");
+                exit( 1 );
             }
         }
 
-        denoiser.finish();
+        OptiXDenoiser::InputData indata;
+        indata.color     = color;
+        indata.albedo    = albedo;
+        indata.normal    = normal;
+        indata.flow      = flow;
+        indata.flowtrust = flowtrust;
+
+        // set AOVs
+        for( size_t i = 0; i < aovs.size(); i++ )
+            indata.aovs.push_back( aovs[i] );
+
+        unsigned int outScale = upscale2x ? 2 : 1;
+
+        // allocate outputs
+        OptiXDenoiser::OutputData outdata;
+        outdata.color = createOptixImage2D( outScale * color.width, outScale * color.height, OPTIX_PIXEL_FORMAT_FLOAT4 );
+        for( size_t i = 0; i < aovs.size(); i++ )
+            outdata.aovs.push_back( createOptixImage2D( outScale * color.width, outScale * color.height, OPTIX_PIXEL_FORMAT_FLOAT4 ) );
+
+        bool ret = true;
+
+        if( frame == firstFrame && temporalMode )
+        {
+            if( cudaMemsetAsync( (void*)flow.data, 0, flow.rowStrideInBytes * flow.height, stream ) != cudaSuccess )
+                ret = false;
+        }
+
+        printf( "Denoising ...\n" );
+
+        const double t0 = getCurrentTime();
+        if( applyFlowMode )
+        {
+            // apply current flow to previous frame noisy image with current flow
+            ret = applyFlow.apply( outdata.color, color, flow, flowMulX, flowMulY, stream );
+        }
+        else
+            ret = denoiser.denoise( outdata, indata, stream, flowMulX, flowMulY, frame == firstFrame );
+
+        if( !ret )
+        {
+            fprintf( stderr, "Error during denoising\n" );
+            exit( 1 );
+        }
+
+        cudaStreamSynchronize( stream );
+
+        const double t1 = getCurrentTime();
+        printf( "Denoise frame: %.2f ms\n", ( t1 - t0 ) * 1000.f );
+
+        if( !output_filename.empty() )
+        {
+            // AOVs are not written when speclarMode is set. A single specular AOV is expected in this mode,
+            // to keep the sample code simple.
+            size_t numOutputs = specularMode ? 1 : 1 + aovs.size();
+
+            for( size_t i = 0; i < numOutputs; i++ )
+            {
+                frame_filename = output_filename;
+                getFrameFilename( frame_filename, output_filename, std::string(""), frame );
+                if( i > 0 )
+                {
+                    std::string basename = aov_filenames[i - 1].substr( aov_filenames[i - 1].find_last_of( "/\\" ) + 1 );
+                    std::string::size_type const p( basename.find_last_of( '.' ) );
+                    std::string                  b = basename.substr( 0, p );
+                    frame_filename.insert( frame_filename.rfind( '.' ), "_" + b + "_denoised" );
+                }
+                OptixImage2D& image = ( i == 0 ) ? outdata.color : outdata.aovs[i-1];
+                if( exposure != 0.f )
+                {
+                    std::vector<char> data( image.rowStrideInBytes * image.height );
+                    cudaMemcpy( (void*)&data[0], (void*)image.data, image.rowStrideInBytes * image.height, cudaMemcpyDeviceToHost );
+                    for( unsigned int p = 0; p < image.width * image.height; p++ )
+                    {
+                        float* f = &((float*)&data[0])[p * 4 + 0];
+                        f[0] *= std::pow( 2.f, exposure );
+                        f[1] *= std::pow( 2.f, exposure );
+                        f[2] *= std::pow( 2.f, exposure );
+                    }
+                    cudaMemcpy( (void*)image.data, &data[0], image.rowStrideInBytes * image.height, cudaMemcpyHostToDevice );
+                }
+                printf( "Saving results to %s\n", frame_filename.c_str() );
+                saveImageEXR( frame_filename.c_str(), image, writeFP16 );
+            }
+        }
+
+        freeOptixImage2D( color );
+        freeOptixImage2D( albedo );
+        freeOptixImage2D( normal );
+        freeOptixImage2D( flow );
+        freeOptixImage2D( flowtrust );
+
+        for( size_t i = 0; i < aovs.size(); i++ )
+            freeOptixImage2D( aovs[i] );
+
+        freeOptixImage2D( outdata.color );
+        for( size_t i = 0; i < aovs.size(); i++ )
+            freeOptixImage2D( outdata.aovs[i] );
+
+        if( exrImage.num_channels > 0 )
+        {
+            FreeEXRImage( &exrImage );
+            exrImage = {};
+        }
     }
-    catch( std::exception& e )
+
+    applyFlow.exit();
+
+    denoiser.exit();
+    optixDeviceContextDestroy( context );
+
+    cudaError_t error = cudaGetLastError();
+    if( error != cudaSuccess )
     {
-        std::cerr << "ERROR: exception caught '" << e.what() << "'" << std::endl;
+        fprintf( stderr, "Error during denoising: %s\n", cudaGetErrorString( error ) );
+        exit( 1 );
     }
+
+    return 0;
 }

@@ -1,32 +1,6 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2021 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "optixVolumeViewer.h"
@@ -48,6 +22,7 @@
 #include <sutil/CUDAOutputBuffer.h>
 #include <sutil/Exception.h>
 #include <sutil/GLDisplay.h>
+#include <sutil/cuda/Light.h>
 
 #include <GLFW/glfw3.h>
 
@@ -92,7 +67,7 @@
 // structure. This was done in the viewer example that ships with the OpenVDB/
 // NanoVDB distribution (https://github.com/AcademySoftwareFoundation/openvdb).
 // For the level-set rendering in that example, bounding-boxes for all leaf-
-// nodes were added. 
+// nodes were added.
 // ----------------------------------------------------------------------------
 
 
@@ -121,14 +96,14 @@ VolumeAccel g_volume_accel = {};
 PlaneAccel  g_plane_accel  = {};
 CubeAccel   g_cube_accel  = {};
 IAS         ias          = {};
-			
+
 Params launch_params = {};
 
 OptixModule module                     = 0;
 ProgramGroups           program_groups = {};
 OptixPipeline           pipeline       = 0;
 OptixShaderBindingTable sbt            = {};
-  
+
 
 // ----------------------------------------------------------------------------
 //
@@ -215,7 +190,7 @@ inline void decreaseOpacity()
     camera_changed = true;
 }
 
-inline void raisePlane() 
+inline void raisePlane()
 {
     float plane_y = peek( dp_plane_y );
     plane_y += 5.0f;
@@ -231,17 +206,17 @@ inline void lowerPlane()
     ias_changed = true;
 }
 
-inline void zoomIn() 
+inline void zoomIn()
 {
     // decrease field-of-view angle by 5%
-    camera.setFovY(camera.fovY() / 1.05f); 
+    camera.setFovY(camera.fovY() / 1.05f);
     camera_changed = true;
 }
 
 inline void zoomOut()
 {
     // increase field-of-view angle by 5%
-    camera.setFovY(camera.fovY() * 1.05f); 
+    camera.setFovY(camera.fovY() * 1.05f);
     camera_changed = true;
 }
 
@@ -459,7 +434,7 @@ void printUsageAndExit( const char* argv0 )
 }
 
 
-void initLaunchParams( Params& launch_params, const OptixTraversableHandle& handle, const sutil::Aabb& aabb ) 
+void initLaunchParams( Params& launch_params, const OptixTraversableHandle& handle, const sutil::Aabb& aabb )
 {
     CUDA_CHECK( cudaMalloc(
                 reinterpret_cast<void**>( &launch_params.params.accum_buffer ),
@@ -474,29 +449,29 @@ void initLaunchParams( Params& launch_params, const OptixTraversableHandle& hand
     const float loffset = aabb.maxExtent();
 
 
-    std::vector<Light> lights( 2 );
-    lights[0].type            = Light::Type::POINT;
+    std::vector<sutil::Light> lights( 2 );
+    lights[0].type            = sutil::Light::Type::POINT;
     lights[0].point.color     = {1.0f, 1.0f, 0.8f};
     lights[0].point.intensity = 5.0f;
     lights[0].point.position  = aabb.center() + make_float3( loffset );
-    lights[0].point.falloff   = Light::Falloff::QUADRATIC;
+    lights[0].point.falloff   = sutil::Light::Falloff::QUADRATIC;
 
-    lights[1].type            = Light::Type::POINT;
+    lights[1].type            = sutil::Light::Type::POINT;
     lights[1].point.color     = {0.8f, 0.8f, 1.0f};
     lights[1].point.intensity = 3.0f;
     lights[1].point.position  = aabb.center() + make_float3( -loffset, 1.f * loffset, -1.0f * loffset );
-    lights[1].point.falloff   = Light::Falloff::QUADRATIC;
+    lights[1].point.falloff   = sutil::Light::Falloff::QUADRATIC;
 
 
     launch_params.params.lights.count  = static_cast<uint32_t>( lights.size() );
     CUDA_CHECK( cudaMalloc(
                 reinterpret_cast<void**>( &launch_params.params.lights.data ),
-                lights.size() * sizeof( Light )
+                lights.size() * sizeof( sutil::Light )
                 ) );
     CUDA_CHECK( cudaMemcpy(
                 reinterpret_cast<void*>( launch_params.params.lights.data ),
                 lights.data(),
-                lights.size() * sizeof( Light ),
+                lights.size() * sizeof( sutil::Light ),
                 cudaMemcpyHostToDevice
                 ) );
 
@@ -652,7 +627,7 @@ void loadVolume( Volume& grid, const std::string& filename )
         std::cerr << "        " << m.gridName << std::endl;
     }
     assert( list.size() > 0 );
-    // load the first grid in the file 
+    // load the first grid in the file
     createGrid( grid, filename, list[0].gridName );
 }
 
@@ -665,7 +640,7 @@ void loadVolume( Volume& grid, const std::string& filename )
 	else
 		gridHdl = nanovdb::io::readGrid<>( filename );
 
-    if( !gridHdl ) 
+    if( !gridHdl )
     {
         std::stringstream ss;
         ss << "Unable to read " << gridname << " from " << filename;
@@ -718,9 +693,9 @@ void buildVolumeAccel( VolumeAccel& accel, const Volume& volume, const OptixDevi
             nanovdb::Coord boundsMin( bbox.min() );
             nanovdb::Coord boundsMax( bbox.max() + nanovdb::Coord( 1 ) ); // extend by one unit
 
-            float3 min = { 
-                static_cast<float>( boundsMin[0] ), 
-                static_cast<float>( boundsMin[1] ), 
+            float3 min = {
+                static_cast<float>( boundsMin[0] ),
+                static_cast<float>( boundsMin[1] ),
                 static_cast<float>( boundsMin[2] )};
             float3 max = {
                 static_cast<float>( boundsMax[0] ),
@@ -733,7 +708,7 @@ void buildVolumeAccel( VolumeAccel& accel, const Volume& volume, const OptixDevi
 		// up to device
         CUdeviceptr d_aabb;
         CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_aabb ), sizeof( sutil::Aabb ) ) );
-        CUDA_CHECK( cudaMemcpy( reinterpret_cast<void* >(  d_aabb ), &aabb, 
+        CUDA_CHECK( cudaMemcpy( reinterpret_cast<void* >(  d_aabb ), &aabb,
             sizeof( sutil::Aabb ), cudaMemcpyHostToDevice ) );
 
         // Make build input for this grid
@@ -753,7 +728,7 @@ void buildVolumeAccel( VolumeAccel& accel, const Volume& volume, const OptixDevi
         accel_options.operation = OPTIX_BUILD_OPERATION_BUILD;
 
         OptixAccelBufferSizes gas_buffer_sizes;
-        OPTIX_CHECK( optixAccelComputeMemoryUsage( context, &accel_options, 
+        OPTIX_CHECK( optixAccelComputeMemoryUsage( context, &accel_options,
             &build_input, 1, &gas_buffer_sizes ) );
 
         CUdeviceptr d_temp_buffer_gas;
@@ -786,14 +761,14 @@ void buildVolumeAccel( VolumeAccel& accel, const Volume& volume, const OptixDevi
         CUDA_CHECK( cudaMemcpy( &compacted_size, reinterpret_cast<void*>( emit_property.result ),
             sizeof( size_t ), cudaMemcpyDeviceToHost ) );
         CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_compacted_size ) ) );
-        if( compacted_size < gas_buffer_sizes.outputSizeInBytes ) 
+        if( compacted_size < gas_buffer_sizes.outputSizeInBytes )
         {
             CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &accel.d_buffer ), compacted_size ) );
             OPTIX_CHECK( optixAccelCompact( context, 0, accel.handle,
                 accel.d_buffer, compacted_size, &accel.handle ) );
             CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_output_buffer_gas ) ) );
         }
-        else 
+        else
         {
             accel.d_buffer = d_output_buffer_gas;
         }
@@ -839,7 +814,7 @@ void createPlane( Plane& plane, const sutil::Aabb& aabb )
 {
     plane.transform = sutil::Matrix4x4::identity();
 
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &plane.d_indices ), 
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &plane.d_indices ),
         plane.num_indices * sizeof( unsigned int ) ) );
     CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( plane.d_indices ), plane.indices,
         plane.num_indices * sizeof(unsigned int), cudaMemcpyHostToDevice));
@@ -852,11 +827,11 @@ void createPlane( Plane& plane, const sutil::Aabb& aabb )
 	plane.positions[2] = make_float3( center.x + extent, aabb.m_min.y - 1.0f, center.z + extent );
 	plane.positions[3] = make_float3( center.x + extent, aabb.m_min.y - 1.0f, center.z - extent );
 
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &plane.d_positions ), 
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &plane.d_positions ),
         plane.num_positions * sizeof( float3 ) ) );
     CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( plane.d_positions ), plane.positions,
         plane.num_positions * sizeof( float3 ), cudaMemcpyHostToDevice ) );
-    
+
     plane.material.base_color = make_float3( 0.1f, 0.1f, 0.1f );
 
     plane.aabb = sutil::Aabb(
@@ -866,8 +841,8 @@ void createPlane( Plane& plane, const sutil::Aabb& aabb )
 
 void cleanupPlane( Plane& plane )
 {
-    CUDA_CHECK_NOTHROW( cudaFree( reinterpret_cast<void*>( plane.d_indices ) ) );	
-    CUDA_CHECK_NOTHROW( cudaFree( reinterpret_cast<void*>( plane.d_positions ) ) );	
+    CUDA_CHECK_NOTHROW( cudaFree( reinterpret_cast<void*>( plane.d_indices ) ) );
+    CUDA_CHECK_NOTHROW( cudaFree( reinterpret_cast<void*>( plane.d_positions ) ) );
 }
 
 void buildPlaneAccel( PlaneAccel& plane_accel, const Plane& plane, const OptixDeviceContext& context )
@@ -890,7 +865,7 @@ void buildPlaneAccel( PlaneAccel& plane_accel, const Plane& plane, const OptixDe
     build_input.triangleArray.indexBuffer = plane.d_indices;
     build_input.triangleArray.flags = &triangle_input_flags;
     build_input.triangleArray.numSbtRecords = 1;
-    
+
     OptixAccelBufferSizes gas_buffer_sizes;
     OPTIX_CHECK( optixAccelComputeMemoryUsage( context, &accel_options, &build_input,
 		1, &gas_buffer_sizes ) );
@@ -902,9 +877,9 @@ void buildPlaneAccel( PlaneAccel& plane_accel, const Plane& plane, const OptixDe
     OptixAccelEmitDesc emitProperty = {};
     emitProperty.type = OPTIX_PROPERTY_TYPE_COMPACTED_SIZE;
 
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_temp ), gas_buffer_sizes.tempSizeInBytes ) ); 
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_temp_output ), gas_buffer_sizes.outputSizeInBytes ) ); 
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_temp_compactedSizes ), sizeof(size_t) ) ); 
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_temp ), gas_buffer_sizes.tempSizeInBytes ) );
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_temp_output ), gas_buffer_sizes.outputSizeInBytes ) );
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_temp_compactedSizes ), sizeof(size_t) ) );
 
     emitProperty.result = d_temp_compactedSizes;
 
@@ -960,7 +935,7 @@ void createCube( Cube& cube, const sutil::Aabb& aabb )
 {
     cube.transform = sutil::Matrix4x4::identity();
 
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &cube.d_indices ), 
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &cube.d_indices ),
         cube.num_indices * sizeof( unsigned int ) ) );
     CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( cube.d_indices ), cube.indices,
         cube.num_indices * sizeof(unsigned int), cudaMemcpyHostToDevice));
@@ -971,7 +946,7 @@ void createCube( Cube& cube, const sutil::Aabb& aabb )
 
     cube.positions[0] = make_float3( 0, height_offset, extent );
     cube.positions[1] = make_float3( 0, height_offset, 0 );
-    cube.positions[2] = make_float3( extent, height_offset, 0 ); 
+    cube.positions[2] = make_float3( extent, height_offset, 0 );
     cube.positions[3] = make_float3( extent, height_offset, extent );
 
     cube.positions[4] = make_float3( 0, height_offset + extent, extent );
@@ -979,11 +954,11 @@ void createCube( Cube& cube, const sutil::Aabb& aabb )
     cube.positions[6] = make_float3( extent, height_offset + extent, 0 );
     cube.positions[7] = make_float3( 0, height_offset + extent, 0 );
 
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &cube.d_positions ), 
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &cube.d_positions ),
         cube.num_positions * sizeof( float3 ) ) );
     CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( cube.d_positions ), cube.positions,
         cube.num_positions * sizeof( float3 ), cudaMemcpyHostToDevice ) );
-    
+
     cube.material.base_color = make_float3( 0.2f, 0.05f, 0.05f ); // redish cube
 
     cube.aabb = sutil::Aabb(
@@ -994,8 +969,8 @@ void createCube( Cube& cube, const sutil::Aabb& aabb )
 
 void cleanupCube( Cube& cube )
 {
-    CUDA_CHECK_NOTHROW( cudaFree( reinterpret_cast<void*>( cube.d_indices ) ) );	
-    CUDA_CHECK_NOTHROW( cudaFree( reinterpret_cast<void*>( cube.d_positions ) ) );	
+    CUDA_CHECK_NOTHROW( cudaFree( reinterpret_cast<void*>( cube.d_indices ) ) );
+    CUDA_CHECK_NOTHROW( cudaFree( reinterpret_cast<void*>( cube.d_positions ) ) );
 }
 
 void buildCubeAccel( CubeAccel& cube_accel, const Cube& cube, const OptixDeviceContext& context )
@@ -1018,7 +993,7 @@ void buildCubeAccel( CubeAccel& cube_accel, const Cube& cube, const OptixDeviceC
     build_input.triangleArray.indexBuffer = cube.d_indices;
     build_input.triangleArray.flags = &triangle_input_flags;
     build_input.triangleArray.numSbtRecords = 1;
-    
+
     OptixAccelBufferSizes gas_buffer_sizes;
     OPTIX_CHECK( optixAccelComputeMemoryUsage( context, &accel_options, &build_input,
 		1, &gas_buffer_sizes ) );
@@ -1030,9 +1005,9 @@ void buildCubeAccel( CubeAccel& cube_accel, const Cube& cube, const OptixDeviceC
     OptixAccelEmitDesc emitProperty = {};
     emitProperty.type = OPTIX_PROPERTY_TYPE_COMPACTED_SIZE;
 
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_temp ), gas_buffer_sizes.tempSizeInBytes ) ); 
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_temp_output ), gas_buffer_sizes.outputSizeInBytes ) ); 
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_temp_compactedSizes ), sizeof(size_t) ) ); 
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_temp ), gas_buffer_sizes.tempSizeInBytes ) );
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_temp_output ), gas_buffer_sizes.outputSizeInBytes ) );
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_temp_compactedSizes ), sizeof(size_t) ) );
 
     emitProperty.result = d_temp_compactedSizes;
 
@@ -1084,8 +1059,8 @@ void cleanupCubeAccel( CubeAccel& cube_accel )
 // IAS stuff
 // ----------------------------------------------------------------------------
 
-void buildIAS( IAS& ias, int rayTypeCount, 
-    const Volume& volume, const VolumeAccel& volume_accel, 
+void buildIAS( IAS& ias, int rayTypeCount,
+    const Volume& volume, const VolumeAccel& volume_accel,
     const Plane& plane, const PlaneAccel& plane_accel,
     const Cube& cube, const CubeAccel& cube_accel,
     const OptixDeviceContext& context )
@@ -1275,8 +1250,8 @@ void createModule( OptixModule& module, const OptixDeviceContext& context )
 // ProgramGroups
 // ----------------------------------------------------------------------------
 
-void createProgramGroups( ProgramGroups& program_groups, 
-    const OptixModule& module, 
+void createProgramGroups( ProgramGroups& program_groups,
+    const OptixModule& module,
     const OptixDeviceContext& context )
 {
     OptixProgramGroupOptions program_group_options = {};
@@ -1428,7 +1403,7 @@ void createPipeline( OptixPipeline& pipeline, const ProgramGroups& programs, con
 
     OptixPipelineLinkOptions pipeline_link_options = {};
     pipeline_link_options.maxTraceDepth            = 4;
-
+    // relying on internal default implementation to compute pipeline stack size
     OPTIX_CHECK_LOG( optixPipelineCreate(
                 context,
                 &pipeline_compile_options,
@@ -1438,47 +1413,10 @@ void createPipeline( OptixPipeline& pipeline, const ProgramGroups& programs, con
                 LOG, &LOG_SIZE,
                 &pipeline
                 ) );
-
-	// We need to specify the max traversal depth.  Calculate the stack sizes, so we can specify all
-    // parameters to optixPipelineSetStackSize.
-    OptixStackSizes stack_sizes = {};
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.raygen,          &stack_sizes, pipeline ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.miss_radiance,   &stack_sizes, pipeline ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.miss_occlusion,  &stack_sizes, pipeline ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.mesh_radiance,  &stack_sizes, pipeline ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.mesh_occlusion, &stack_sizes, pipeline ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.volume_radiance, &stack_sizes, pipeline ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.volume_occlusion, &stack_sizes, pipeline ) );
-
-    uint32_t max_trace_depth = 4;
-    uint32_t max_cc_depth = 0;
-    uint32_t max_dc_depth = 4;
-    uint32_t direct_callable_stack_size_from_traversal;
-    uint32_t direct_callable_stack_size_from_state;
-    uint32_t continuation_stack_size;
-    OPTIX_CHECK( optixUtilComputeStackSizes(
-                &stack_sizes,
-                max_trace_depth,
-                max_cc_depth,
-                max_dc_depth,
-                &direct_callable_stack_size_from_traversal,
-                &direct_callable_stack_size_from_state,
-                &continuation_stack_size
-                ) );
-
-    const uint32_t max_traversal_depth = 2;
-    OPTIX_CHECK( optixPipelineSetStackSize(
-                pipeline,
-                direct_callable_stack_size_from_traversal,
-                direct_callable_stack_size_from_state,
-                continuation_stack_size,
-                max_traversal_depth
-                ) );
-
 }
 
 
-void createSBT( OptixShaderBindingTable& sbt, const ProgramGroups& program_groups, 
+void createSBT( OptixShaderBindingTable& sbt, const ProgramGroups& program_groups,
     const Volume& volume, const Plane& plane, const Cube& cube )
 {
     {
@@ -1525,7 +1463,7 @@ void createSBT( OptixShaderBindingTable& sbt, const ProgramGroups& program_group
 
             rec.data.material_data.lambert = plane.material;
             hitgroup_records.push_back( rec );
-            
+
             OPTIX_CHECK( optixSbtRecordPackHeader( program_groups.mesh_occlusion, &rec ) );
             hitgroup_records.push_back( rec );
         }
@@ -1537,7 +1475,7 @@ void createSBT( OptixShaderBindingTable& sbt, const ProgramGroups& program_group
 
             rec.data.material_data.lambert = cube.material;
             hitgroup_records.push_back( rec );
-            
+
             OPTIX_CHECK( optixSbtRecordPackHeader( program_groups.mesh_occlusion, &rec ) );
             hitgroup_records.push_back( rec );
         }
@@ -1574,7 +1512,7 @@ void createSBT( OptixShaderBindingTable& sbt, const ProgramGroups& program_group
             + OPTIX_SBT_RECORD_HEADER_SIZE + sizeof( GeometryData );
         {
             dp_opacities.push_back( dp_opacity );
-            dp_opacity += sizeof( HitGroupRecord ); // advance device pointer to second opacity (occlusion) 
+            dp_opacity += sizeof( HitGroupRecord ); // advance device pointer to second opacity (occlusion)
             dp_opacities.push_back( dp_opacity );
             dp_opacity += sizeof( HitGroupRecord );
         }

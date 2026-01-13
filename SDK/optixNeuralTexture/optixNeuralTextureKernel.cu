@@ -1,39 +1,14 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2019 - 2025  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+
 #include <optix.h>
 
-#include <cuda/LocalGeometry.h>
-#include <cuda/LocalShading.h>
-#include <cuda/helpers.h>
-#include <cuda/random.h>
+#include <sutil/cuda/LocalGeometry.h>
+#include <sutil/cuda/LocalShading.h>
+#include <sutil/cuda/helpers.h>
+#include <sutil/cuda/random.h>
 #include <sutil/vec_math.h>
 
 #include "optixNeuralTextureUtil.h"
@@ -51,11 +26,10 @@ extern "C" __global__ void __raygen__pinhole()
     const float3 W              = params.W;
     const int    subframe_index = params.subframe_index;
 
-    unsigned int seed = tea<4>( launch_idx.y * launch_dims.x + launch_idx.x, subframe_index );
+    unsigned int seed = sutil::tea<4>( launch_idx.y * launch_dims.x + launch_idx.x, subframe_index );
 
     PayloadRadiance payload;
     payload.result     = make_float3( 0.0f );
-    payload.depth      = 0;
 
     float3 result = make_float3( 0.0f );
 
@@ -68,7 +42,7 @@ extern "C" __global__ void __raygen__pinhole()
 
         // The center of each pixel is at fraction (0.5,0.5)
         const float2 subpixel_jitter =
-            subframe_index == 0 ? make_float2( 0.5f, 0.5f ) : make_float2( rnd( seed ), rnd( seed ) );
+            subframe_index == 0 ? make_float2( 0.5f, 0.5f ) : make_float2( sutil::rnd( seed ), sutil::rnd( seed ) );
 
         const float2 d = 2.0f * make_float2(
             ( static_cast<float>( launch_idx.x ) + subpixel_jitter.x ) / static_cast<float>( launch_dims.x ),
@@ -102,7 +76,7 @@ extern "C" __global__ void __raygen__pinhole()
         accum_color                   = lerp( accum_color_prev, accum_color, a );
     }
     params.accum_buffer[image_index] = make_float4( accum_color, 1.0f );
-    params.frame_buffer[image_index] = make_color( accum_color );
+    params.frame_buffer[image_index] = sutil::make_color( accum_color );
 }
 
 extern "C" __global__ void __miss__constant_radiance()
@@ -122,8 +96,8 @@ extern "C" __global__ void __closesthit__radiance()
 
     const uint3  launch_idx   = optixGetLaunchIndex();
     const uint3  launch_dims  = optixGetLaunchDimensions();
-    unsigned int rseed        = tea<4>( launch_idx.y * launch_dims.x + launch_idx.x, params.subframe_index );
-    float2       pixel_jitter = make_float2( rnd( rseed ), rnd( rseed ) );
+    unsigned int rseed        = sutil::tea<4>( launch_idx.y * launch_dims.x + launch_idx.x, params.subframe_index );
+    float2       pixel_jitter = make_float2( sutil::rnd( rseed ), sutil::rnd( rseed ) );
 
     //
     // Inference - decompress the texel using Tensor Cores
@@ -135,7 +109,7 @@ extern "C" __global__ void __closesthit__radiance()
     using T_VEC_OUT = OptixCoopVec<float, NTC_MLP_OUTPUT_CHANNELS>;
     T_VEC_OUT texelData;
 
-    const LocalGeometry geom = getLocalGeometry( hit_group_data->geometry_data );
+    const sutil::LocalGeometry geom = getLocalGeometry( hit_group_data->geometry_data );
     bool success = ntcTex2D<T_VEC_OUT>( texelData, params.textureSet, geom.texcoord->UV.x, 1.f - geom.texcoord->UV.y, pixel_jitter );
 
     // We expect the following channels in texelData:
@@ -196,14 +170,12 @@ extern "C" __global__ void __closesthit__radiance()
     if( dot( N, optixGetWorldRayDirection() ) > 0.f )
         N = -N;
 
-    unsigned int depth = getPayloadDepth() + 1;
-
     for( int i = 0; i < params.lights.count; ++i )
     {
-        Light light = params.lights[i];
-        if( light.type == Light::Type::POINT )
+        sutil::Light light = params.lights[i];
+        if( light.type == sutil::Light::Type::POINT )
         {
-            if( depth < MAX_TRACE_DEPTH )
+            if( optixGetRemainingTraceDepth() > 0 )
             {
                 const float  L_dist  = length( light.point.position - geom.P );
                 const float3 L       = ( light.point.position - geom.P ) / L_dist;
@@ -233,24 +205,23 @@ extern "C" __global__ void __closesthit__radiance()
                 }
             }
         }
-        else if( light.type == Light::Type::AMBIENT )
+        else if( light.type == sutil::Light::Type::AMBIENT )
         {
             result += light.ambient.color * make_float3( base_color );
         }
     }
 
-    if( hit_group_data->material_data.alpha_mode == MaterialData::ALPHA_MODE_BLEND )
+    if( hit_group_data->material_data.alpha_mode == sutil::MaterialData::ALPHA_MODE_BLEND )
     {
         result *= base_color.w;
 
-        if( depth < MAX_TRACE_DEPTH )
+        if( optixGetRemainingTraceDepth() > 0 )
         {
             PayloadRadiance alpha_payload;
             alpha_payload.result = make_float3( 0.0f );
-            alpha_payload.depth  = depth;
-            traceRadiance( 
-                params.handle, 
-                optixGetWorldRayOrigin(), 
+            traceRadiance(
+                params.handle,
+                optixGetWorldRayOrigin(),
                 optixGetWorldRayDirection(),
                 optixGetRayTmax(),  // tmin
                 1e16f,              // tmax

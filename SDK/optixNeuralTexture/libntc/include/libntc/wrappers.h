@@ -12,7 +12,8 @@
 
 #pragma once
 
-namespace ntc::utils
+namespace ntc {
+namespace utils
 {
 
 // Universal RAII-style wrapper NTC resources, closes or deletes the resource on destruction using the provided context.
@@ -135,7 +136,8 @@ struct AdaptiveCompressionSessionDeleter
     }
 };
 
-} // namespace ntc::utils
+} // namespace utils
+} // namespace ntc
 
 namespace ntc
 {

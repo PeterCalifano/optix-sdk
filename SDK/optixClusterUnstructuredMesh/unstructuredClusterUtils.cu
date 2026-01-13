@@ -1,32 +1,6 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2019 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include "unstructuredClusterUtils.h"
@@ -40,11 +14,13 @@ __global__ void deformClusterVertices_kernel( const uint32_t clusterCount, const
 
     const Cluster& cluster  = d_clusters[clusterId];
     float3*        vertices = reinterpret_cast<float3*>( cluster.d_positions );
+    float3*        deformedVertices = reinterpret_cast<float3*>( cluster.d_deformedPositions );
+
     for( uint32_t vtxIdx = threadIdx.x; vtxIdx < cluster.vertexCount; vtxIdx += 32 )
     {
-        float3& vtx = vertices[vtxIdx];
-        float   r   = M_PIf * length( make_float2( vtx.x, vtx.z ) );
-        vtx.y += 0.1f * cosf( 4.f * ( 0.0015 * r + animationTime ) );
+        float3 vtx = vertices[vtxIdx];
+        float  r                 = 0.002 * M_PIf * length( make_float2( vtx.x, vtx.z ) );
+        deformedVertices[vtxIdx] = make_float3( vtx.x, vtx.y + 16.f * cosf( M_PIf * animationTime + r ), vtx.z );
     }
 }
 
@@ -147,7 +123,7 @@ __global__ void makeTemplatesArgsData_kernel( const Cluster*                    
 
     OptixClusterAccelBuildInputTemplatesArgs args = { 0 };
     args.clusterTemplate                          = d_templateAddresses[clusterId];
-    args.vertexBuffer                             = reinterpret_cast<CUdeviceptr>( cluster.d_positions );
+    args.vertexBuffer                             = reinterpret_cast<CUdeviceptr>( cluster.d_deformedPositions );
     args.vertexStrideInBytes                      = cluster.vertexStrideInBytes;
 
     d_templatesArgs[clusterId] = args;
@@ -186,7 +162,7 @@ __global__ void makeInputTrianglesArgsData_kernel( const Cluster*               
     args.indexBufferStrideInBytes                 = cluster.indexBufferStrideInBytes;
     args.vertexBufferStrideInBytes                = cluster.vertexStrideInBytes;
     args.indexBuffer                              = reinterpret_cast<CUdeviceptr>( cluster.d_indices );
-    args.vertexBuffer                             = reinterpret_cast<CUdeviceptr>( cluster.d_positions );
+    args.vertexBuffer                             = reinterpret_cast<CUdeviceptr>( cluster.d_deformedPositions );
 
     d_trianglesArgs[clusterId] = args;
 }

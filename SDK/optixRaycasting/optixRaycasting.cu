@@ -1,32 +1,6 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2019 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <optix.h>
@@ -34,9 +8,8 @@
 #include "optixRaycasting.h"
 #include "optixRaycastingKernels.h"
 
-#include "cuda/LocalGeometry.h"
-#include "cuda/whitted.h"
-#include "cuda/LocalShading.h"
+#include <sutil/cuda/LocalGeometry.h>
+#include <sutil/cuda/LocalShading.h>
 
 #include <sutil/vec_math.h>
 
@@ -78,8 +51,8 @@ extern "C" __global__ void __closesthit__buffer_hit()
 {
     const float t = optixGetRayTmax();
 
-    whitted::HitGroupData* rt_data = (whitted::HitGroupData*)optixGetSbtDataPointer();
-    LocalGeometry          geom    = getLocalGeometry( rt_data->geometry_data );
+    HitGroupData*        rt_data = reinterpret_cast<HitGroupData*>( optixGetSbtDataPointer() );
+    sutil::LocalGeometry geom    = getLocalGeometry( rt_data->triangle_data);
 
     // Set the hit data
     optixSetPayload_0( __float_as_uint( t ) );
@@ -91,12 +64,12 @@ extern "C" __global__ void __closesthit__buffer_hit()
 
 extern "C" __global__ void __anyhit__texture_mask()
 {
-    whitted::HitGroupData* rt_data = (whitted::HitGroupData*)optixGetSbtDataPointer();
+    HitGroupData* rt_data = reinterpret_cast<HitGroupData*>( optixGetSbtDataPointer() );
 
-    if( rt_data->material_data.alpha_mode == MaterialData::ALPHA_MODE_MASK )
+    if( rt_data->material_data.alpha_mode == sutil::MaterialData::ALPHA_MODE_MASK )
     {
-        LocalGeometry geom = getLocalGeometry( rt_data->geometry_data );
-        float4        mask = sampleTexture<float4>( rt_data->material_data.pbr.base_color_tex, geom );
+        sutil::LocalGeometry geom = getLocalGeometry( rt_data->triangle_data );
+        float4               mask = sutil::sampleTexture<float4>( rt_data->material_data.pbr.base_color_tex, geom );
         if( mask.w < rt_data->material_data.alpha_cutoff )
         {
             optixIgnoreIntersection();

@@ -1,39 +1,14 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2019 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <optix.h>
 #include <optix_function_table_definition.h>
 #include <optix_stubs.h>
 
-#include <cuda/whitted.h>
+#include <sutil/cuda/scene/scene.h>
+
 #include <sutil/CuBuffer.h>
 #include <sutil/Exception.h>
 #include <sutil/Matrix.h>
@@ -75,7 +50,7 @@ float4 make_float4_from_double( double x, double y, double z, double w )
     return make_float4( static_cast<float>( x ), static_cast<float>( y ), static_cast<float>( z ), static_cast<float>( w ) );
 }
 
-typedef Record<whitted::HitGroupData> HitGroupRecord;
+typedef Record<sutil::scene::HitGroupData> HitGroupRecord;
 
 void context_log_cb( unsigned int level, const char* tag, const char* message, void* /*cbdata */)
 {
@@ -216,7 +191,7 @@ void processGLTFNode(
 } // end anon namespace
 
 template<typename TextureInfo>
-void parseTextureInfo( const Scene& scene, const TextureInfo &inTex, MaterialData::Texture &outTex )
+void parseTextureInfo( const Scene& scene, const TextureInfo &inTex, sutil::MaterialData::Texture &outTex )
 {
     if( inTex.index >= 0 )
     {
@@ -255,7 +230,7 @@ void parseTextureInfo( const Scene& scene, const TextureInfo &inTex, MaterialDat
         outTex.texcoord_scale = scale;
         outTex.texcoord_rotation = make_float2( ( float )sinf( rotation ), ( float )cosf( rotation ) );
 
-        if( outTex.texcoord >= ( int )GeometryData::num_texcoords )
+        if( outTex.texcoord >= ( int )sutil::TriangleMesh::num_texcoords )
         {
             std::cerr << "\tMaximum supported texcoords exceded.\n";
             outTex.texcoord = 0;
@@ -354,22 +329,22 @@ void loadScene( const std::string& filename, Scene& scene )
     for( auto& gltf_material : model.materials )
     {
         std::cerr << "Processing glTF material: '" << gltf_material.name << "'\n";
-        MaterialData mtl;
+        sutil::MaterialData mtl;
 
         mtl.doubleSided = gltf_material.doubleSided;
 
         if( gltf_material.alphaMode == "MASK" )
         {
-           mtl.alpha_mode = MaterialData::ALPHA_MODE_MASK;
+           mtl.alpha_mode = sutil::MaterialData::ALPHA_MODE_MASK;
            mtl.alpha_cutoff = (float)gltf_material.alphaCutoff;
         }
         else if( gltf_material.alphaMode == "BLEND" )
         {
-            mtl.alpha_mode = MaterialData::ALPHA_MODE_BLEND;
+            mtl.alpha_mode = sutil::MaterialData::ALPHA_MODE_BLEND;
         }
         else if( gltf_material.alphaMode == "OPAQUE" )
         {
-            mtl.alpha_mode = MaterialData::ALPHA_MODE_OPAQUE;
+            mtl.alpha_mode = sutil::MaterialData::ALPHA_MODE_OPAQUE;
         }
         else
         {
@@ -466,7 +441,7 @@ void loadScene( const std::string& filename, Scene& scene )
                 std::cerr << "\tNon-triangle primitive: skipping\n";
                 continue;
             }
-            
+
             mesh->indices.push_back( bufferViewFromGLTF<uint32_t>( model, scene, gltf_primitive.indices ) );
             mesh->material_idx.push_back( gltf_primitive.material );
             std::cerr << "\t\tNum triangles: " << mesh->indices.back().count / 3 << std::endl;
@@ -504,7 +479,7 @@ void loadScene( const std::string& filename, Scene& scene )
                 mesh->normals.push_back( bufferViewFromGLTF<float3>( model, scene, -1 ) );
             }
 
-            for( size_t j = 0; j < GeometryData::num_texcoords; ++j )
+            for( size_t j = 0; j < sutil::TriangleMesh::num_texcoords; ++j )
             {
                 char texcoord_str[128];
                 snprintf( texcoord_str, 128, "TEXCOORD_%i", (int)j );
@@ -701,7 +676,7 @@ void Scene::finalize( bool create_pipeline, uint32_t ray_type_count )
 
 void Scene::finalize()
 {
-    finalize( /*create_pipeline*/ true, whitted::RAY_TYPE_COUNT );
+    finalize( /*create_pipeline*/ true, sutil::scene::RAY_TYPE_COUNT );
 }
 
 
@@ -932,7 +907,7 @@ void Scene::buildMeshAccels()
             mesh->normals.size() == num_subMeshes &&
             mesh->colors.size() == num_subMeshes );
 
-        for( size_t j = 0; j < GeometryData::num_texcoords; ++j )
+        for( size_t j = 0; j < sutil::TriangleMesh::num_texcoords; ++j )
             assert( mesh->texcoords[j].size() == num_subMeshes );
 
         for(size_t j = 0; j < num_subMeshes; ++j)
@@ -966,10 +941,10 @@ void Scene::buildMeshAccels()
                 auto alpha_mode = m_materials[mat_idx].alpha_mode;
                 switch( alpha_mode )
                 {
-                case MaterialData::ALPHA_MODE_MASK:
+                case sutil::MaterialData::ALPHA_MODE_MASK:
                     triangle_input.triangleArray.flags = &mask_triangle_input_flags[m_materials[mat_idx].doubleSided];
                     break;
-                case MaterialData::ALPHA_MODE_BLEND:
+                case sutil::MaterialData::ALPHA_MODE_BLEND:
                     triangle_input.triangleArray.flags = &blend_triangle_input_flags[m_materials[mat_idx].doubleSided];
                     break;
                 default:
@@ -1240,13 +1215,13 @@ void Scene::createPTXModule()
     m_pipeline_compile_options = {};
     m_pipeline_compile_options.usesMotionBlur            = false;
     m_pipeline_compile_options.traversableGraphFlags     = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING;
-    m_pipeline_compile_options.numPayloadValues          = whitted::NUM_PAYLOAD_VALUES;
+    m_pipeline_compile_options.numPayloadValues          = sutil::scene::NUM_PAYLOAD_VALUES;
     m_pipeline_compile_options.numAttributeValues        = 2; // TODO
     m_pipeline_compile_options.exceptionFlags            = OPTIX_EXCEPTION_FLAG_NONE; // should be OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
     m_pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
     size_t      inputSize = 0;
-    const char* input     = sutil::getInputData( nullptr, nullptr, "whitted.cu", inputSize );
+    const char* input     = sutil::getInputData( nullptr, nullptr, "scene.cu", inputSize );
 
     m_ptx_module  = {};
     OPTIX_CHECK_LOG( optixModuleCreate(
@@ -1368,7 +1343,7 @@ void Scene::createPipeline()
     };
 
     OptixPipelineLinkOptions pipeline_link_options = {};
-    pipeline_link_options.maxTraceDepth            = whitted::MAX_TRACE_DEPTH;
+    pipeline_link_options.maxTraceDepth            = sutil::scene::MAX_TRACE_DEPTH;
 
     OPTIX_CHECK_LOG( optixPipelineCreate(
                 m_context,
@@ -1402,21 +1377,21 @@ void Scene::createSBT()
         const size_t miss_record_size = sizeof( EmptyRecord );
         CUDA_CHECK( cudaMalloc(
                     reinterpret_cast<void**>( &m_sbt.missRecordBase ),
-                    miss_record_size*whitted::RAY_TYPE_COUNT
+                    miss_record_size*sutil::scene::RAY_TYPE_COUNT
                     ) );
 
-        EmptyRecord ms_sbt[ whitted::RAY_TYPE_COUNT ];
+        EmptyRecord ms_sbt[ sutil::scene::RAY_TYPE_COUNT ];
         OPTIX_CHECK( optixSbtRecordPackHeader( m_radiance_miss_group,  &ms_sbt[0] ) );
         OPTIX_CHECK( optixSbtRecordPackHeader( m_occlusion_miss_group, &ms_sbt[1] ) );
 
         CUDA_CHECK( cudaMemcpy(
                     reinterpret_cast<void*>( m_sbt.missRecordBase ),
                     ms_sbt,
-                    miss_record_size*whitted::RAY_TYPE_COUNT,
+                    miss_record_size*sutil::scene::RAY_TYPE_COUNT,
                     cudaMemcpyHostToDevice
                     ) );
         m_sbt.missRecordStrideInBytes = static_cast<uint32_t>( miss_record_size );
-        m_sbt.missRecordCount     = whitted::RAY_TYPE_COUNT;
+        m_sbt.missRecordCount     = sutil::scene::RAY_TYPE_COUNT;
     }
 
     {
@@ -1428,10 +1403,10 @@ void Scene::createSBT()
             {
                 HitGroupRecord rec = {};
                 OPTIX_CHECK( optixSbtRecordPackHeader( m_radiance_hit_group, &rec ) );
-                GeometryData::TriangleMesh triangle_mesh = {};
+                sutil::TriangleMesh triangle_mesh = {};
                 triangle_mesh.normals   = mesh->normals[i];
                 triangle_mesh.positions = mesh->positions[i];
-                for( size_t j = 0; j < GeometryData::num_texcoords; ++j )
+                for( size_t j = 0; j < sutil::TriangleMesh::num_texcoords; ++j )
                     triangle_mesh.texcoords[j] = mesh->texcoords[j][i];
                 triangle_mesh.colors    = mesh->colors[i];
                 triangle_mesh.indices   = mesh->indices[i];
@@ -1441,7 +1416,7 @@ void Scene::createSBT()
                 if( mat_idx >= 0 )
                     rec.data.material_data = m_materials[ mat_idx ];
                 else
-                    rec.data.material_data = MaterialData();
+                    rec.data.material_data = sutil::MaterialData();
                 hitgroup_records.push_back( rec );
 
                 OPTIX_CHECK( optixSbtRecordPackHeader( m_occlusion_hit_group, &rec ) );

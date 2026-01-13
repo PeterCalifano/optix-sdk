@@ -1,46 +1,24 @@
 #
-# SPDX-FileCopyrightText: Copyright (c) 2019 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2019-2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
-# 
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
 #
-# 1. Redistributions of source code must retain the above copyright notice, this
-# list of conditions and the following disclaimer.
-#
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-# this list of conditions and the following disclaimer in the documentation
-# and/or other materials provided with the distribution.
-#
-# 3. Neither the name of the copyright holder nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 set(sources
     ${CMAKE_CURRENT_BINARY_DIR}/../sampleConfig.h
-    ${SAMPLES_CUDA_DIR}/camera.cu
-    ${SAMPLES_CUDA_DIR}/geometry.cu
-    ${SAMPLES_CUDA_DIR}/shading.cu
-    ${SAMPLES_CUDA_DIR}/sphere.cu
-    ${SAMPLES_CUDA_DIR}/whitted.cu
     ${SAMPLES_CUDA_DIR}/BufferView.h
     ${SAMPLES_CUDA_DIR}/GeometryData.h
     ${SAMPLES_CUDA_DIR}/Light.h
     ${SAMPLES_CUDA_DIR}/LocalGeometry.h
+    ${SAMPLES_CUDA_DIR}/LocalShading.h
     ${SAMPLES_CUDA_DIR}/MaterialData.h
-    ${SAMPLES_CUDA_DIR}/util.h
+    ${SAMPLES_CUDA_DIR}/camera.h
+    ${SAMPLES_CUDA_DIR}/geometry.h
     ${SAMPLES_CUDA_DIR}/helpers.h
+    ${SAMPLES_CUDA_DIR}/microfacet.h
+    ${SAMPLES_CUDA_DIR}/random.h
+    ${SAMPLES_CUDA_DIR}/scene/scene.cu
+    ${SAMPLES_CUDA_DIR}/scene/scene.h
+    ${SAMPLES_CUDA_DIR}/util.h
     Aabb.h
     Camera.cpp
     Camera.h
@@ -111,7 +89,7 @@ endif()
 # Make the list of sources available to the parent directory for installation needs.
 set(sutil_sources "${sources}" PARENT_SCOPE)
 
-set_property(TARGET ${sutil_target} PROPERTY FOLDER "${OPTIX_IDE_FOLDER}")
+set_property(TARGET ${sutil_target} PROPERTY FOLDER "${OPTIX_IDE_FOLDER}/libraries")
 
 # Disable until we get binary samples
 if(0 AND RELEASE_INSTALL_BINARY_SAMPLES AND NOT RELEASE_STATIC_BUILD)

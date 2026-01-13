@@ -1,43 +1,18 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2019 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- * list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- * this list of conditions and the following disclaimer in the documentation
- * and/or other materials provided with the distribution.
- *
- * 3. Neither the name of the copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #pragma once
 
-#include <cuda/BufferView.h>
-#include <cuda/MaterialData.h>
-#include <cuda/whitted.h>
 #include <sutil/Aabb.h>
 #include <sutil/Camera.h>
 #include <sutil/Matrix.h>
 #include <sutil/Preprocessor.h>
+#include <sutil/cuda/BufferView.h>
+#include <sutil/cuda/GeometryData.h>
+#include <sutil/cuda/MaterialData.h>
+#include <sutil/cuda/scene/scene.h>
 #include <sutil/sutilapi.h>
 
 #include <cuda_runtime.h>
@@ -69,27 +44,27 @@ public:
 
     struct MeshGroup
     {
-        std::string                       name;
+        std::string                            name;
 
-        std::vector<GenericBufferView>    indices;
-        std::vector<BufferView<float3> >  positions;
-        std::vector<BufferView<float3> >  normals;
-        std::vector<BufferView<Vec2f> >   texcoords[GeometryData::num_texcoords];
-        std::vector<BufferView<Vec4f> >   colors;
+        std::vector<GenericBufferView>         indices;
+        std::vector<BufferView<float3> >       positions;
+        std::vector<BufferView<float3> >       normals;
+        std::vector<BufferView<sutil::Vec2f> > texcoords[sutil::TriangleMesh::num_texcoords];
+        std::vector<BufferView<sutil::Vec4f> > colors;
 
-        std::vector<int32_t>              material_idx;
+        std::vector<int32_t>                   material_idx;
 
-        OptixTraversableHandle            gas_handle = 0;
-        CUdeviceptr                       d_gas_output = 0;
+        OptixTraversableHandle                 gas_handle = 0;
+        CUdeviceptr                            d_gas_output = 0;
 
-        Aabb                              object_aabb;
+        Aabb                                   object_aabb;
     };
 
 
-    SUTILAPI void addCamera  ( const Camera& camera            )    { m_cameras.push_back( camera );     }
+    SUTILAPI void addCamera  ( const Camera& camera               ) { m_cameras.push_back( camera );     }
     SUTILAPI void addInstance( std::shared_ptr<Instance> instance ) { m_instances.push_back( instance ); }
-    SUTILAPI void addMesh    ( std::shared_ptr<MeshGroup> mesh )    { m_meshes.push_back( mesh );        }
-    SUTILAPI void addMaterial( const MaterialData& mtl    )         { m_materials.push_back( mtl );      }
+    SUTILAPI void addMesh    ( std::shared_ptr<MeshGroup> mesh    ) { m_meshes.push_back( mesh );        }
+    SUTILAPI void addMaterial( const sutil::MaterialData& mtl   ) { m_materials.push_back( mtl );      }
     SUTILAPI void addBuffer  ( const uint64_t buf_size, const void* data );
     SUTILAPI void addImage(
                 const int32_t width,
@@ -119,13 +94,13 @@ public:
     SUTILAPI OptixTraversableHandle                         traversableHandle() const { return m_ias_handle; }
     SUTILAPI sutil::Aabb                                    aabb() const              { return m_scene_aabb; }
     SUTILAPI OptixDeviceContext                             context() const           { return m_context;    }
-    SUTILAPI const std::vector<MaterialData>&               materials() const         { return m_materials;  }
+    SUTILAPI const std::vector<sutil::MaterialData>&        materials() const         { return m_materials;  }
     SUTILAPI const std::vector<std::shared_ptr<MeshGroup>>& meshes() const            { return m_meshes;     }
     SUTILAPI const std::vector<std::shared_ptr<Instance>>&  instances() const         { return m_instances;  }
 
     SUTILAPI void createContext();
     SUTILAPI void buildMeshAccels();
-    SUTILAPI void buildInstanceAccel( int rayTypeCount = whitted::RAY_TYPE_COUNT );
+    SUTILAPI void buildInstanceAccel( int rayTypeCount = sutil::scene::RAY_TYPE_COUNT );
 
 private:
     void createPTXModule();
@@ -138,7 +113,7 @@ private:
     std::vector<Camera>                      m_cameras;
     std::vector<std::shared_ptr<Instance> >  m_instances;
     std::vector<std::shared_ptr<MeshGroup> > m_meshes;
-    std::vector<MaterialData>                m_materials;
+    std::vector<sutil::MaterialData>         m_materials;
     std::vector<CUdeviceptr>                 m_buffers;
     std::vector<cudaTextureObject_t>         m_samplers;
     std::vector<cudaArray_t>                 m_images;

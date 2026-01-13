@@ -1,38 +1,7 @@
 #
 # SPDX-FileCopyrightText: Copyright (c) 2019 - 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
-# 
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions are met:
 #
-# 1. Redistributions of source code must retain the above copyright notice, this
-# list of conditions and the following disclaimer.
-#
-# 2. Redistributions in binary form must reproduce the above copyright notice,
-# this list of conditions and the following disclaimer in the documentation
-# and/or other materials provided with the distribution.
-#
-# 3. Neither the name of the copyright holder nor the names of its
-# contributors may be used to endorse or promote products derived from
-# this software without specific prior written permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-
-if( CUDA_NVRTC_ENABLED )
-  message(WARNING "optixNeuralTexture is not expected to compile with nvrtc. To build this sample, please disable nvrtc and use nvcc instead")
-  return()
-endif()
-
 
 # libntc enforces cmake 3.18 - skip this sample gracefully if your cmake is older
 if (CMAKE_VERSION VERSION_LESS 3.18)
@@ -57,6 +26,7 @@ set( NTC_BUILD_SHARED FALSE )
 # In the future, this sample may link to and automatically download the public version of libntc.
 # Find the latest version of the NTC SDK on Github, including NTC explorer and DX, Vulkan, CUDA, and Slang examples.
 add_subdirectory( libntc )
+set_property(TARGET libntc PROPERTY FOLDER "${OPTIX_IDE_FOLDER}/libraries")
 
 #-----------------
 
@@ -73,8 +43,9 @@ while( index GREATER -1 )
   list(FIND SAMPLES_NVCC_FLAGS "-arch" index )
 endwhile()
 
+compare_sm_value(${CUDA_MIN_SM_TARGET} 60 TARGET_SM_VERSION)
+
 OPTIX_add_sample_executable( optixNeuralTexture target_name
-  ${SAMPLES_CUDA_DIR}/helpers.h
   NtcInference.h
   NtcTexture.h
   NtcTextureSet.h
@@ -82,7 +53,7 @@ OPTIX_add_sample_executable( optixNeuralTexture target_name
   optixNeuralTextureKernel.cu
   optixNeuralTexture.h
   optixNeuralTextureUtil.h
-  OPTIONS -arch sm_60 -rdc true --std=c++17
+  OPTIONS -arch ${TARGET_SM_VERSION} -rdc true --std=c++17
   )
 
 target_link_libraries( ${target_name}
