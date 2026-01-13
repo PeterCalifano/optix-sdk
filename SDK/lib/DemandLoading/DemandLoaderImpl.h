@@ -39,6 +39,7 @@
 #include "Textures/BaseColorRequestHandler.h"
 #include "Textures/DemandTextureImpl.h"
 #include "Textures/SamplerRequestHandler.h"
+#include "TransferBufferDesc.h"
 
 #include <cuda.h>
 
@@ -47,8 +48,8 @@
 #include <mutex>
 #include <vector>
 
-namespace imageReader {
-class ImageReader;
+namespace imageSource {
+class ImageSource;
 }
 
 namespace demandLoading {
@@ -71,14 +72,14 @@ class DemandLoaderImpl : public DemandLoader
 
     /// Create a demand-loaded texture for the given image.  The texture initially has no backing
     /// storage.  The readTile() method is invoked on the image to fill each required tile.  The
-    /// ImageReader pointer is retained indefinitely.
-    const DemandTexture& createTexture( std::shared_ptr<imageReader::ImageReader> image, const TextureDescriptor& textureDesc ) override;
+    /// ImageSource pointer is retained indefinitely.
+    const DemandTexture& createTexture( std::shared_ptr<imageSource::ImageSource> image, const TextureDescriptor& textureDesc ) override;
 
     /// Create a demand-loaded UDIM texture for a given set of images.  If a baseTexture is used,
     /// it should be created first by calling createTexture.  The id of the returned texture should be
     /// used when calling tex2DGradUdim.  This will create demand-loaded textures for each image
     /// supplied, and all of the image readers are retained for the lifetime of the DemandLoader.
-    const DemandTexture& createUdimTexture( std::vector<std::shared_ptr<imageReader::ImageReader>>& imageReaders,
+    const DemandTexture& createUdimTexture( std::vector<std::shared_ptr<imageSource::ImageSource>>& imageSources,
                                             std::vector<TextureDescriptor>&                         textureDescs,
                                             unsigned int                                            udim,
                                             unsigned int                                            vdim,
@@ -112,6 +113,9 @@ class DemandLoaderImpl : public DemandLoader
     /// Get indices of the devices that can be employed by the DemandLoader.
     const std::vector<unsigned int> getDevices() const override { return m_devices; }
 
+    /// Turn on or off eviction
+    void enableEviction( bool evictionActive ) override { m_options.evictionActive = evictionActive; }
+
     /// Check whether the specified device is active.
     bool isActiveDevice( unsigned int deviceIndex ) const
     {
@@ -138,6 +142,12 @@ class DemandLoaderImpl : public DemandLoader
 
     /// Free some staged tiles if there are some that are ready
     void freeStagedTiles( unsigned int deviceIndex, CUstream stream );
+
+    /// Allocate a temporary buffer of the given memory type
+    const TransferBufferDesc allocateTransferBuffer( unsigned int deviceIndex, CUmemorytype memoryType, size_t size, CUstream stream );
+
+    /// Free a temporary buffer after current work in the stream finishes 
+    void freeTransferBuffer( const TransferBufferDesc& transferBuffer, CUstream stream );
 
   private:
     mutable std::mutex        m_mutex;

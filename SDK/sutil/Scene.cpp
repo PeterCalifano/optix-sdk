@@ -103,6 +103,21 @@ BufferView<T> bufferViewFromGLTF( const tinygltf::Model& model, Scene& scene, co
     buffer_view.count          = static_cast<uint32_t>( gltf_accessor.count );
     buffer_view.elmt_byte_size = static_cast<uint16_t>( elmt_byte_size );
 
+    if( buffer_view.byte_stride == 0 )
+    {
+        buffer_view.byte_stride = static_cast< uint16_t >( elmt_byte_size );
+        switch( gltf_accessor.type )
+        {
+        case TINYGLTF_TYPE_VEC2: buffer_view.byte_stride *= 2;  break;
+        case TINYGLTF_TYPE_VEC3: buffer_view.byte_stride *= 3;  break;
+        case TINYGLTF_TYPE_VEC4: buffer_view.byte_stride *= 4;  break;
+        case TINYGLTF_TYPE_MAT2: buffer_view.byte_stride *= 4;  break;
+        case TINYGLTF_TYPE_MAT3: buffer_view.byte_stride *= 9;  break;
+        case TINYGLTF_TYPE_MAT4: buffer_view.byte_stride *= 16; break;
+        default: break;
+        }
+    }
+
     return buffer_view;
 }
 
@@ -176,72 +191,15 @@ void processGLTFNode(
     }
     else if( gltf_node.mesh != -1 )
     {
-        const auto& gltf_mesh = model.meshes[ gltf_node.mesh ];
-        std::cerr << "Processing glTF mesh: '" << gltf_mesh.name << "'\n";
-        std::cerr << "\tNum mesh primitive groups: " << gltf_mesh.primitives.size() << std::endl;
-        for( auto& gltf_primitive : gltf_mesh.primitives )
-        {
-            if( gltf_primitive.mode != TINYGLTF_MODE_TRIANGLES ) // Ignore non-triangle meshes
-            {
-                std::cerr << "\tNon-triangle primitive: skipping\n";
-                continue;
-            }
-
-            auto mesh = std::make_shared<Scene::MeshGroup>();
-            scene.addMesh( mesh );
-
-
-            mesh->name = gltf_mesh.name;
-            mesh->indices.push_back( bufferViewFromGLTF<uint32_t>( model, scene, gltf_primitive.indices ) );
-            mesh->material_idx.push_back( gltf_primitive.material );
-            mesh->transform = node_xform;
-            std::cerr << "\t\tNum triangles: " << mesh->indices.back().count / 3 << std::endl;
-
-            assert( gltf_primitive.attributes.find( "POSITION" ) !=  gltf_primitive.attributes.end() );
-            const int32_t pos_accessor_idx =  gltf_primitive.attributes.at( "POSITION" );
-            mesh->positions.push_back( bufferViewFromGLTF<float3>( model, scene, pos_accessor_idx ) );
-
-            const auto& pos_gltf_accessor = model.accessors[ pos_accessor_idx ];
-            mesh->object_aabb = Aabb(
-                    make_float3_from_double(
-                        pos_gltf_accessor.minValues[0],
-                        pos_gltf_accessor.minValues[1],
-                        pos_gltf_accessor.minValues[2]
-                        ),
-                    make_float3_from_double(
-                        pos_gltf_accessor.maxValues[0],
-                        pos_gltf_accessor.maxValues[1],
-                        pos_gltf_accessor.maxValues[2]
-                        ) );
-            mesh->world_aabb = mesh->object_aabb;
-            mesh->world_aabb.transform( node_xform );
-
-            auto normal_accessor_iter = gltf_primitive.attributes.find( "NORMAL" ) ;
-            if( normal_accessor_iter  !=  gltf_primitive.attributes.end() )
-            {
-                std::cerr << "\t\tHas vertex normals: true\n";
-                mesh->normals.push_back( bufferViewFromGLTF<float3>( model, scene, normal_accessor_iter->second ) );
-            }
-            else
-            {
-                std::cerr << "\t\tHas vertex normals: false\n";
-                mesh->normals.push_back( bufferViewFromGLTF<float3>( model, scene, -1 ) );
-            }
-
-            auto texcoord_accessor_iter = gltf_primitive.attributes.find( "TEXCOORD_0" ) ;
-            if( texcoord_accessor_iter  !=  gltf_primitive.attributes.end() )
-            {
-                std::cerr << "\t\tHas texcoords: true\n";
-                mesh->texcoords.push_back( bufferViewFromGLTF<float2>( model, scene, texcoord_accessor_iter->second ) );
-            }
-            else
-            {
-                std::cerr << "\t\tHas texcoords: false\n";
-                mesh->texcoords.push_back( bufferViewFromGLTF<float2>( model, scene, -1 ) );
-            }
-        }
+        auto instance = std::make_shared<Scene::Instance>();
+        instance->transform  = node_xform;
+        instance->mesh_idx   = gltf_node.mesh;
+        instance->world_aabb = scene.meshes()[gltf_node.mesh]->object_aabb;
+        instance->world_aabb.transform( node_xform );
+        scene.addInstance( instance );
     }
-    else if( !gltf_node.children.empty() )
+
+    if( !gltf_node.children.empty() )
     {
         for( int32_t child : gltf_node.children )
         {
@@ -252,6 +210,58 @@ void processGLTFNode(
 
 } // end anon namespace
 
+template<typename TextureInfo>
+void parseTextureInfo( const Scene& scene, const TextureInfo &inTex, MaterialData::Texture &outTex )
+{
+    if( inTex.index >= 0 )
+    {
+        outTex.tex = scene.getSampler( inTex.index );
+        outTex.texcoord = inTex.texCoord;
+
+        auto itr = inTex.extensions.find( "KHR_texture_transform" );
+
+        float2 offset = { 0, 0 };
+        float  rotation = 0;
+        float2 scale = { 1, 1 };
+        if( itr != inTex.extensions.end() )
+        {
+            if( itr->second.Has( "offset" ) )
+            {
+                auto offsetValue = itr->second.Get( "offset" );
+                offset.x = ( float )offsetValue.Get( 0 ).GetNumberAsDouble();
+                offset.y = ( float )offsetValue.Get( 1 ).GetNumberAsDouble();
+            }
+
+            if( itr->second.Has( "rotation" ) )
+            {
+                auto rotationValue = itr->second.Get( "rotation" );
+                rotation = ( float )rotationValue.GetNumberAsDouble();
+            }
+
+            if( itr->second.Has( "scale" ) )
+            {
+                auto scaleValue = itr->second.Get( "scale" );
+                scale.x = ( float )scaleValue.Get( 0 ).GetNumberAsDouble();
+                scale.y = ( float )scaleValue.Get( 1 ).GetNumberAsDouble();
+            }
+        }
+
+        outTex.texcoord_offset = offset;
+        outTex.texcoord_scale = scale;
+        outTex.texcoord_rotation = make_float2( ( float )sinf( rotation ), ( float )cosf( rotation ) );
+
+        if( outTex.texcoord >= ( int )GeometryData::num_textcoords )
+        {
+            std::cerr << "\tMaximum supported textcoords exceded.\n";
+            outTex.texcoord = 0;
+        }
+    }
+    else
+    {
+        outTex.tex = 0;
+        outTex.texcoord = 0;
+    }
+};
 
 void loadScene( const std::string& filename, Scene& scene )
 {
@@ -262,7 +272,11 @@ void loadScene( const std::string& filename, Scene& scene )
     std::string err;
     std::string warn;
 
-    bool ret = loader.LoadASCIIFromFile( &model, &err, &warn, filename );
+    bool ret;
+    if( filename.size() >= 4 && strncmp( filename.c_str() + filename.size() - 4, ".glb", 4) == 0 )
+        ret = loader.LoadBinaryFromFile( &model, &err, &warn, filename );
+    else
+        ret = loader.LoadASCIIFromFile( &model, &err, &warn, filename );
     if( !warn.empty() )
         std::cerr << "glTF WARNING: " << warn << std::endl;
     if( !ret )
@@ -318,14 +332,14 @@ void loadScene( const std::string& filename, Scene& scene )
 
         const auto& gltf_sampler = model.samplers[ gltf_texture.sampler ];
 
-        const cudaTextureAddressMode address_s = gltf_sampler.wrapS == GL_CLAMP_TO_EDGE   ? cudaAddressModeClamp  :
-                                                 gltf_sampler.wrapS == GL_MIRRORED_REPEAT ? cudaAddressModeMirror :
-                                                                                            cudaAddressModeWrap;
-        const cudaTextureAddressMode address_t = gltf_sampler.wrapT == GL_CLAMP_TO_EDGE   ? cudaAddressModeClamp  :
-                                                 gltf_sampler.wrapT == GL_MIRRORED_REPEAT ? cudaAddressModeMirror :
-                                                                                            cudaAddressModeWrap;
-        const cudaTextureFilterMode  filter    = gltf_sampler.minFilter == GL_NEAREST     ? cudaFilterModePoint   :
-                                                                                            cudaFilterModeLinear;
+        const cudaTextureAddressMode address_s = gltf_sampler.wrapS == TINYGLTF_TEXTURE_WRAP_CLAMP_TO_EDGE   ? cudaAddressModeClamp  :
+                                                 gltf_sampler.wrapS == TINYGLTF_TEXTURE_WRAP_MIRRORED_REPEAT ? cudaAddressModeMirror :
+                                                                                                               cudaAddressModeWrap;
+        const cudaTextureAddressMode address_t = gltf_sampler.wrapT == TINYGLTF_TEXTURE_WRAP_CLAMP_TO_EDGE   ? cudaAddressModeClamp  :
+                                                 gltf_sampler.wrapT == TINYGLTF_TEXTURE_WRAP_MIRRORED_REPEAT ? cudaAddressModeMirror :
+                                                                                                               cudaAddressModeWrap;
+        const cudaTextureFilterMode  filter    = gltf_sampler.minFilter == TINYGLTF_TEXTURE_FILTER_NEAREST   ? cudaFilterModePoint   :
+                                                                                                               cudaFilterModeLinear;
         scene.addSampler( address_s, address_t, filter, gltf_texture.source );
     }
 
@@ -335,19 +349,39 @@ void loadScene( const std::string& filename, Scene& scene )
     for( auto& gltf_material : model.materials )
     {
         std::cerr << "Processing glTF material: '" << gltf_material.name << "'\n";
-        MaterialData::Pbr mtl;
+        MaterialData mtl;
+
+        mtl.doubleSided = gltf_material.doubleSided;
+
+        if( gltf_material.alphaMode == "MASK" )
+        {
+           mtl.alpha_mode = MaterialData::ALPHA_MODE_MASK;
+           mtl.alpha_cutoff = (float)gltf_material.alphaCutoff;
+        }
+        else if( gltf_material.alphaMode == "BLEND" )
+        {
+            mtl.alpha_mode = MaterialData::ALPHA_MODE_BLEND;
+        }
+        else if( gltf_material.alphaMode == "OPAQUE" )
+        {
+            mtl.alpha_mode = MaterialData::ALPHA_MODE_OPAQUE;
+        }
+        else
+        {
+            std::cerr << "\tInvalid alpha mode\n";
+        }
 
         {
             const auto base_color_it = gltf_material.values.find( "baseColorFactor" );
             if( base_color_it != gltf_material.values.end() )
             {
                 const tinygltf::ColorValue c = base_color_it->second.ColorFactor();
-                mtl.base_color = make_float4_from_double( c[0], c[1], c[2], c[3] );
+                mtl.pbr.base_color = make_float4_from_double( c[0], c[1], c[2], c[3] );
                 std::cerr
                     << "\tBase color: ("
-                    << mtl.base_color.x << ", "
-                    << mtl.base_color.y << ", "
-                    << mtl.base_color.z << ")\n";
+                    << mtl.pbr.base_color.x << ", "
+                    << mtl.pbr.base_color.y << ", "
+                    << mtl.pbr.base_color.z << ")\n";
             }
             else
             {
@@ -355,25 +389,17 @@ void loadScene( const std::string& filename, Scene& scene )
             }
         }
 
-        {
-            const auto base_color_it = gltf_material.values.find( "baseColorTexture" );
-            if( base_color_it != gltf_material.values.end() )
-            {
-                std::cerr << "\tFound base color tex: " << base_color_it->second.TextureIndex() << "\n";
-                mtl.base_color_tex = scene.getSampler( base_color_it->second.TextureIndex() );
-            }
-            else
-            {
-                std::cerr << "\tNo base color tex\n";
-            }
-        }
+        parseTextureInfo( scene, gltf_material.pbrMetallicRoughness.baseColorTexture, mtl.pbr.base_color_tex );
+        parseTextureInfo( scene, gltf_material.pbrMetallicRoughness.metallicRoughnessTexture, mtl.pbr.metallic_roughness_tex );
+        parseTextureInfo( scene, gltf_material.normalTexture, mtl.normal_tex );
+        parseTextureInfo( scene, gltf_material.emissiveTexture, mtl.emissive_tex );
 
         {
             const auto roughness_it = gltf_material.values.find( "roughnessFactor" );
             if( roughness_it != gltf_material.values.end() )
             {
-                mtl.roughness = static_cast<float>( roughness_it->second.Factor() );
-                std::cerr << "\tRougness:  " << mtl.roughness <<  "\n";
+                mtl.pbr.roughness = static_cast< float >( roughness_it->second.Factor() );
+                std::cerr << "\tRougness:  " << mtl.pbr.roughness << "\n";
             }
             else
             {
@@ -385,8 +411,8 @@ void loadScene( const std::string& filename, Scene& scene )
             const auto metallic_it = gltf_material.values.find( "metallicFactor" );
             if( metallic_it != gltf_material.values.end() )
             {
-                mtl.metallic = static_cast<float>( metallic_it->second.Factor() );
-                std::cerr << "\tMetallic:  " << mtl.metallic <<  "\n";
+                mtl.pbr.metallic = static_cast< float >( metallic_it->second.Factor() );
+                std::cerr << "\tMetallic:  " << mtl.pbr.metallic << "\n";
             }
             else
             {
@@ -395,32 +421,113 @@ void loadScene( const std::string& filename, Scene& scene )
         }
 
         {
-            const auto metallic_roughness_it = gltf_material.values.find( "metallicRoughnessTexture" );
-            if( metallic_roughness_it != gltf_material.values.end() )
+            const auto emissive_factor_it = gltf_material.additionalValues.find( "emissiveFactor" );
+            if( emissive_factor_it != gltf_material.additionalValues.end() )
             {
-                std::cerr << "\tFound metallic roughness tex: " << metallic_roughness_it->second.TextureIndex() << "\n";
-                mtl.metallic_roughness_tex = scene.getSampler( metallic_roughness_it->second.TextureIndex() );
+                const tinygltf::ColorValue c = emissive_factor_it->second.ColorFactor();
+                mtl.emissive_factor = make_float3_from_double( c[0], c[1], c[2] );
+                std::cerr
+                    << "\tEmissive factor: ("
+                    << mtl.emissive_factor.x << ", "
+                    << mtl.emissive_factor.y << ", "
+                    << mtl.emissive_factor.z << ")\n";
             }
             else
             {
-                std::cerr << "\tNo metallic roughness tex\n";
-            }
-        }
-
-        {
-            const auto normal_it = gltf_material.additionalValues.find( "normalTexture" );
-            if( normal_it != gltf_material.additionalValues.end() )
-            {
-                std::cerr << "\tFound normal color tex: " << normal_it->second.TextureIndex() << "\n";
-                mtl.normal_tex = scene.getSampler( normal_it->second.TextureIndex() );
-            }
-            else
-            {
-                std::cerr << "\tNo normal tex\n";
+                std::cerr << "\tUsing default base color factor\n";
             }
         }
 
         scene.addMaterial( mtl );
+    }
+
+    //
+    // Meshes
+    //
+    for( auto& gltf_mesh : model.meshes )
+    {
+        std::cerr << "Processing glTF mesh: '" << gltf_mesh.name << "'\n";
+        std::cerr << "\tNum mesh primitive groups: " << gltf_mesh.primitives.size() << std::endl;
+
+        auto mesh = std::make_shared<Scene::MeshGroup>();
+        scene.addMesh( mesh );
+        mesh->name = gltf_mesh.name;
+        mesh->object_aabb.invalidate();
+
+        for( auto& gltf_primitive : gltf_mesh.primitives )
+        {
+            if( gltf_primitive.mode != TINYGLTF_MODE_TRIANGLES ) // Ignore non-triangle meshes
+            {
+                std::cerr << "\tNon-triangle primitive: skipping\n";
+                continue;
+            }
+            
+            mesh->indices.push_back( bufferViewFromGLTF<uint32_t>( model, scene, gltf_primitive.indices ) );
+            mesh->material_idx.push_back( gltf_primitive.material );
+            std::cerr << "\t\tNum triangles: " << mesh->indices.back().count / 3 << std::endl;
+
+            assert( gltf_primitive.attributes.find( "POSITION" ) != gltf_primitive.attributes.end() );
+            const int32_t pos_accessor_idx = gltf_primitive.attributes.at( "POSITION" );
+            mesh->positions.push_back( bufferViewFromGLTF<float3>( model, scene, pos_accessor_idx ) );
+
+            const auto& pos_gltf_accessor = model.accessors[pos_accessor_idx];
+
+            if( !pos_gltf_accessor.minValues.empty() && !pos_gltf_accessor.maxValues.empty() )
+            {
+                mesh->object_aabb.include( Aabb(
+                    make_float3_from_double(
+                        pos_gltf_accessor.minValues[0],
+                        pos_gltf_accessor.minValues[1],
+                        pos_gltf_accessor.minValues[2]
+                    ),
+                    make_float3_from_double(
+                        pos_gltf_accessor.maxValues[0],
+                        pos_gltf_accessor.maxValues[1],
+                        pos_gltf_accessor.maxValues[2]
+                    ) ) );
+            }
+
+            auto normal_accessor_iter = gltf_primitive.attributes.find( "NORMAL" );
+            if( normal_accessor_iter != gltf_primitive.attributes.end() )
+            {
+                std::cerr << "\t\tHas vertex normals: true\n";
+                mesh->normals.push_back( bufferViewFromGLTF<float3>( model, scene, normal_accessor_iter->second ) );
+            }
+            else
+            {
+                std::cerr << "\t\tHas vertex normals: false\n";
+                mesh->normals.push_back( bufferViewFromGLTF<float3>( model, scene, -1 ) );
+            }
+
+            for( size_t j = 0; j < GeometryData::num_textcoords; ++j )
+            {
+                char texcoord_str[128];
+                snprintf( texcoord_str, 128, "TEXCOORD_%i", (int)j );
+                auto texcoord_accessor_iter = gltf_primitive.attributes.find( texcoord_str );
+                if( texcoord_accessor_iter != gltf_primitive.attributes.end() )
+                {
+                    std::cerr << "\t\tHas texcoords_" << j << ": true\n";
+                    mesh->texcoords[j].push_back( bufferViewFromGLTF<Vec2f>( model, scene, texcoord_accessor_iter->second ) );
+                }
+                else
+                {
+                    std::cerr << "\t\tHas texcoords_" << j << ": false\n";
+                    mesh->texcoords[j].push_back( bufferViewFromGLTF<Vec2f>( model, scene, -1 ) );
+                }
+            }
+
+            auto color_accessor_iter = gltf_primitive.attributes.find( "COLOR_0" );
+            if( color_accessor_iter != gltf_primitive.attributes.end() )
+            {
+                std::cerr << "\t\tHas color_0: true\n";
+                mesh->colors.push_back( bufferViewFromGLTF<Vec4f>( model, scene, color_accessor_iter->second ) );
+            }
+            else
+            {
+                std::cerr << "\t\tHas color_0: false\n";
+                mesh->colors.push_back( bufferViewFromGLTF<Vec4f>( model, scene, -1 ) );
+            }
+        }
     }
 
     //
@@ -484,7 +591,7 @@ void Scene::addImage(
     else if( bits_per_component == 16 )
     {
         pitch        = width*num_components*sizeof(uint16_t);
-        channel_desc = cudaCreateChannelDesc<uchar4>();
+        channel_desc = cudaCreateChannelDesc<ushort4>();
     }
     else
     {
@@ -525,14 +632,9 @@ void Scene::addImage(
     res_desc.res.array.array  = getImage( image_idx );
 
     cudaTextureDesc tex_desc     = {};
-    tex_desc.addressMode[0]      = address_s == GL_CLAMP_TO_EDGE   ? cudaAddressModeClamp  :
-                                   address_s == GL_MIRRORED_REPEAT ? cudaAddressModeMirror :
-                                                                     cudaAddressModeWrap;
-    tex_desc.addressMode[1]      = address_t == GL_CLAMP_TO_EDGE   ? cudaAddressModeClamp  :
-                                   address_t == GL_MIRRORED_REPEAT ? cudaAddressModeMirror :
-                                                                     cudaAddressModeWrap;
-    tex_desc.filterMode          = filter    == GL_NEAREST         ? cudaFilterModePoint   :
-                                                                     cudaFilterModeLinear;
+    tex_desc.addressMode[0]      = address_s;
+    tex_desc.addressMode[1]      = address_t;
+    tex_desc.filterMode          = filter;
     tex_desc.readMode            = cudaReadModeNormalizedFloat;
     tex_desc.normalizedCoords    = 1;
     tex_desc.maxAnisotropy       = 1;
@@ -578,8 +680,8 @@ void Scene::finalize()
     createSBT();
 
     m_scene_aabb.invalidate();
-    for( const auto mesh: m_meshes )
-        m_scene_aabb.include( mesh->world_aabb );
+    for( const auto instance: m_instances )
+        m_scene_aabb.include( instance->world_aabb );
 
     if( !m_cameras.empty() )
         m_cameras.front().setLookat( m_scene_aabb.center() );
@@ -667,6 +769,7 @@ void sutil::Scene::cleanup()
     for( auto mesh : m_meshes )
         CUDA_CHECK( cudaFree( reinterpret_cast<void*>( mesh->d_gas_output ) ) );
     m_meshes.clear();
+    m_instances.clear();
 }
 
 
@@ -773,7 +876,7 @@ class CuBuffer
 };
 }  // namespace
 
-void Scene::buildMeshAccels( uint32_t triangle_input_flags )
+void Scene::buildMeshAccels()
 {
     // Problem:
     // The memory requirements of a compacted GAS are unknown prior to building the GAS.
@@ -860,16 +963,23 @@ void Scene::buildMeshAccels( uint32_t triangle_input_flags )
     std::multimap<size_t, GASInfo> gases;
     size_t totalTempOutputSize = 0;
 
-    for(size_t i=0; i<m_meshes.size(); ++i)
+    unsigned opaque_triangle_input_flags[2] = { OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT, OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT | OPTIX_GEOMETRY_FLAG_DISABLE_TRIANGLE_FACE_CULLING };
+    unsigned mask_triangle_input_flags[2]   = { OPTIX_GEOMETRY_FLAG_NONE, OPTIX_GEOMETRY_FLAG_DISABLE_TRIANGLE_FACE_CULLING };
+    unsigned blend_triangle_input_flags[2]  = { OPTIX_GEOMETRY_FLAG_REQUIRE_SINGLE_ANYHIT_CALL, OPTIX_GEOMETRY_FLAG_REQUIRE_SINGLE_ANYHIT_CALL | OPTIX_GEOMETRY_FLAG_DISABLE_TRIANGLE_FACE_CULLING };
+
+    for( size_t i = 0; i < m_meshes.size(); ++i )
     {
         auto& mesh = m_meshes[i];
 
-        const size_t num_subMeshes =  mesh->indices.size();
-        std::vector<OptixBuildInput> buildInputs(num_subMeshes);
+        const size_t num_subMeshes = mesh->indices.size();
+        std::vector<OptixBuildInput> buildInputs( num_subMeshes );
 
-        assert(mesh->positions.size() == num_subMeshes &&
-            mesh->normals.size()   == num_subMeshes &&
-            mesh->texcoords.size() == num_subMeshes);
+        assert( mesh->positions.size() == num_subMeshes &&
+            mesh->normals.size() == num_subMeshes &&
+            mesh->colors.size() == num_subMeshes );
+
+        for( size_t j = 0; j < GeometryData::num_textcoords; ++j )
+            assert( mesh->texcoords[j].size() == num_subMeshes );
 
         for(size_t j = 0; j < num_subMeshes; ++j)
         {
@@ -884,17 +994,38 @@ void Scene::buildMeshAccels( uint32_t triangle_input_flags )
                 triangle_input.triangleArray.numVertices             = mesh->positions[j].count;
             triangle_input.triangleArray.vertexBuffers               = &(mesh->positions[j].data);
             triangle_input.triangleArray.indexFormat                 =
-                mesh->indices[j].elmt_byte_size == 2 ?
-                OPTIX_INDICES_FORMAT_UNSIGNED_SHORT3 :
-                OPTIX_INDICES_FORMAT_UNSIGNED_INT3;
+                mesh->indices[j].elmt_byte_size == 0 ? OPTIX_INDICES_FORMAT_NONE :
+                mesh->indices[j].elmt_byte_size == 2 ? OPTIX_INDICES_FORMAT_UNSIGNED_SHORT3 :
+                                                       OPTIX_INDICES_FORMAT_UNSIGNED_INT3;
             triangle_input.triangleArray.indexStrideInBytes          =
                 mesh->indices[j].byte_stride ?
-                mesh->indices[j].byte_stride :
+                mesh->indices[j].byte_stride*3 :
                 mesh->indices[j].elmt_byte_size*3;
             triangle_input.triangleArray.numIndexTriplets            = mesh->indices[j].count / 3;
             triangle_input.triangleArray.indexBuffer                 = mesh->indices[j].data;
-            triangle_input.triangleArray.flags                       = &triangle_input_flags;
             triangle_input.triangleArray.numSbtRecords               = 1;
+
+            const int32_t mat_idx = mesh->material_idx[j];
+            if( mat_idx >= 0 )
+            {
+                auto alpha_mode = m_materials[mat_idx].alpha_mode;
+                switch( alpha_mode )
+                {
+                case MaterialData::ALPHA_MODE_MASK:
+                    triangle_input.triangleArray.flags = &mask_triangle_input_flags[m_materials[mat_idx].doubleSided];
+                    break;
+                case MaterialData::ALPHA_MODE_BLEND:
+                    triangle_input.triangleArray.flags = &blend_triangle_input_flags[m_materials[mat_idx].doubleSided];
+                    break;
+                default:
+                    triangle_input.triangleArray.flags = &opaque_triangle_input_flags[m_materials[mat_idx].doubleSided];
+                    break;
+                };
+            }
+            else
+            {
+                triangle_input.triangleArray.flags = &opaque_triangle_input_flags[0]; // default is single sided
+            }
         }
 
         OptixAccelBufferSizes gas_buffer_sizes;
@@ -1062,22 +1193,16 @@ void Scene::buildMeshAccels( uint32_t triangle_input_flags )
 }
 
 
-///TODO
-struct Instance
-{
-    float transform[12];
-};
-
 void Scene::buildInstanceAccel( int rayTypeCount )
 {
-    const size_t num_instances = m_meshes.size();
+    const size_t num_instances = m_instances.size();
 
     std::vector<OptixInstance> optix_instances( num_instances );
 
     unsigned int sbt_offset = 0;
-    for( size_t i = 0; i < m_meshes.size(); ++i )
+    for( size_t i = 0; i < m_instances.size(); ++i )
     {
-        auto  mesh = m_meshes[i];
+        auto  instance = m_instances[i];
         auto& optix_instance = optix_instances[i];
         memset( &optix_instance, 0, sizeof( OptixInstance ) );
 
@@ -1085,10 +1210,10 @@ void Scene::buildInstanceAccel( int rayTypeCount )
         optix_instance.instanceId        = static_cast<unsigned int>( i );
         optix_instance.sbtOffset         = sbt_offset;
         optix_instance.visibilityMask    = 1;
-        optix_instance.traversableHandle = mesh->gas_handle;
-        memcpy( optix_instance.transform, mesh->transform.getData(), sizeof( float ) * 12 );
+        optix_instance.traversableHandle = m_meshes[instance->mesh_idx]->gas_handle;
+        memcpy( optix_instance.transform, instance->transform.getData(), sizeof( float ) * 12 );
 
-        sbt_offset += static_cast<unsigned int>( mesh->indices.size() ) * rayTypeCount;  // one sbt record per GAS build input per RAY_TYPE
+        sbt_offset += static_cast<unsigned int>( m_meshes[instance->mesh_idx]->indices.size() ) * rayTypeCount;  // one sbt record per GAS build input per RAY_TYPE
     }
 
     const size_t instances_size_in_bytes = sizeof( OptixInstance ) * num_instances;
@@ -1152,8 +1277,10 @@ void Scene::createPTXModule()
 {
 
     OptixModuleCompileOptions module_compile_options = {};
-    module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_DEFAULT;
-    module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_MINIMAL;
+#if !defined( NDEBUG )
+    module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
+    module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+#endif
 
     m_pipeline_compile_options = {};
     m_pipeline_compile_options.usesMotionBlur            = false;
@@ -1256,6 +1383,8 @@ void Scene::createProgramGroups()
         hit_prog_group_desc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
         hit_prog_group_desc.hitgroup.moduleCH            = m_ptx_module;
         hit_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__radiance";
+        hit_prog_group_desc.hitgroup.moduleAH            = m_ptx_module;
+        hit_prog_group_desc.hitgroup.entryFunctionNameAH = "__anyhit__radiance";
         sizeof_log = sizeof( log );
         OPTIX_CHECK_LOG( optixProgramGroupCreate(
                     m_context,
@@ -1272,6 +1401,8 @@ void Scene::createProgramGroups()
         hit_prog_group_desc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
         hit_prog_group_desc.hitgroup.moduleCH            = m_ptx_module;
         hit_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__occlusion";
+        hit_prog_group_desc.hitgroup.moduleAH            = m_ptx_module;
+        hit_prog_group_desc.hitgroup.entryFunctionNameAH = "__anyhit__occlusion";
         sizeof_log = sizeof( log );
         OPTIX_CHECK( optixProgramGroupCreate(
                     m_context,
@@ -1299,7 +1430,7 @@ void Scene::createPipeline()
     };
 
     OptixPipelineLinkOptions pipeline_link_options = {};
-    pipeline_link_options.maxTraceDepth          = 2;
+    pipeline_link_options.maxTraceDepth          = whitted::MAX_TRACE_DEPTH;
     pipeline_link_options.debugLevel             = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 
     char log[2048];
@@ -1356,8 +1487,9 @@ void Scene::createSBT()
 
     {
         std::vector<HitGroupRecord> hitgroup_records;
-        for( const auto mesh : m_meshes )
+        for( const auto instance : m_instances )
         {
+            const auto mesh = m_meshes[instance->mesh_idx];
             for( size_t i = 0; i < mesh->material_idx.size(); ++i )
             {
                 HitGroupRecord rec = {};
@@ -1365,14 +1497,16 @@ void Scene::createSBT()
                 rec.data.geometry_data.type                    = GeometryData::TRIANGLE_MESH;
                 rec.data.geometry_data.triangle_mesh.positions = mesh->positions[i];
                 rec.data.geometry_data.triangle_mesh.normals   = mesh->normals[i];
-                rec.data.geometry_data.triangle_mesh.texcoords = mesh->texcoords[i];
+                for( size_t j = 0; j < GeometryData::num_textcoords; ++j )
+                    rec.data.geometry_data.triangle_mesh.texcoords[j] = mesh->texcoords[j][i];
+                rec.data.geometry_data.triangle_mesh.colors    = mesh->colors[i];
                 rec.data.geometry_data.triangle_mesh.indices   = mesh->indices[i];
 
                 const int32_t mat_idx  = mesh->material_idx[i];
                 if( mat_idx >= 0 )
-                    rec.data.material_data.pbr = m_materials[ mat_idx ];
+                    rec.data.material_data = m_materials[ mat_idx ];
                 else
-                    rec.data.material_data.pbr = MaterialData::Pbr();
+                    rec.data.material_data = MaterialData();
                 hitgroup_records.push_back( rec );
 
                 OPTIX_CHECK( optixSbtRecordPackHeader( m_occlusion_hit_group, &rec ) );

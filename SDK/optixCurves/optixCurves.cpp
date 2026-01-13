@@ -198,7 +198,7 @@ int main( int argc, char* argv[] )
             OPTIX_CHECK( optixDeviceContextCreate( cuCtx, &options, &context ) );
         }
 
-
+        const unsigned int buildFlags = OPTIX_BUILD_FLAG_ALLOW_RANDOM_VERTEX_ACCESS | OPTIX_BUILD_FLAG_PREFER_FAST_TRACE;
         //
         // accel handling
         //
@@ -210,7 +210,7 @@ int main( int argc, char* argv[] )
             // Use default options for simplicity.  In a real use case we would want to
             // enable compaction, etc
             OptixAccelBuildOptions accel_options  = {};
-            accel_options.buildFlags              = OPTIX_BUILD_FLAG_ALLOW_RANDOM_VERTEX_ACCESS;
+            accel_options.buildFlags              = buildFlags;
             accel_options.operation               = OPTIX_BUILD_OPERATION_BUILD;
             if( motion_blur) {
                 accel_options.motionOptions.numKeys   = NUM_KEYS;
@@ -252,7 +252,7 @@ int main( int argc, char* argv[] )
                     widths.push_back( .01f );
                 } break;
                 default:
-                    SUTIL_ASSERT_MSG( false, "Curve degree must be in {1, 2, 3}." );
+                    SUTIL_ASSERT_FAIL_MSG( "Curve degree must be in {1, 2, 3}." );
                 }
             }
             const size_t vertices_size = sizeof( float3 ) * vertices.size();
@@ -277,9 +277,9 @@ int main( int argc, char* argv[] )
             // contains index of first vertex.
             const std::array<int, 1> segmentIndices     = {0};
             const size_t             segmentIndicesSize = sizeof( int ) * segmentIndices.size();
-            CUdeviceptr              d_segementIndices  = 0;
-            CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_segementIndices ), segmentIndicesSize ) );
-            CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( d_segementIndices ), segmentIndices.data(),
+            CUdeviceptr              d_segmentIndices   = 0;
+            CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_segmentIndices ), segmentIndicesSize ) );
+            CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( d_segmentIndices ), segmentIndices.data(),
                                     segmentIndicesSize, cudaMemcpyHostToDevice ) );
 
             // Curve build input.
@@ -306,7 +306,7 @@ int main( int argc, char* argv[] )
             curve_input.curveArray.widthStrideInBytes   = sizeof( float );
             curve_input.curveArray.normalBuffers        = 0;
             curve_input.curveArray.normalStrideInBytes  = 0;
-            curve_input.curveArray.indexBuffer          = d_segementIndices;
+            curve_input.curveArray.indexBuffer          = d_segmentIndices;
             curve_input.curveArray.indexStrideInBytes   = sizeof( int );
             curve_input.curveArray.flag                 = OPTIX_GEOMETRY_FLAG_NONE;
             curve_input.curveArray.primitiveIndexOffset = 0;
@@ -332,6 +332,9 @@ int main( int argc, char* argv[] )
             // inputs, since they are not needed by our trivial shading method
             CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_temp_buffer_gas ) ) );
             CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_vertices ) ) );
+            CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_widths ) ) );
+            CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_segmentIndices ) ) );
+
         }
 
         //
@@ -342,9 +345,10 @@ int main( int argc, char* argv[] )
         OptixPipelineCompileOptions pipeline_compile_options = {};
         {
             OptixModuleCompileOptions module_compile_options = {};
-            module_compile_options.maxRegisterCount          = OPTIX_COMPILE_DEFAULT_MAX_REGISTER_COUNT;
-            module_compile_options.optLevel                  = OPTIX_COMPILE_OPTIMIZATION_DEFAULT;
-            module_compile_options.debugLevel                = OPTIX_COMPILE_DEBUG_LEVEL_MINIMAL;
+#if !defined( NDEBUG )
+            module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
+            module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+#endif
 
             pipeline_compile_options.usesMotionBlur        = motion_blur;  // enable motion-blur in pipeline
             pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
@@ -389,6 +393,7 @@ int main( int argc, char* argv[] )
                     break;
             }
             builtinISOptions.usesMotionBlur = motion_blur;  // enable motion-blur for built-in intersector
+            builtinISOptions.buildFlags = buildFlags;
             OPTIX_CHECK( optixBuiltinISModuleGet( context, &module_compile_options, &pipeline_compile_options,
                                                   &builtinISOptions, &geometry_module ) );
         }
@@ -539,6 +544,7 @@ int main( int argc, char* argv[] )
             CUDA_SYNC_CHECK();
 
             output_buffer.unmap();
+            CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_param ) ) );
         }
 
         //

@@ -60,7 +60,7 @@ extern "C" __global__ void __intersection__parallelogram()
                     t,
                     0,
                     float3_as_args(n),
-                    float_as_int( a1 ), float_as_int( a2 )
+                    __float_as_uint( a1 ), __float_as_uint( a2 )
                     );
             }
         }

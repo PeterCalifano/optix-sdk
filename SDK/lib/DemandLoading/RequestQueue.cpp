@@ -65,6 +65,12 @@ void RequestQueue::push( unsigned int deviceIndex, CUstream stream, const unsign
     // Don't push requests if the queue is shut down.
     if( m_isShutDown )
         numPageIds = 0;
+    
+    // Don't overfill the queue
+    if( m_requests.size() >= m_maxQueueSize )
+        numPageIds = 0;
+    else if( numPageIds + m_requests.size() > m_maxQueueSize )
+        numPageIds = static_cast<unsigned int>( m_maxQueueSize - m_requests.size() );
 
     // Update the ticket, now that the number of tasks is known.
     TicketImpl::getImpl( ticket )->update( numPageIds );

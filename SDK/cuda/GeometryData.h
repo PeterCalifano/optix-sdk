@@ -29,6 +29,28 @@
 
 #include <cuda/BufferView.h>
 
+#include <sutil/vec_math.h>
+
+#ifndef __CUDACC_RTC__
+#include <cassert>
+#else
+#define assert(x) /*nop*/
+#endif
+
+// unaligned equivalent of float2
+struct Vec2f
+{
+    SUTIL_HOSTDEVICE operator float2() const { return { x, y }; }
+
+    float x, y;
+};
+
+struct Vec4f
+{
+    SUTIL_HOSTDEVICE operator float4() const { return { x, y, z, w }; }
+
+    float x, y, z, w;
+};
 
 struct GeometryData
 {
@@ -39,15 +61,19 @@ struct GeometryData
         LINEAR_CURVE_ARRAY    = 2,
         QUADRATIC_CURVE_ARRAY = 3,
         CUBIC_CURVE_ARRAY     = 4,
+        CATROM_CURVE_ARRAY    = 5,
     };
 
+    // The number of supported texture spaces per mesh.
+    static const unsigned int num_textcoords = 2;
 
     struct TriangleMesh
     {
         GenericBufferView  indices;
         BufferView<float3> positions;
         BufferView<float3> normals;
-        BufferView<float2> texcoords;
+        BufferView<Vec2f>  texcoords[num_textcoords]; // The buffer view may not be aligned, so don't use float2
+        BufferView<Vec4f>  colors;                    // The buffer view may not be aligned, so don't use float4
     };
 
 

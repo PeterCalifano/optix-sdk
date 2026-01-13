@@ -1229,6 +1229,7 @@ void updateIAS( IAS& ias, const OptixDeviceContext& context )
 void cleanupIAS( IAS& ias )
 {
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( ias.d_buffer    ) ) );
+    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( ias.d_update_buffer ) ) );
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( ias.d_instances ) ) );
 }
 
@@ -1236,8 +1237,10 @@ void cleanupIAS( IAS& ias )
 void createModule( OptixModule& module, const OptixDeviceContext& context )
 {
     OptixModuleCompileOptions module_compile_options = {};
-    module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_DEFAULT;
-    module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_MINIMAL;
+#if !defined( NDEBUG )
+    module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
+    module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+#endif
 
     OptixPipelineCompileOptions pipeline_compile_options = {};
     pipeline_compile_options.usesMotionBlur            = false;
@@ -1463,6 +1466,8 @@ void createPipeline( OptixPipeline& pipeline, const ProgramGroups& programs, con
     OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.miss_occlusion,  &stack_sizes ) );
     OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.mesh_radiance,  &stack_sizes ) );
     OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.mesh_occlusion, &stack_sizes ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.volume_radiance, &stack_sizes ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.volume_occlusion, &stack_sizes ) );
 
     uint32_t max_trace_depth = 4;
     uint32_t max_cc_depth = 0;
@@ -1787,6 +1792,8 @@ int main( int argc, char* argv[] )
 		cleanupVolumeAccel( g_volume_accel );
 		cleanupPlane( g_plane );
 		cleanupVolume( g_volume );
+        cleanupCube( g_cube );
+        cleanupCubeAccel( g_cube_accel );
         optixDeviceContextDestroy( g_context );
     }
     catch( std::exception& e )

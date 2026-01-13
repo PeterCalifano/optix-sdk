@@ -47,19 +47,20 @@ void BaseColorRequestHandler::fillRequest( unsigned int deviceIndex, CUstream st
 {
     SCOPED_NVTX_RANGE_FUNCTION_NAME();
 
+    unsigned int       textureId = pageId - m_startPage;
+    MutexArrayLock     lock( m_mutex.get(), textureId );
+    DemandTextureImpl* texture = m_loader->getTexture( textureId );
+
     // Do nothing if the request has already been filled.
     if( m_loader->getPagingSystem( deviceIndex )->isResident( pageId ) )
         return;
-
-    unsigned int       textureId = pageId - m_startPage;
-    DemandTextureImpl* texture   = m_loader->getTexture( textureId );
 
     float4 fBaseColor = float4{1.0f, 0.0f, 1.0f, 0.0f};
     bool hasBaseColor = false;
     if( texture != nullptr )
     {
-        texture->getImageReader()->open( nullptr );
-        hasBaseColor = texture->getImageReader()->readBaseColor( fBaseColor );
+        texture->getImageSource()->open( nullptr );
+        hasBaseColor = texture->getImageSource()->readBaseColor( fBaseColor );
     }
 
     // Store the base color as a half4 in the page table

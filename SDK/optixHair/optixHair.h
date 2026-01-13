@@ -51,6 +51,8 @@ class HairProgramGroups;
 
 struct HairState
 {
+    unsigned int buildFlags = OPTIX_BUILD_FLAG_ALLOW_COMPACTION | OPTIX_BUILD_FLAG_ALLOW_RANDOM_VERTEX_ACCESS | OPTIX_BUILD_FLAG_PREFER_FAST_TRACE;
+
     OptixDeviceContext context = 0;
 
     Hair*         pHair;

@@ -51,11 +51,6 @@ PagingSystem::PagingSystem( unsigned int         deviceIndex,
     DEMAND_ASSERT( m_options.maxFilledPages >= m_options.maxRequestedPages );
     DEMAND_CUDA_CHECK( cudaSetDevice( deviceIndex ) );
 
-    // Allocate host-side page table
-    m_pageTable.resize( m_options.numPages, 0ul );
-    m_residenceBits.resize( m_options.numPages, false );
-    m_stagedBits.resize( m_options.numPages, false );
-
     // Make the initial pushMappings event (which will be recorded when pushMappings is called)
     m_pushMappingsEvent = std::make_shared<FutureEvent>();
 
@@ -75,9 +70,9 @@ void PagingSystem::updateLruThreshold( unsigned int returnedStalePages, unsigned
     // Heuristic to update the lruThreshold. The basic idea is to aggressively reduce the threshold
     // if not enough stale pages are returned, but only gradually increase the threshold if it is too low.
     if( returnedStalePages < requestedStalePages / 2 )
-        m_lruThreshold -= std::min( m_lruThreshold-MIN_LRU_THRESHOLD, 4u );
+        m_lruThreshold -= std::min( m_lruThreshold - MIN_LRU_THRESHOLD, 4u );
     else if( returnedStalePages < requestedStalePages )
-        m_lruThreshold -= std::min( m_lruThreshold-MIN_LRU_THRESHOLD, 2u );
+        m_lruThreshold -= std::min( m_lruThreshold - MIN_LRU_THRESHOLD, 2u );
     else if( medianLruVal > m_lruThreshold )
         m_lruThreshold++;
 }
@@ -148,7 +143,7 @@ void PagingSystem::processRequests( const DeviceContext& context, RequestContext
     // Return device context to pool.  The DeviceContext has been copied, but DeviceContextPool is designed to permit that.
     m_deviceMemoryManager->getDeviceContextPool()->free( const_cast<DeviceContext*>( &context ) );
 
-    // Restore staged requests, and remove them from the request list
+    // Restore staged requests, and remove them from the request list (second chance algorithm)
     unsigned int numRequestedPages = requestContext->arrayLengths[PAGE_REQUESTS_LENGTH];
     unsigned int numStalePages     = requestContext->arrayLengths[STALE_PAGES_LENGTH];
 
@@ -178,12 +173,12 @@ void PagingSystem::processRequests( const DeviceContext& context, RequestContext
         }
         else
         {
-            std::random_shuffle( requestContext->stalePages, requestContext->stalePages + numStalePages );
+            std::shuffle(requestContext->stalePages, requestContext->stalePages + numStalePages, m_rng);
         }
 
         if( m_evictionActive && getNumStagedPages() < m_options.maxStagedPages )
         {
-            m_stagedPages.emplace_back( StagedPageList{m_pushMappingsEvent, std::deque<PageMapping>() } );
+            m_stagedPages.emplace_back( StagedPageList{m_pushMappingsEvent, std::deque<PageMapping>()} );
             stageStalePages( requestContext, m_stagedPages.back().mappings );
         }
     }
@@ -202,21 +197,8 @@ void PagingSystem::addMapping( unsigned int pageId, unsigned int lruVal, unsigne
 bool PagingSystem::isResident( unsigned int pageId )
 {
     std::unique_lock<std::mutex> lock( m_mutex );
-    return m_residenceBits[pageId];
-}
-
-void PagingSystem::clearMapping( unsigned int pageId )
-{
-    // Mutex acquired in caller (processRequests).
-    DEMAND_ASSERT( m_pageMappingsContext->numInvalidatedPages < m_pageMappingsContext->maxInvalidatedPages );
-    DEMAND_ASSERT( pageId < m_pageTable.size() );
-    DEMAND_ASSERT( m_residenceBits[pageId] == true );
-    DEMAND_ASSERT( m_stagedBits[pageId] == false );
-
-    // Set host-side resident bit to false, and schedule the page to be invalidated on the device.
-    // Note that we do not clear the value in m_pageTable since it is needed for the second chance algorithm.
-    m_residenceBits[pageId] = false;
-    m_pageMappingsContext->invalidatedPages[m_pageMappingsContext->numInvalidatedPages++] = pageId;
+    const auto&                  p = m_pageTable.find( pageId );
+    return ( p != m_pageTable.end() ) ? p->second.resident : false;
 }
 
 unsigned int PagingSystem::pushMappings( const DeviceContext& context, CUstream stream )
@@ -252,7 +234,7 @@ unsigned int PagingSystem::pushMappings( const DeviceContext& context, CUstream 
     m_pushMappingsEvent = std::make_shared<FutureEvent>();
 
     // Free the current PageMappingsContext (it's not reused until the preceding operations on the stream are done)
-    // and allocate another one.
+    // and allocate another one.  Note that we're careful to reserve two contexts per stream in the PinnedMemoryManager.
     m_pinnedMemoryManager->getPageMappingsContextPool()->free( m_pageMappingsContext, m_deviceIndex, stream );
     m_pageMappingsContext = m_pinnedMemoryManager->getPageMappingsContextPool()->allocate();
     m_pageMappingsContext->clear();
@@ -274,11 +256,17 @@ void PagingSystem::stageStalePages( RequestContext* requestContext, std::deque<P
         if( numStaged >= m_options.maxStagedPages || m_pageMappingsContext->numInvalidatedPages >= m_options.maxInvalidatedPages )
             break;
 
-        if( m_residenceBits[sp.pageId] && !m_stagedBits[sp.pageId] )
+        const auto& p = m_pageTable.find( sp.pageId );
+        if( p != m_pageTable.end() && p->second.resident == true && p->second.inStagedList == false )
         {
-            stagedMappings.emplace_back( PageMapping{sp.pageId, sp.lruVal, m_pageTable[sp.pageId]} );
-            clearMapping( sp.pageId );
-            m_stagedBits[sp.pageId] = true;
+            // Stage the page
+            stagedMappings.emplace_back( PageMapping{sp.pageId, sp.lruVal, p->second.entry} );
+            p->second.resident     = false;
+            p->second.staged       = true;
+            p->second.inStagedList = true;
+
+            // Schedule the page mapping to be invalidated on the device
+            m_pageMappingsContext->invalidatedPages[m_pageMappingsContext->numInvalidatedPages++] = sp.pageId;
             numStaged++;
         }
     }
@@ -290,17 +278,25 @@ bool PagingSystem::freeStagedPage( PageMapping* m )
 
     while( !m_stagedPages.empty() && ( m_stagedPages[0].event->query() == cudaSuccess ) )
     {
+        // Advance to the next list if the beginning list is empty
+        if( m_stagedPages[0].mappings.empty() )
+        {
+            m_stagedPages.pop_front();
+            continue;
+        }
+
+        // Pop the next staged page off the list
         *m = m_stagedPages[0].mappings.front();
         m_stagedPages[0].mappings.pop_front();
 
-        // Advance to the next list if the beginning list is empty
-        if( m_stagedPages[0].mappings.empty() )
-            m_stagedPages.pop_front();
+        const auto& p = m_pageTable.find( m->id );
+        DEMAND_ASSERT( p != m_pageTable.end() );
+        p->second.inStagedList = false;
 
         // If the page is still staged, return. Otherwise, go around and look for another one
-        if( m_stagedBits[m->id] )
+        if( p->second.staged == true )
         {
-            m_stagedBits[m->id] = false;
+            m_pageTable.erase( p );
             return true;
         }
     }
@@ -313,24 +309,24 @@ void PagingSystem::addMappingBody( unsigned int pageId, unsigned int lruVal, uns
 
     DEMAND_ASSERT_MSG( m_pageMappingsContext->numFilledPages <= m_pageMappingsContext->maxFilledPages,
                        "Maximum number of filled pages exceeded (Options::maxFilledPages)" );
-    DEMAND_ASSERT( m_residenceBits[pageId] == false );
-    DEMAND_ASSERT( pageId < m_pageTable.size() );
+    const auto& p = m_pageTable.find( pageId );
+    DEMAND_ASSERT( p == m_pageTable.end() || p->second.resident == false );
+    DEMAND_ASSERT( pageId < m_options.numPages );
 
     m_pageMappingsContext->filledPages[m_pageMappingsContext->numFilledPages++] = PageMapping{pageId, lruVal, entry};
-
-    m_pageTable[pageId]     = entry;
-    m_residenceBits[pageId] = true;
+    m_pageTable[pageId] = HostPageTableEntry{entry, true, false, false};
 }
 
 bool PagingSystem::restoreMapping( unsigned int pageId )
 {
     // Mutex acquired in caller (processRequests).
 
-    if( m_stagedBits[pageId] && !m_residenceBits[pageId]
+    const auto& p = m_pageTable.find( pageId );
+    if( p != m_pageTable.end() && p->second.staged && !p->second.resident
         && m_pageMappingsContext->numFilledPages < m_pageMappingsContext->maxFilledPages )
     {
-        m_stagedBits[pageId] = false;
-        addMappingBody( pageId, 0, m_pageTable[pageId] );
+        p->second.staged = false;
+        addMappingBody( pageId, 0, p->second.entry );
         return true;
     }
 

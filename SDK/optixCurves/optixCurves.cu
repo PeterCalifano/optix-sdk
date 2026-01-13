@@ -41,9 +41,9 @@ __constant__ Params params;
 
 static __forceinline__ __device__ void setPayload( float3 p )
 {
-    optixSetPayload_0( float_as_int( p.x ) );
-    optixSetPayload_1( float_as_int( p.y ) );
-    optixSetPayload_2( float_as_int( p.z ) );
+    optixSetPayload_0( __float_as_uint( p.x ) );
+    optixSetPayload_1( __float_as_uint( p.y ) );
+    optixSetPayload_2( __float_as_uint( p.z ) );
 }
 
 
@@ -89,9 +89,9 @@ extern "C" __global__ void __raygen__basic()
             0,                   // missSBTIndex -- See SBT discussion
             p0, p1, p2 );
     float3 result;
-    result.x = int_as_float( p0 );
-    result.y = int_as_float( p1 );
-    result.z = int_as_float( p2 );
+    result.x = __uint_as_float( p0 );
+    result.y = __uint_as_float( p1 );
+    result.z = __uint_as_float( p2 );
 
     // Record results in our output raster
     params.image[idx.y * params.image_width + idx.x] = make_color( result );
@@ -127,9 +127,9 @@ extern "C" __global__ void __raygen__motion_blur()
                     1,  // SBT stride   -- See SBT discussion
                     0,  // missSBTIndex -- See SBT discussion
                     p0, p1, p2 );
-        result.x += int_as_float( p0 );
-        result.y += int_as_float( p1 );
-        result.z += int_as_float( p2 );
+        result.x += __uint_as_float( p0 );
+        result.y += __uint_as_float( p1 );
+        result.z += __uint_as_float( p2 );
     }
 
     // Record results in our output raster

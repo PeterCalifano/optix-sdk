@@ -240,9 +240,10 @@ int main( int argc, char* argv[] )
         OptixPipelineCompileOptions pipeline_compile_options = {};
         {
             OptixModuleCompileOptions module_compile_options = {};
-            module_compile_options.maxRegisterCount     = OPTIX_COMPILE_DEFAULT_MAX_REGISTER_COUNT;
-            module_compile_options.optLevel             = OPTIX_COMPILE_OPTIMIZATION_DEFAULT;
-            module_compile_options.debugLevel           = OPTIX_COMPILE_DEBUG_LEVEL_MINIMAL;
+#if !defined( NDEBUG )
+            module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
+            module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+#endif
 
             pipeline_compile_options.usesMotionBlur        = false;
             pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
@@ -453,6 +454,7 @@ int main( int argc, char* argv[] )
             CUDA_SYNC_CHECK();
 
             output_buffer.unmap();
+            CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_param ) ) );
         }
 
         //

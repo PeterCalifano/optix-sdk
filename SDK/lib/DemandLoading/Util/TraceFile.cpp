@@ -34,7 +34,7 @@
 #include <DemandLoading/TextureDescriptor.h>
 
 #ifdef OPTIX_SAMPLE_USE_OPEN_EXR
-#include <ImageReader/EXRReader.h>
+#include <ImageSource/EXRReader.h>
 #endif
 
 #include <cassert>
@@ -84,16 +84,16 @@ void TraceFileWriter::recordOptions( const Options& options )
     writeOption( "maxActiveStreams", options.maxActiveStreams );
 }
 
-void TraceFileWriter::recordTexture( std::shared_ptr<imageReader::ImageReader> imageReader, const TextureDescriptor& desc )
+void TraceFileWriter::recordTexture( std::shared_ptr<imageSource::ImageSource> imageSource, const TextureDescriptor& desc )
 {
     std::unique_lock<std::mutex> lock( m_mutex );
 
 
 #ifdef OPTIX_SAMPLE_USE_OPEN_EXR
     // For now, only EXRReader can be serialized.
-    std::shared_ptr<imageReader::EXRReader> exrReader( std::dynamic_pointer_cast<imageReader::EXRReader>( imageReader ) );
+    std::shared_ptr<imageSource::EXRReader> exrReader( std::dynamic_pointer_cast<imageSource::EXRReader>( imageSource ) );
     if( !exrReader )
-        throw Exception( "Cannot serialize ImageReader (expected EXRReader)" );
+        throw Exception( "Cannot serialize ImageSource (expected EXRReader)" );
 
     write( TEXTURE );
     exrReader->serialize( m_file );
@@ -106,7 +106,7 @@ void TraceFileWriter::recordTexture( std::shared_ptr<imageReader::ImageReader> i
     write( desc.maxAnisotropy );
     write( desc.flags );
 #else
-    throw Exception( "Cannot serialize ImageReader (EXRReader not available)" );
+    throw Exception( "Cannot serialize ImageSource (EXRReader not available)" );
 #endif
 }
 
@@ -231,7 +231,7 @@ class TraceFileReader
     void replayCreateTexture( DemandLoader* loader )
     {
 #ifdef OPTIX_SAMPLE_USE_OPEN_EXR
-        std::shared_ptr<imageReader::ImageReader> imageReader( imageReader::EXRReader::deserialize( m_file ) );
+        std::shared_ptr<imageSource::ImageSource> imageSource( imageSource::EXRReader::deserialize( m_file ) );
 
         TextureDescriptor desc;
         read( &desc.addressMode[0] );
@@ -241,9 +241,9 @@ class TraceFileReader
         read( &desc.maxAnisotropy );
         read( &desc.flags );
 
-        loader->createTexture( imageReader, desc );
+        loader->createTexture( imageSource, desc );
 #else
-        throw Exception("Cannot deserialize ImageReader (EXRReader is not available)");
+        throw Exception("Cannot deserialize ImageSource (EXRReader is not available)");
 #endif
     }
 
@@ -289,7 +289,7 @@ class TraceFileReader
     }
 };
 
-void replayTraceFile( const char* filename )
+Statistics replayTraceFile( const char* filename )
 {
     // Open the trace file.  Throws an exception if an error occurs.
     TraceFileReader reader( filename );
@@ -303,9 +303,12 @@ void replayTraceFile( const char* filename )
 
     // Replay the trace file.
     reader.replay( loader );
+    Statistics stats = loader->getStatistics();
 
     // Clean up.
     destroyDemandLoader( loader );
+
+    return stats;
 }
 
 

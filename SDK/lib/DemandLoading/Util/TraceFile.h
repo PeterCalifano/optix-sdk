@@ -28,6 +28,8 @@
 
 #pragma once
 
+#include <DemandLoading/Statistics.h>
+
 #include <cuda.h>
 
 #include <fstream>
@@ -35,8 +37,8 @@
 #include <memory>
 #include <mutex>
 
-namespace imageReader {
-class ImageReader;
+namespace imageSource {
+class ImageSource;
 }
 
 namespace demandLoading {
@@ -58,7 +60,7 @@ class TraceFileWriter
     void recordOptions( const Options& options );
 
     /// Record createTexture call.
-    void recordTexture( std::shared_ptr<imageReader::ImageReader> imageReader, const TextureDescriptor& desc );
+    void recordTexture( std::shared_ptr<imageSource::ImageSource> imageSource, const TextureDescriptor& desc );
 
     /// Record a batch of page requests.
     void recordRequests( unsigned int deviceIndex, CUstream stream, const unsigned int* pageIds, unsigned int numPageIds );
@@ -93,6 +95,6 @@ class TraceFileWriter
 };
 
 /// Replay the specified trace file.  Throws an exception on error.
-void replayTraceFile( const char* filename );
+Statistics replayTraceFile( const char* filename );
 
 }  // namespace demandLoading

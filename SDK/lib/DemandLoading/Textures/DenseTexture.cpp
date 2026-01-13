@@ -29,14 +29,14 @@
 #include "Textures/DenseTexture.h"
 #include "Util/Exception.h"
 
-#include <ImageReader/ImageReader.h>
+#include <ImageSource/ImageSource.h>
 
 #include <algorithm>
 #include <cmath>
 
 namespace demandLoading {
 
-void DenseTexture::init( const TextureDescriptor& descriptor, const imageReader::TextureInfo& info )
+void DenseTexture::init( const TextureDescriptor& descriptor, const imageSource::TextureInfo& info )
 {
     // Redundant initialization can occur because requests from multiple streams are not yet
     // deduplicated.
@@ -90,7 +90,7 @@ uint2 DenseTexture::getMipLevelDims( unsigned int mipLevel ) const
     return make_uint2( static_cast<unsigned int>( desc.Width ), static_cast<unsigned int>( desc.Height ) );
 }
 
-void DenseTexture::fillTexture( CUstream stream, const char* textureData, unsigned int width, unsigned int height ) const
+void DenseTexture::fillTexture( CUstream stream, const char* textureData, unsigned int width, unsigned int height, bool bufferPinned ) const
 {
     DEMAND_ASSERT( m_isInitialized );
     DEMAND_ASSERT( width == m_info.width );
@@ -99,7 +99,7 @@ void DenseTexture::fillTexture( CUstream stream, const char* textureData, unsign
 
     // Fill each level.
     size_t             offset    = 0;
-    const unsigned int pixelSize = m_info.numChannels * imageReader::getBytesPerChannel( m_info.format );
+    const unsigned int pixelSize = m_info.numChannels * imageSource::getBytesPerChannel( m_info.format );
 
     for( unsigned int mipLevel = 0; mipLevel < m_info.numMipLevels; ++mipLevel )
     {
@@ -119,9 +119,13 @@ void DenseTexture::fillTexture( CUstream stream, const char* textureData, unsign
         copyArgs.WidthInBytes = levelDims.x * pixelSize;
         copyArgs.Height       = levelDims.y;
 
-        DEMAND_CUDA_CHECK( cuMemcpy2DAsync( &copyArgs, stream ) );
+        if( bufferPinned )
+            DEMAND_CUDA_CHECK( cuMemcpy2DAsync( &copyArgs, stream ) );
+        else 
+            DEMAND_CUDA_CHECK( cuMemcpy2D( &copyArgs ) );
 
         offset += levelDims.x * levelDims.y * pixelSize;
+        m_numBytesFilled += copyArgs.WidthInBytes * copyArgs.Height;
     }
 }
 

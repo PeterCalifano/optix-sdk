@@ -31,10 +31,15 @@
 #include <DemandLoading/DemandLoader.h>
 #include <DemandLoading/DemandTexture.h>
 #include <DemandLoading/TextureDescriptor.h>
+#include <DemandLoading/demandLoadingConfig.h>
 
-#include <ImageReader/CheckerBoardImage.h>
+#include <ImageSource/CheckerBoardImage.h>
 #ifdef OPTIX_SAMPLE_USE_OPEN_EXR
-#include <ImageReader/EXRReader.h>
+#include <ImageSource/EXRReader.h>
+#endif
+
+#ifdef OPTIX_SAMPLE_USE_CORE_EXR
+#include <ImageSource/CoreEXRReader.h>
 #endif
 
 #include <optix.h>
@@ -57,13 +62,14 @@
 #include <string>
 
 using namespace demandLoading;
-using namespace imageReader;
+using namespace imageSource;
 
 int          g_numThreads       = 0;
 int          g_totalLaunches    = 0;
 double       g_totalLaunchTime  = 0.0;
 unsigned int g_totalRequests    = 0;
 float        g_mipLevelBias     = 0.0f;
+bool         g_useCoreExr       = false;
 
 int32_t g_width      = 768;
 int32_t g_height     = 768;
@@ -124,6 +130,9 @@ void printUsageAndExit( const char* argv0 )
         << "         --textureScale <s>                  Texture scale (how many times to wrap the texture around the sphere) (default 1.0f)\n"
         << "         --bucketSize <dim>                  The size of the screen-space tiles used for rendering (default 256).\n"
         << "         --numThreads <n>                    The number of threads to use for processing requests; 0 is automatic (default 0).\n"
+#ifdef OPTIX_SAMPLE_USE_CORE_EXR        
+        << "         --useCoreEXR <true|false>           Use the CoreEXR reader (default false).\n"
+#endif
         << "\n";
     // clang-format on
     exit( 1 );
@@ -260,9 +269,10 @@ void buildAccel( PerDeviceSampleState& state )
 void createModule( PerDeviceSampleState& state )
 {
     OptixModuleCompileOptions module_compile_options = {};
-    module_compile_options.maxRegisterCount          = 100;
-    module_compile_options.optLevel                  = OPTIX_COMPILE_OPTIMIZATION_DEFAULT;
-    module_compile_options.debugLevel                = OPTIX_COMPILE_DEBUG_LEVEL_MINIMAL;
+#if !defined( NDEBUG )
+    module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
+    module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+#endif
 
     state.pipeline_compile_options.usesMotionBlur        = false;
     state.pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
@@ -272,9 +282,10 @@ void createModule( PerDeviceSampleState& state )
     state.pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
     size_t      inputSize = 0;
-    const char* input = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixDemandTexture.cu", inputSize );
-    char        log[2048];
-    size_t      sizeof_log = sizeof( log );
+    const char* input = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixDemandTexture.cu", inputSize,
+                                             nullptr /*log*/, {DEMAND_NVRTC_OPTIONS} );
+    char   log[2048];
+    size_t sizeof_log = sizeof( log );
 
     OPTIX_CHECK_LOG( optixModuleCreateFromPTX( state.context, &module_compile_options, &state.pipeline_compile_options,
                                                input, inputSize, log, &sizeof_log, &state.ptx_module ) );
@@ -573,6 +584,12 @@ int main( int argc, char* argv[] )
         {
             g_numThreads = atoi( argv[++i] );
         }
+#ifdef OPTIX_SAMPLE_USE_CORE_EXR
+        else if( arg == "--useCoreEXR" && !lastArg )
+        {
+            g_useCoreExr = std::string( argv[++i] ) != "false";
+        }
+#endif
         else
         {
             std::cerr << "Unknown option '" << arg << "'\n";
@@ -594,27 +611,33 @@ int main( int argc, char* argv[] )
         options.maxThreads = g_numThreads;  // maximum threads to use when processing page requests
         std::shared_ptr<DemandLoader> demandLoader( createDemandLoader( options ), destroyDemandLoader );
 
-        std::unique_ptr<ImageReader> imageReader;
+        std::unique_ptr<ImageSource> imageSource;
 
 // Make an exr reader or a procedural texture reader based on the textureFile name
 #ifdef OPTIX_SAMPLE_USE_OPEN_EXR
         if( !textureFile.empty() && textureFile != "checkerboard" )
         {
             std::string textureFilename( sutil::sampleDataFilePath( textureFile.c_str() ) );
-            imageReader = std::unique_ptr<ImageReader>( new EXRReader( textureFilename.c_str() ) );
+#ifdef OPTIX_SAMPLE_USE_CORE_EXR
+            imageSource = g_useCoreExr
+                ? std::unique_ptr<ImageSource>( new CoreEXRReader( textureFilename.c_str() ) )
+                : std::unique_ptr<ImageSource>( new EXRReader( textureFilename.c_str() ) );
+#else
+            imageSource = std::unique_ptr<ImageSource>( new EXRReader( textureFilename.c_str() ) );
+#endif
         }
 #endif
-        if( imageReader == nullptr )
+        if( imageSource == nullptr )
         {
             const int  squaresPerSide = 32;
             const bool useMipmaps     = true;
-            imageReader = std::unique_ptr<ImageReader>(
+            imageSource = std::unique_ptr<ImageSource>(
                 new CheckerBoardImage( g_textureWidth, g_textureHeight, squaresPerSide, useMipmaps ) );
         }
 
         // Create a demand-loaded texture
         TextureDescriptor    texDesc = makeTextureDescription();
-        const DemandTexture& texture = demandLoader->createTexture( std::move( imageReader ), texDesc );
+        const DemandTexture& texture = demandLoader->createTexture( std::move( imageSource ), texDesc );
 
         // Set up OptiX per-device states
         for( PerDeviceSampleState& state : states )

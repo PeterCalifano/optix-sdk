@@ -1,7 +1,7 @@
 Single frame denoising example. Denoise all AOVs (-A) for a single image:
-optixDenoiser_exp -a data/albedo.exr \
-                  -A data/diffuse.exr -A data/glossy.exr -A data/specular.exr \
-                  -o result.exr data/beauty.exr
+optixDenoiser -a data/albedo.exr \
+              -A data/diffuse.exr -A data/glossy.exr -A data/specular.exr \
+              -o result.exr data/beauty.exr
 
 When adding (compositing) the RGB pixels in the output files
     result_diffuse_denoised.exr, result_glossy_denoised.exr and result_specular_denoised.exr,
@@ -14,10 +14,10 @@ non-AOV inference model.
 
 ---------------------------------------------------------------------------------------------------
 Temporal denoising using direct prediction:
-optixDenoiser_exp -F 1-20 -a motiondata/soane-BSDF-+++.exr \
-                          -n motiondata/soane-Normal-+++.exr \
-                          -f motiondata/soane-Flow-+++.exr \
-                          -o result-+++.exr motiondata/soane-Beauty-+++.exr
+optixDenoiser -F 1-20 -a motiondata/soane-BSDF-+++.exr \
+                      -n motiondata/soane-Normal-+++.exr \
+                      -f motiondata/soane-Flow-+++.exr \
+                      -o result-+++.exr motiondata/soane-Beauty-+++.exr
 
 Add -k for selecting the kernel prediction denoising mode instead of direct prediction.
 

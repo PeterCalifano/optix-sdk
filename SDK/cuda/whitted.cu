@@ -28,6 +28,7 @@
 #include <optix.h>
 
 #include <cuda/LocalGeometry.h>
+#include <cuda/LocalShading.h>
 #include <cuda/helpers.h>
 #include <cuda/random.h>
 #include <sutil/vec_math.h>
@@ -72,11 +73,10 @@ extern "C" __global__ void __raygen__pinhole()
     //
     whitted::PayloadRadiance payload;
     payload.result     = make_float3( 0.0f );
-    payload.importance = 1.0f;
-    payload.depth      = 0.0f;
+    payload.depth      = 0;
 
     traceRadiance( whitted::params.handle, ray_origin, ray_direction,
-                   0.01f,  // tmin       // TODO: smarter offset
+                   0.00f,  // tmin
                    1e16f,  // tmax
                    &payload );
 
@@ -97,6 +97,45 @@ extern "C" __global__ void __raygen__pinhole()
     whitted::params.frame_buffer[image_index] = make_color( accum_color );
 }
 
+extern "C" __global__ void __anyhit__radiance()
+{
+    const whitted::HitGroupData* hit_group_data = reinterpret_cast< whitted::HitGroupData* >( optixGetSbtDataPointer() );
+    if( hit_group_data->material_data.pbr.base_color_tex )
+    {
+        const LocalGeometry geom       = getLocalGeometry( hit_group_data->geometry_data );
+        const float         base_alpha = sampleTexture<float4>( hit_group_data->material_data.pbr.base_color_tex, geom ).w;
+        // force mask mode, even for blend mode, as we don't do recursive traversal.
+        if( base_alpha < hit_group_data->material_data.alpha_cutoff )
+            optixIgnoreIntersection();
+    }
+}
+
+extern "C" __global__ void __anyhit__occlusion()
+{
+    const whitted::HitGroupData* hit_group_data = reinterpret_cast< whitted::HitGroupData* >( optixGetSbtDataPointer() );
+    if( hit_group_data->material_data.pbr.base_color_tex )
+    {
+        const LocalGeometry geom       = getLocalGeometry( hit_group_data->geometry_data );
+        const float         base_alpha = sampleTexture<float4>( hit_group_data->material_data.pbr.base_color_tex, geom ).w;
+
+        if( hit_group_data->material_data.alpha_mode != MaterialData::ALPHA_MODE_OPAQUE )
+        {
+            if( hit_group_data->material_data.alpha_mode == MaterialData::ALPHA_MODE_MASK )
+            {
+                if( base_alpha < hit_group_data->material_data.alpha_cutoff )
+                    optixIgnoreIntersection();
+            }
+
+            float attenuation = whitted::getPayloadOcclusion() * (1.f - base_alpha);
+
+            if( attenuation > 0.f )
+            {
+                whitted::setPayloadOcclusion( attenuation );
+                optixIgnoreIntersection();
+            }
+        }
+    }
+}
 
 extern "C" __global__ void __miss__constant_radiance()
 {
@@ -106,7 +145,7 @@ extern "C" __global__ void __miss__constant_radiance()
 
 extern "C" __global__ void __closesthit__occlusion()
 {
-    whitted::setPayloadOcclusion( true );
+    whitted::setPayloadOcclusion( 0.f );
 }
 
 
@@ -118,17 +157,23 @@ extern "C" __global__ void __closesthit__radiance()
     //
     // Retrieve material data
     //
-    float3 base_color = make_float3( hit_group_data->material_data.pbr.base_color );
+    float4 base_color = hit_group_data->material_data.pbr.base_color * geom.color;
     if( hit_group_data->material_data.pbr.base_color_tex )
-        base_color *= whitted::linearize(
-            make_float3( tex2D<float4>( hit_group_data->material_data.pbr.base_color_tex, geom.UV.x, geom.UV.y ) ) );
+    {
+        const float4 base_color_tex = sampleTexture<float4>( hit_group_data->material_data.pbr.base_color_tex, geom );
+
+        // don't gamma correct the alpha channel.
+        const float3 base_color_tex_linear = whitted::linearize( make_float3( base_color_tex ) );
+
+        base_color *= make_float4( base_color_tex_linear.x, base_color_tex_linear.y, base_color_tex_linear.z, base_color_tex.w );
+    }
 
     float  metallic  = hit_group_data->material_data.pbr.metallic;
     float  roughness = hit_group_data->material_data.pbr.roughness;
     float4 mr_tex    = make_float4( 1.0f );
     if( hit_group_data->material_data.pbr.metallic_roughness_tex )
         // MR tex is (occlusion, roughness, metallic )
-        mr_tex = tex2D<float4>( hit_group_data->material_data.pbr.metallic_roughness_tex, geom.UV.x, geom.UV.y );
+        mr_tex = sampleTexture<float4>( hit_group_data->material_data.pbr.metallic_roughness_tex, geom );
     roughness *= mr_tex.y;
     metallic *= mr_tex.z;
 
@@ -136,60 +181,110 @@ extern "C" __global__ void __closesthit__radiance()
     // Convert to material params
     //
     const float  F0         = 0.04f;
-    const float3 diff_color = base_color * ( 1.0f - F0 ) * ( 1.0f - metallic );
-    const float3 spec_color = lerp( make_float3( F0 ), base_color, metallic );
+    const float3 diff_color = make_float3( base_color ) * ( 1.0f - F0 ) * ( 1.0f - metallic );
+    const float3 spec_color = lerp( make_float3( F0 ), make_float3( base_color ), metallic );
     const float  alpha      = roughness * roughness;
+
+    float3 result = make_float3( 0.0f );
+
+    //
+    // compute emission
+    //
+
+    float3 emissive_factor = hit_group_data->material_data.emissive_factor;
+    float4 emissive_tex = make_float4( 1.0f );
+    if( hit_group_data->material_data.emissive_tex )
+        emissive_tex = sampleTexture<float4>( hit_group_data->material_data.emissive_tex, geom );
+    result += emissive_factor * make_float3( emissive_tex );
 
     //
     // compute direct lighting
     //
 
     float3 N = geom.N;
-    if( hit_group_data->material_data.pbr.normal_tex )
+    if( hit_group_data->material_data.normal_tex )
     {
+        const int texcoord_idx = hit_group_data->material_data.normal_tex.texcoord;
         const float4 NN =
-            2.0f * tex2D<float4>( hit_group_data->material_data.pbr.normal_tex, geom.UV.x, geom.UV.y ) - make_float4( 1.0f );
-        N = normalize( NN.x * normalize( geom.dpdu ) + NN.y * normalize( geom.dpdv ) + NN.z * geom.N );
+            2.0f * sampleTexture<float4>( hit_group_data->material_data.normal_tex, geom ) - make_float4( 1.0f );
+
+        // Transform normal from texture space to rotated UV space.
+        const float2 rotation = hit_group_data->material_data.normal_tex.texcoord_rotation;
+        const float2 NN_proj  = make_float2( NN.x, NN.y );
+        const float3 NN_trns  = make_float3( 
+            dot( NN_proj, make_float2( rotation.y, -rotation.x ) ), 
+            dot( NN_proj, make_float2( rotation.x,  rotation.y ) ),
+            NN.z );
+
+        N = normalize( NN_trns.x * normalize( geom.texcoord[texcoord_idx].dpdu ) + NN_trns.y * normalize( geom.texcoord[texcoord_idx].dpdv ) + NN_trns.z * geom.N );
     }
 
-    float3 result = make_float3( 0.0f );
+    // Flip normal to the side of the incomming ray
+    if( dot( N, optixGetWorldRayDirection() ) > 0.f )
+        N = -N;
+
+    unsigned int depth = whitted::getPayloadDepth() + 1;
 
     for( int i = 0; i < whitted::params.lights.count; ++i )
     {
         Light light = whitted::params.lights[i];
         if( light.type == Light::Type::POINT )
         {
-            // TODO: optimize
-            const float  L_dist  = length( light.point.position - geom.P );
-            const float3 L       = ( light.point.position - geom.P ) / L_dist;
-            const float3 V       = -normalize( optixGetWorldRayDirection() );
-            const float3 H       = normalize( L + V );
-            const float  N_dot_L = dot( N, L );
-            const float  N_dot_V = dot( N, V );
-            const float  N_dot_H = dot( N, H );
-            const float  V_dot_H = dot( V, H );
-
-            if( N_dot_L > 0.0f && N_dot_V > 0.0f )
+            if( depth < whitted::MAX_TRACE_DEPTH )
             {
-                const float tmin     = 0.001f;           // TODO
-                const float tmax     = L_dist - 0.001f;  // TODO
-                const bool  occluded = whitted::traceOcclusion( whitted::params.handle, geom.P, L, tmin, tmax );
-                if( !occluded )
+                // TODO: optimize
+                const float  L_dist  = length( light.point.position - geom.P );
+                const float3 L       = ( light.point.position - geom.P ) / L_dist;
+                const float3 V       = -normalize( optixGetWorldRayDirection() );
+                const float3 H       = normalize( L + V );
+                const float  N_dot_L = dot( N, L );
+                const float  N_dot_V = dot( N, V );
+                const float  N_dot_H = dot( N, H );
+                const float  V_dot_H = dot( V, H );
+
+                if( N_dot_L > 0.0f && N_dot_V > 0.0f )
                 {
-                    const float3 F     = whitted::schlick( spec_color, V_dot_H );
-                    const float  G_vis = whitted::vis( N_dot_L, N_dot_V, alpha );
-                    const float  D     = whitted::ggxNormal( N_dot_H, alpha );
+                    const float tmin        = 0.001f;           // TODO
+                    const float tmax        = L_dist - 0.001f;  // TODO
+                    const float attenuation = whitted::traceOcclusion( whitted::params.handle, geom.P, L, tmin, tmax );
+                    if( attenuation > 0.f )
+                    {
+                        const float3 F     = whitted::schlick( spec_color, V_dot_H );
+                        const float  G_vis = whitted::vis( N_dot_L, N_dot_V, alpha );
+                        const float  D     = whitted::ggxNormal( N_dot_H, alpha );
 
-                    const float3 diff = ( 1.0f - F ) * diff_color / M_PIf;
-                    const float3 spec = F * G_vis * D;
+                        const float3 diff = ( 1.0f - F ) * diff_color / M_PIf;
+                        const float3 spec = F * G_vis * D;
 
-                    result += light.point.color * light.point.intensity * N_dot_L * ( diff + spec );
+                        result += light.point.color * attenuation * light.point.intensity * N_dot_L * ( diff + spec );
+                    }
                 }
             }
         }
         else if( light.type == Light::Type::AMBIENT )
         {
-            result += light.ambient.color * base_color;
+            result += light.ambient.color * make_float3( base_color );
+        }
+    }
+
+    if( hit_group_data->material_data.alpha_mode == MaterialData::ALPHA_MODE_BLEND )
+    {
+        result *= base_color.w;
+                
+        if( depth < whitted::MAX_TRACE_DEPTH )
+        {
+            whitted::PayloadRadiance alpha_payload;
+            alpha_payload.result = make_float3( 0.0f );
+            alpha_payload.depth  = depth;
+            whitted::traceRadiance( 
+                whitted::params.handle, 
+                optixGetWorldRayOrigin(), 
+                optixGetWorldRayDirection(),
+                optixGetRayTmax(),  // tmin
+                1e16f,              // tmax
+                &alpha_payload );
+
+            result += alpha_payload.result * make_float3( 1.f - base_color.w );
         }
     }
 

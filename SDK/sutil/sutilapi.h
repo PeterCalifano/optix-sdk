@@ -26,8 +26,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#ifndef __samples_util_sutilapi_h__
-#define __samples_util_sutilapi_h__
+#pragma once
 
 #ifndef SUTILAPI
 #  if sutil_7_sdk_EXPORTS /* Set by CMAKE */
@@ -64,5 +63,3 @@
 
 #  endif /* sutil_7_sdk_EXPORTS */
 #endif
-
-#endif /* __samples_util_sutilapi_h__ */

@@ -32,6 +32,10 @@
 #include "Textures/DemandTextureImpl.h"
 #include "Util/NVTXProfiling.h"
 
+#include "TransferBufferDesc.h"
+
+#include <algorithm>
+
 #include <DemandLoading/Paging.h>  // for NON_EVICTABLE_LRU_VAL
 
 namespace demandLoading {
@@ -56,9 +60,9 @@ void SamplerRequestHandler::fillRequest( unsigned int deviceIndex, CUstream stre
     DemandTextureImpl* texture   = m_loader->getTexture( samplerId );
 
     // A 1x1 or null texture is indicated in the page table as a null value.
-    imageReader::TextureInfo texInfo = {0};
+    imageSource::TextureInfo texInfo = {0};
     if( texture )
-        texture->getImageReader()->open( &texInfo );
+        texture->getImageSource()->open( &texInfo );
 
     if( texInfo.width <= 1 && texInfo.height <= 1 )
     {
@@ -68,8 +72,16 @@ void SamplerRequestHandler::fillRequest( unsigned int deviceIndex, CUstream stre
 
     // Initialize the texture, reading image info from file header on the first call and
     // creating a per-device CUDA texture object.
-    const bool ok = texture->init( deviceIndex );
-    DEMAND_ASSERT_MSG( ok, "ImageReader::init() failed" );
+    try
+    {
+        texture->init( deviceIndex );
+    }
+    catch( const std::exception& e )
+    {
+        std::stringstream ss;
+        ss << "ImageSource::init() failed: " << e.what() << ": " << __FILE__ << " (" << __LINE__ << ")";
+        throw Exception(ss.str().c_str());
+    }
 
     // For a dense texture, the whole thing has to be loaded, so load it now
     if ( texture->useSparseTexture() == false )
@@ -104,22 +116,40 @@ void SamplerRequestHandler::fillDenseTexture( unsigned int deviceIndex, CUstream
     SCOPED_NVTX_RANGE_FUNCTION_NAME();
 
     DemandTextureImpl* texture = m_loader->getTexture( pageId );
+    const imageSource::TextureInfo& info = texture->getInfo();
 
-    // Use a TileBuffer, since dense textures are always smaller than a tile
-    PinnedItemPool<TileBuffer>* pinnedTilePool = m_loader->getPinnedMemoryManager()->getPinnedTilePool();
-    TileBuffer* pinnedTileBuffer = pinnedTilePool->allocate();
+    // Try to get transfer buffer
+    size_t textureSizeInBytes = getTextureSizeInBytes( info );
+    TransferBufferDesc transferBuffer =
+        m_loader->allocateTransferBuffer( deviceIndex, texture->getImageSource()->getFillType(), textureSizeInBytes, stream );
 
-    // If it failed to allocate pinned memory, just return. (It's probably shutting down.)
-    if( pinnedTileBuffer == nullptr )
-        return;
+    // Make a backup buffer on the host if the transfer buffer was unsuccessful
+    size_t hostBufferSize = ( transferBuffer.size == 0 && transferBuffer.memoryType == CU_MEMORYTYPE_HOST ) ? textureSizeInBytes : 0;
+    std::vector<char> hostBuffer( hostBufferSize );
 
-    // Read the mip tail into a single buffer (which is the whole texture for dense textures).
-    char* pinnedData = pinnedTileBuffer->data;
-    const bool ok = texture->readMipTail( pinnedData, sizeof( TileBuffer ) );
-    DEMAND_ASSERT_MSG( ok, "readMipTail call failed" );
+    // Get the final data pointer
+    char* dataPtr = ( transferBuffer.size > 0 ) ? transferBuffer.buffer : hostBuffer.data();
+    size_t bufferSize = std::max( hostBuffer.size(), transferBuffer.size );
+    DEMAND_ASSERT_MSG( dataPtr != nullptr, "Unable to allocate transfer buffer for dense textures." );
 
-    texture->fillDenseTexture( deviceIndex, stream, pinnedData, texture->getInfo().width, texture->getInfo().height );
-    pinnedTilePool->free( pinnedTileBuffer, deviceIndex, stream );
+    // Read the texture data into the buffer
+    if( info.numMipLevels == 1 && ( info.width > 1 || info.height > 1 ) )
+        texture->readNonMipMappedData( dataPtr, bufferSize, stream );
+    else 
+        texture->readMipLevels( dataPtr, bufferSize, 0, stream );
+
+    // Copy texture data from the buffer to the texture array on the device
+    texture->fillDenseTexture( deviceIndex, stream, dataPtr, info.width, info.height, transferBuffer.size > 0 );
+    if( transferBuffer.size > 0 )
+    {
+        m_loader->freeTransferBuffer( transferBuffer, stream );
+    }
+    else 
+    {
+        // fillDenseTexture uses an async copy, so synchronize the stream when using the backup pageable buffer.
+        DEMAND_CUDA_CHECK( cudaSetDevice( deviceIndex ) );
+        DEMAND_CUDA_CHECK( cuStreamSynchronize( stream ) );
+    }
 }
 
 }  // namespace demandLoading

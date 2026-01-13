@@ -55,15 +55,24 @@ class Scene
 public:
     SUTILAPI Scene();
     SUTILAPI ~Scene();
+
+    struct Instance
+    {
+        Matrix4x4                         transform;
+        Aabb                              world_aabb;
+
+        int                               mesh_idx;
+    };
+
     struct MeshGroup
     {
         std::string                       name;
-        Matrix4x4                         transform;
 
         std::vector<GenericBufferView>    indices;
         std::vector<BufferView<float3> >  positions;
         std::vector<BufferView<float3> >  normals;
-        std::vector<BufferView<float2> >  texcoords;
+        std::vector<BufferView<Vec2f> >   texcoords[GeometryData::num_textcoords];
+        std::vector<BufferView<Vec4f> >   colors;
 
         std::vector<int32_t>              material_idx;
 
@@ -71,13 +80,13 @@ public:
         CUdeviceptr                       d_gas_output = 0;
 
         Aabb                              object_aabb;
-        Aabb                              world_aabb;
     };
 
 
-    SUTILAPI void addCamera  ( const Camera& camera            )    { m_cameras.push_back( camera );   }
-    SUTILAPI void addMesh    ( std::shared_ptr<MeshGroup> mesh )    { m_meshes.push_back( mesh );      }
-    SUTILAPI void addMaterial( const MaterialData::Pbr& mtl    )    { m_materials.push_back( mtl );    }
+    SUTILAPI void addCamera  ( const Camera& camera            )    { m_cameras.push_back( camera );     }
+    SUTILAPI void addInstance( std::shared_ptr<Instance> instance ) { m_instances.push_back( instance ); }
+    SUTILAPI void addMesh    ( std::shared_ptr<MeshGroup> mesh )    { m_meshes.push_back( mesh );        }
+    SUTILAPI void addMaterial( const MaterialData& mtl    )         { m_materials.push_back( mtl );      }
     SUTILAPI void addBuffer  ( const uint64_t buf_size, const void* data );
     SUTILAPI void addImage(
                 const int32_t width,
@@ -100,17 +109,18 @@ public:
     SUTILAPI void                           finalize();
     SUTILAPI void                           cleanup();
 
-    SUTILAPI Camera                                    camera()const;
-    SUTILAPI OptixPipeline                             pipeline()const              { return m_pipeline;   }
-    SUTILAPI const OptixShaderBindingTable*            sbt()const                   { return &m_sbt;       }
-    SUTILAPI OptixTraversableHandle                    traversableHandle() const    { return m_ias_handle; }
-    SUTILAPI sutil::Aabb                               aabb() const                 { return m_scene_aabb; }
-    SUTILAPI OptixDeviceContext                        context() const              { return m_context;    }
-    SUTILAPI const std::vector<MaterialData::Pbr>&     materials() const            { return m_materials;  }
-    SUTILAPI const std::vector<std::shared_ptr<MeshGroup>>& meshes() const          { return m_meshes;     }
+    SUTILAPI Camera                                         camera()const;
+    SUTILAPI OptixPipeline                                  pipeline()const           { return m_pipeline;   }
+    SUTILAPI const OptixShaderBindingTable*                 sbt()const                { return &m_sbt;       }
+    SUTILAPI OptixTraversableHandle                         traversableHandle() const { return m_ias_handle; }
+    SUTILAPI sutil::Aabb                                    aabb() const              { return m_scene_aabb; }
+    SUTILAPI OptixDeviceContext                             context() const           { return m_context;    }
+    SUTILAPI const std::vector<MaterialData>&               materials() const         { return m_materials;  }
+    SUTILAPI const std::vector<std::shared_ptr<MeshGroup>>& meshes() const            { return m_meshes;     }
+    SUTILAPI const std::vector<std::shared_ptr<Instance>>&  instances() const         { return m_instances;  }
 
     SUTILAPI void createContext();
-    SUTILAPI void buildMeshAccels( uint32_t triangle_input_flags = OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT );
+    SUTILAPI void buildMeshAccels();
     SUTILAPI void buildInstanceAccel( int rayTypeCount = whitted::RAY_TYPE_COUNT );
 
 private:
@@ -121,13 +131,14 @@ private:
 
     // TODO: custom geometry support
 
-    std::vector<Camera>                  m_cameras;
-    std::vector<std::shared_ptr<MeshGroup> >  m_meshes;
-    std::vector<MaterialData::Pbr>       m_materials;
-    std::vector<CUdeviceptr>             m_buffers;
-    std::vector<cudaTextureObject_t>     m_samplers;
-    std::vector<cudaArray_t>             m_images;
-    sutil::Aabb                          m_scene_aabb;
+    std::vector<Camera>                      m_cameras;
+    std::vector<std::shared_ptr<Instance> >  m_instances;
+    std::vector<std::shared_ptr<MeshGroup> > m_meshes;
+    std::vector<MaterialData>                m_materials;
+    std::vector<CUdeviceptr>                 m_buffers;
+    std::vector<cudaTextureObject_t>         m_samplers;
+    std::vector<cudaArray_t>                 m_images;
+    sutil::Aabb                              m_scene_aabb;
 
     OptixDeviceContext                   m_context                  = 0;
     OptixShaderBindingTable              m_sbt                      = {};

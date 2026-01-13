@@ -142,9 +142,9 @@ CUDAOutputBuffer<PIXEL_FORMAT>::~CUDAOutputBuffer()
         {
             CUDA_CHECK( cudaFreeHost( reinterpret_cast<void*>( m_host_zcopy_pixels ) ) );
         }
-        else if( m_type == CUDAOutputBufferType::GL_INTEROP )
+        else if( m_type == CUDAOutputBufferType::GL_INTEROP || m_type == CUDAOutputBufferType::CUDA_P2P )
         {
-            // nothing needed
+            CUDA_CHECK( cudaGraphicsUnregisterResource( m_cuda_gfx_resource ) );
         }
 
         if( m_pbo != 0u )

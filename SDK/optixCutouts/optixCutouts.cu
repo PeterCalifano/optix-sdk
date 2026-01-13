@@ -310,9 +310,9 @@ extern "C" __global__ void __anyhit__ah()
     }
     else
     {
-        const float3 normal = make_float3( int_as_float( optixGetAttribute_0() ),
-                                           int_as_float( optixGetAttribute_1() ),
-                                           int_as_float( optixGetAttribute_2() ) );
+        const float3 normal = make_float3( __uint_as_float( optixGetAttribute_0() ),
+                                           __uint_as_float( optixGetAttribute_1() ),
+                                           __uint_as_float( optixGetAttribute_2() ) );
 
         // TODO: Pass UV scale in SBT?
         const float uv_scale = 16.0f;
@@ -357,9 +357,9 @@ extern "C" __global__ void __closesthit__radiance()
     }
     else
     {
-        N = make_float3(int_as_float( optixGetAttribute_0() ),
-                        int_as_float( optixGetAttribute_1() ),
-                        int_as_float( optixGetAttribute_2() ));
+        N = make_float3(__uint_as_float( optixGetAttribute_0() ),
+                        __uint_as_float( optixGetAttribute_1() ),
+                        __uint_as_float( optixGetAttribute_2() ));
     }    
 
     prd->emitted = ( prd->countEmitted ) ? rt_data->emission_color : make_float3( 0.0f );

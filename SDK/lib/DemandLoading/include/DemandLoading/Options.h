@@ -32,30 +32,44 @@
 /// Demand loading configuration options.
 
 #include <cstddef>
+#include <limits>
 #include <string>
 
 namespace demandLoading {
 
 /// Demand loading configuration options.  \see createDemandLoader
+// clang-format off
 struct Options
 {
-    unsigned int numPages            = 1 << 26;     ///< max virtual pages (approx. 4 TB of texture tiles)
-    unsigned int numPageTableEntries = 256 * 1024;  ///< page table entries are needed for samplers, but not tiles.
+    // Page table size
+    unsigned int numPages            = 64 * 1024 * 1024;  ///< total virtual pages (4 TB of 64k texture tiles)
+    unsigned int numPageTableEntries = 1024 * 1024;  ///< num page table entries, used for texture samplers and base colors.
 
-    unsigned int maxRequestedPages   = 8192;  ///< max requests to pull from device
-    unsigned int maxFilledPages      = 8192;  ///< num slots to push mappings back to device
-    unsigned int maxStalePages       = 8192;  ///< max stale pages to pull from device
-    unsigned int maxEvictablePages   = 8192;  ///< max evictable pages to pull from device
-    unsigned int maxInvalidatedPages = 8192;  ///< max slots to push invalidated pages back to device
-    unsigned int maxStagedPages      = 8192;  ///< max staged pages (pages ready to be evicted)
-    bool         useLruTable         = true;  ///< use LRU table for eviction 
+    // Demand loading
+    unsigned int maxRequestedPages = 8192;  ///< max requests to pull from device in processRequests
+    unsigned int maxFilledPages    = 8192;  ///< num slots to push mappings back to device in processRequests
+    bool         useSparseTextures = true;  ///< whether to use sparse or dense textures
 
-    size_t maxTexMemPerDevice = 0;                  ///< max texture data to be allocated per device (0 is unlimited)
-    size_t maxPinnedMemory    = 640 * 1024 * 1024;  ///< max pinned memory.
+    // Memory limits
+    size_t maxTexMemPerDevice = 0;  ///< texture to allocate per device (in MB) before starting eviction (0 is unlimited)
+    size_t maxPinnedMemory = 64 * 1024 * 1024;  ///< max pinned memory to use for data transfer between host and device
 
-    unsigned int maxThreads = 0;        ///< max number of threads to use when processing requests;
-                                        ///< zero means use std::thread::hardware_concurrency.
-    unsigned int maxActiveStreams = 4;  ///< number of active streams across all devices.
-    std::string  traceFile        = "";  ///< trace filename (empty if disabled).
+    // Eviction
+    unsigned int maxStalePages       = 8192;  ///< max stale (resident but not used) pages to pull from device in processRequests
+    unsigned int maxEvictablePages   = 0;     ///< not used
+    unsigned int maxInvalidatedPages = 8192;  ///< max slots to push invalidated pages back to device in processRequests
+    unsigned int maxStagedPages      = 8192;  ///< num staged pages (pages flagged as non-resident, ready to be evicted) to maintain.
+    unsigned int maxRequestQueueSize = 32768; ///< max size for host-side request queue (filled over multiple processRequests cycles)
+    bool useLruTable                 = true;  ///< Whether to use LRU table, or randomized eviction
+    bool evictionActive              = true;  ///< whether eviction is active. (turning it off speeds up texture ops)
+
+    // Concurrency
+    unsigned int maxThreads = 0;  ///< max threads for processing requests. (0 means std::thread::hardware_concurrency)
+    unsigned int maxActiveStreams = 4;  ///< number of active CUDA streams across all devices.
+
+    // Trace file
+    std::string traceFile = "";  ///< trace filename (disabled if empty).
 };
+// clang-format on
+
 }

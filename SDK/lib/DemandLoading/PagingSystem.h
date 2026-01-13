@@ -29,16 +29,18 @@
 
 #include "Util/Exception.h"
 
-#include <DemandLoading/DeviceContext.h> // for PageMapping
+#include <DemandLoading/DeviceContext.h>  // for PageMapping
 #include <DemandLoading/Options.h>
 #include <DemandLoading/Ticket.h>
 
 #include <cuda.h>
 
+#include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <vector>
-#include <deque>
+#include <random>
 
 namespace demandLoading {
 
@@ -70,17 +72,13 @@ class PagingSystem
     /// pushMappings is called.
     void addMapping( unsigned int pageId, unsigned int lruVal, unsigned long long entry );
 
-    // Clear a page mapping (thread safe).  The device-side page table is not updated until
-    // pushMappings is called.
-    void clearMapping( unsigned int pageId );
-
     /// Check whether the specified page is resident (thread safe).
     bool isResident( unsigned int pageId );
 
     /// Push tile mappings to the device.  Returns the total number of new mappings.
     unsigned int pushMappings( const DeviceContext& context, CUstream stream );
 
-    /// Free a staged page for reuse (thread safe). Return the page mapping in m so resources 
+    /// Free a staged page for reuse (thread safe). Return the page mapping in m so resources
     /// it holds can also be freed.
     bool freeStagedPage( PageMapping* m );
 
@@ -94,17 +92,26 @@ class PagingSystem
     void flushMappings();
 
   private:
+    struct HostPageTableEntry
+    {
+        unsigned long long entry;
+        bool               resident;      // Whether a page is considered resident on the GPU
+        bool               staged;        // Pages that are currently staged (and not restored by second chance).
+        bool               inStagedList;  // All pages that are in the staged list, whether restored or not.
+    };
+
     Options              m_options{};
     unsigned int         m_deviceIndex = 0;
     DeviceMemoryManager* m_deviceMemoryManager{};
     PinnedMemoryManager* m_pinnedMemoryManager{};
     RequestProcessor*    m_requestProcessor{};
 
-    PageMappingsContext* m_pageMappingsContext; // owned by PinnedMemoryManager::m_pageMappingsContextPool
+    PageMappingsContext* m_pageMappingsContext;  // owned by PinnedMemoryManager::m_pageMappingsContextPool
 
-    std::vector<bool>               m_residenceBits;  // Host-side. Not copied to/from device.
-    std::vector<unsigned long long> m_pageTable;      // Host-side. Not copied to/from device. Used for eviction.
-    std::mutex                      m_mutex;          // Guards m_filledPages (see addMapping).
+    std::map<unsigned int, HostPageTableEntry> m_pageTable;  // Host-side. Not copied to/from device. Used for eviction.
+    std::mutex m_mutex;  // Guards m_pageTable and filledPages list (see addMapping).
+
+    std::mt19937 m_rng; // Used for randomized eviction when LRU table is not present.
 
   private:
     // Variables related to eviction
@@ -112,7 +119,6 @@ class PagingSystem
     bool               m_evictionActive  = false;
     unsigned int       m_launchNum       = 0;
     unsigned int       m_lruThreshold    = MIN_LRU_THRESHOLD;
-    std::vector<bool>  m_stagedBits;
 
     // Synchronization event for pushMappings
     struct FutureEvent
@@ -131,7 +137,7 @@ class PagingSystem
     struct StagedPageList
     {
         std::shared_ptr<FutureEvent> event;
-        std::deque<PageMapping> mappings;
+        std::deque<PageMapping>      mappings;
     };
     std::deque<StagedPageList> m_stagedPages;
 
@@ -157,6 +163,5 @@ class PagingSystem
     // Restore the mapping for a staged page if possible
     bool restoreMapping( unsigned int pageId );
 };
-
 
 }  // namespace demandLoading

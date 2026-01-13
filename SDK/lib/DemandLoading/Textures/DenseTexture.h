@@ -30,7 +30,7 @@
 #include "Util/Exception.h"
 
 #include <DemandLoading/TextureDescriptor.h>
-#include <ImageReader/TextureInfo.h>
+#include <ImageSource/TextureInfo.h>
 
 #include <vector_types.h>
 
@@ -53,7 +53,7 @@ class DenseTexture
 
     /// Initialize texture from the given descriptor (which specifies clamping/wrapping and
     /// filtering) and the given texture info (which describes the dimensions, format, etc.)
-    void init( const TextureDescriptor& descriptor, const imageReader::TextureInfo& info );
+    void init( const TextureDescriptor& descriptor, const imageSource::TextureInfo& info );
 
     /// Check whether the texture has been initialized.
     bool isInitialized() const { return m_isInitialized; }
@@ -65,14 +65,19 @@ class DenseTexture
     CUtexObject getTextureObject() const { return m_texture; }
 
     /// Fill the texture mip levels on the device with textureData, which contains all mip levels.
-    void fillTexture( CUstream stream, const char* textureData, unsigned int width, unsigned int height ) const;
+    void fillTexture( CUstream stream, const char* textureData, unsigned int width, unsigned int height, bool bufferPinned ) const;
+
+    /// Get total number of bytes filled
+    size_t getNumBytesFilled() const { return m_numBytesFilled; }
 
   private:
     bool                     m_isInitialized = false;
     unsigned int             m_deviceIndex;
-    imageReader::TextureInfo m_info;
+    imageSource::TextureInfo m_info;
     CUmipmappedArray         m_array{};
     CUtexObject              m_texture{};
+
+    mutable size_t m_numBytesFilled = 0;
 };
 
 }  // namespace demandLoading

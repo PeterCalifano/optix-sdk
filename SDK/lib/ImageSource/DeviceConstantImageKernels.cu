@@ -1,6 +1,5 @@
-
 //
-// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -27,42 +26,40 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
+#include <cuda.h>
+
+#include <cuda/helpers.h>
+#include <cuda_runtime.h>
+#include <sutil/vec_math.h>
+
+#include <ImageSource/DeviceConstantImageParams.h>
+
 #include "Exception.h"
 
-#include <cuda.h>
-#include <cuda_fp16.h>
+namespace imageSource {
 
-namespace imageReader {
-
-unsigned int getBytesPerChannel( const CUarray_format format )
+extern "C" __global__ void deviceReadConstantImage(const DeviceConstantImageParams params)
 {
-    switch( format )
-    {
-        case CU_AD_FORMAT_SIGNED_INT8:
-        case CU_AD_FORMAT_UNSIGNED_INT8:
-            return 1;
-
-        case CU_AD_FORMAT_SIGNED_INT16:
-        case CU_AD_FORMAT_UNSIGNED_INT16:
-            return 2;
-
-        case CU_AD_FORMAT_SIGNED_INT32:
-        case CU_AD_FORMAT_UNSIGNED_INT32:
-            return 4;
-
-        case CU_AD_FORMAT_HALF:
-            return sizeof( half );
-
-        case CU_AD_FORMAT_FLOAT:
-            return sizeof( float );
-
-        default:
-            DEMAND_ASSERT_MSG( false, "Invalid CUDA array format" );
-            return 0;
-    }
-
-    DEMAND_ASSERT_MSG( false, "Invalid CUDA array format" );
-    return 0;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if( idx >= params.num_pixels )
+        return;
+    
+    if( idx < 64 || (idx & 63) == 0 )
+        params.output_buffer[idx] = float4{0.0f, 0.0f, 0.0f, 0.0f};
+    else
+        params.output_buffer[idx] = params.color;
 }
 
-}  // namespace imageReader
+__host__ void launchReadConstantImage( const DeviceConstantImageParams& params, CUstream stream )
+{
+    unsigned int       totalThreads    = params.num_pixels;
+    const unsigned int threadsPerBlock = 64;
+    const unsigned int numBLocks       = ( totalThreads + threadsPerBlock - 1 ) / threadsPerBlock;
+
+    dim3 grid( numBLocks, 1, 1 );
+    dim3 block( threadsPerBlock, 1, 1 );
+
+    deviceReadConstantImage<<<grid, block, 0U, stream>>>( params );
+}
+
+} // namespace imageSource

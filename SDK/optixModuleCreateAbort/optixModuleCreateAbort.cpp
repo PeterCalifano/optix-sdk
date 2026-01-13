@@ -899,7 +899,11 @@ void createModule( OptixDeviceContext context, const std::string& ptx, const Opt
 void createRadianceModule( PathTracerState& state )
 {
     OptixModuleCompileOptions module_compile_options ={};
-    OptixModuleCompileBoundValueEntry boundValue ={};
+#if !defined( NDEBUG )
+    module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
+    module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+#endif
+    OptixModuleCompileBoundValueEntry boundValue = {};
     if( specialize )
     {
         boundValue.pipelineParamOffsetInBytes = offsetof( Params, light_samples );
@@ -919,6 +923,10 @@ void createRadianceModule( PathTracerState& state )
 void createModule( PathTracerState& state )
 {
     OptixModuleCompileOptions module_compile_options = {};
+#if !defined( NDEBUG )
+    module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
+    module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+#endif
     state.pipeline_compile_options.usesMotionBlur        = false;
     state.pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
     state.pipeline_compile_options.numPayloadValues      = 2;

@@ -826,6 +826,25 @@ static bool readSourceFile( std::string& str, const std::string& filename )
     return false;
 }
 
+// Returns string of file extension including '.'
+static std::string fileExtensionForLoading()
+{
+    std::string extension;
+#if SAMPLES_INPUT_GENERATE_PTX
+    extension = ".ptx";
+#endif
+#if SAMPLES_INPUT_GENERATE_OPTIXIR
+    extension = ".optixir";
+#endif
+    if( const char* ext = getenv("OPTIX_SAMPLES_INPUT_EXTENSION") )
+    {
+        extension = ext;
+        if( extension.size() && extension[0] != '.' )
+            extension = "." + extension;
+    }
+    return extension;
+}
+
 #if CUDA_NVRTC_ENABLED
 
 static void getCuStringFromFile( std::string& cu, std::string& location, const char* sampleDir, const char* filename )
@@ -936,21 +955,18 @@ static std::string sampleInputFilePath( const char* sampleName, const char* file
         // TODO: Remove the environment variable OPTIX_EXP_SAMPLES_SDK_PTX_DIR once SDK 6/7 packages are split
         getenv( "OPTIX_EXP_SAMPLES_SDK_PTX_DIR" ),
         getenv( "OPTIX_SAMPLES_SDK_PTX_DIR" ),
+ #if defined(CMAKE_INTDIR)
+        SAMPLES_PTX_DIR "/" CMAKE_INTDIR,
+#endif
         SAMPLES_PTX_DIR,
         "."
     };
 
     // Allow overriding the file extension
-    std::string extension = ".ptx";
-    if( const char* ext = getenv("OPTIX_SAMPLES_INPUT_EXTENSION") )
-    {
-        extension = ext;
-        if( extension.size() && extension[0] != '.' )
-            extension = "." + extension;
-    }
-    
+    std::string extension = fileExtensionForLoading();
+
     if( !sampleName )
-        sampleName = "cuda_compile_ptx";
+        sampleName = "sutil";
     for( const char* directory : directories )
     {
         if( directory )
@@ -1016,6 +1032,7 @@ const char* getInputData( const char*                     sample,
     {
         ptx = new std::string();
 #if CUDA_NVRTC_ENABLED
+        SUTIL_ASSERT( fileExtensionForLoading() == ".ptx" );
         std::string location;
         getCuStringFromFile( cu, location, sampleDir, filename );
         getPtxFromCuString( *ptx, sampleDir, cu.c_str(), location.c_str(), log, compilerOptions );

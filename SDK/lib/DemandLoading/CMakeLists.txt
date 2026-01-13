@@ -23,6 +23,10 @@ if( CUDA_VERSION VERSION_LESS "11.1" )
   return()
 endif()
 
+# Demand loading device code requires sm_60.  The necessary NVRTC compiler option is written to a configuration header file.
+string( REPLACE "compute_50" "compute_60" DEMAND_NVRTC_OPTIONS "${CUDA_NVRTC_OPTIONS}" )
+configure_file(include/DemandLoading/demandLoadingConfig.h.in include/DemandLoading/demandLoadingConfig.h @ONLY)
+
 # CUDA compilation doesn't pick up the DemandLoading include path target property.
 include_directories( include )
 
@@ -56,6 +60,7 @@ add_library( DemandLoading STATIC
   include/DemandLoading/Statistics.h
   include/DemandLoading/Texture2D.h
   include/DemandLoading/Texture2DExtended.h
+  include/DemandLoading/Texture2DFootprint.h
   include/DemandLoading/TextureDescriptor.h
   include/DemandLoading/TextureSampler.h
   include/DemandLoading/Ticket.h
@@ -150,13 +155,14 @@ source_group( "Header Files\\Implementation" FILES
 # but that doesn't seem to be working on the Mac.
 target_include_directories( DemandLoading PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
+  ${CMAKE_CURRENT_BINARY_DIR}/include   # for demandLoadingConfig.h
   include
-  ../ImageReader/include
+  ../ImageSource/include
   ../../support
   )
 
 target_link_libraries( DemandLoading PUBLIC
-  ImageReader
+  ImageSource
   ${CUDA_LIBRARIES}
   ${CUDA_CUDA_LIBRARY}
   )

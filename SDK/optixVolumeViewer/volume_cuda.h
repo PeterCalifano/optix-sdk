@@ -57,10 +57,10 @@ static __forceinline__ __device__ void traceRadiance(
             RAY_TYPE_RADIANCE,        // missSBTIndex
             u0, u1, u2, u3 );
 
-     payload->result.x = uint_as_float( u0 );
-     payload->result.y = uint_as_float( u1 );
-     payload->result.z = uint_as_float( u2 );
-     payload->depth    = uint_as_float( u3 );
+     payload->result.x = __uint_as_float( u0 );
+     payload->result.y = __uint_as_float( u1 );
+     payload->result.z = __uint_as_float( u2 );
+     payload->depth    = __uint_as_float( u3 );
 }
 
 

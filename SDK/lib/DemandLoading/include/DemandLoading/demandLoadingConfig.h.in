@@ -26,27 +26,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#include <ImageReader/ImageReader.h>
+#pragma once
 
-#include <cstddef>  // for size_t
-
-namespace imageReader {
-
-bool MipTailImageReader::readMipTail( char* dest, unsigned int mipTailFirstLevel, unsigned int numMipLevels, const uint2* mipLevelDims, unsigned int pixelSizeInBytes )
-{
-    size_t offset = 0;
-    for( unsigned int mipLevel = mipTailFirstLevel; mipLevel < numMipLevels; ++mipLevel )
-    {
-        const uint2 levelDims = mipLevelDims[mipLevel];
-        if( !readMipLevel( dest + offset, mipLevel, levelDims.x, levelDims.y ) )
-        {
-            return false;
-        }
-
-        // Increment offset.
-        offset += levelDims.x * levelDims.y * pixelSizeInBytes;
-    }
-    return true;
-}
-
-}  // namespace imageReader
+// NVRTC compiler options
+#define DEMAND_NVRTC_OPTIONS @DEMAND_NVRTC_OPTIONS@

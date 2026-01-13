@@ -880,6 +880,7 @@ void updateMeshAccel( MotionGeometryState& state )
 void buildMergedGAS( MotionGeometryState& state, const sutil::Scene& scene, CUdeviceptr& gasData, OptixTraversableHandle& gasHandle, sutil::Aabb& aabb )
 {
     auto& meshes = scene.meshes();
+    auto& instances = scene.instances();
 
     // unify all meshes into a single GAS
     std::vector<OptixBuildInput> buildInputs;
@@ -889,17 +890,20 @@ void buildMergedGAS( MotionGeometryState& state, const sutil::Scene& scene, CUde
     CUdeviceptr            d_preTransforms = 0;
     CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_preTransforms ), sizeof( Matrix3x4 ) * meshTransforms.size() ) );
 
-    for( size_t i = 0; i < meshes.size(); ++i )
+    for( size_t i = 0; i < instances.size(); ++i )
     {
-        auto& mesh = meshes[i];
+        auto& instance = instances[i];
+        auto& mesh     = meshes[instance->mesh_idx];
 
         const size_t num_subMeshes    = mesh->indices.size();
         size_t       buildInputOffset = buildInputs.size();
         buildInputs.resize( buildInputOffset + num_subMeshes );
-        memcpy( &meshTransforms[i], mesh->transform.getData(), sizeof( float ) * 12 ); // mesh->transform is a 4x4 matrix, but also row-major
+        memcpy( &meshTransforms[i], instance->transform.getData(), sizeof( float ) * 12 ); // mesh->transform is a 4x4 matrix, but also row-major
 
-        assert( mesh->positions.size() == num_subMeshes && mesh->normals.size() == num_subMeshes
-                && mesh->texcoords.size() == num_subMeshes );
+        assert( mesh->positions.size() == num_subMeshes && mesh->normals.size() == num_subMeshes && mesh->colors.size() == num_subMeshes );
+
+        for( size_t j = 0; j < GeometryData::num_textcoords; ++j )
+            assert( mesh->texcoords[j].size() == num_subMeshes );
 
         for( size_t j = 0; j < num_subMeshes; ++j )
         {
@@ -914,7 +918,7 @@ void buildMergedGAS( MotionGeometryState& state, const sutil::Scene& scene, CUde
             triangle_input.triangleArray.indexFormat =
                 mesh->indices[j].elmt_byte_size == 2 ? OPTIX_INDICES_FORMAT_UNSIGNED_SHORT3 : OPTIX_INDICES_FORMAT_UNSIGNED_INT3;
             triangle_input.triangleArray.indexStrideInBytes =
-                mesh->indices[j].byte_stride ? mesh->indices[j].byte_stride : mesh->indices[j].elmt_byte_size * 3;
+                mesh->indices[j].byte_stride ? mesh->indices[j].byte_stride * 3 : mesh->indices[j].elmt_byte_size * 3;
             triangle_input.triangleArray.numIndexTriplets = mesh->indices[j].count / 3;
             triangle_input.triangleArray.indexBuffer      = mesh->indices[j].data;
             triangle_input.triangleArray.flags            = &state.triangle_flags;
@@ -1289,9 +1293,10 @@ void buildMeshAccel( MotionGeometryState& state )
 void createModule( MotionGeometryState& state )
 {
     OptixModuleCompileOptions module_compile_options = {};
-    module_compile_options.maxRegisterCount = OPTIX_COMPILE_DEFAULT_MAX_REGISTER_COUNT;
-    module_compile_options.optLevel = OPTIX_COMPILE_OPTIMIZATION_DEFAULT;
-    module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_MINIMAL;
+#if !defined( NDEBUG )
+    module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
+    module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+#endif
 
     state.pipeline_compile_options.usesMotionBlur = true;
     state.pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_ANY;
@@ -1550,6 +1555,9 @@ void cleanupState( MotionGeometryState& state )
     CUDA_CHECK( cudaFree( reinterpret_cast< void* >( state.d_ias_output_buffer ) ) );
     CUDA_CHECK( cudaFree( reinterpret_cast< void* >( state.d_temp_buffer ) ) );
     CUDA_CHECK( cudaFree( reinterpret_cast< void* >( state.d_params ) ) );
+    CUDA_CHECK( cudaFree( reinterpret_cast< void* >( deformSphere.d_matrices ) ) );
+    CUDA_CHECK( cudaFree( reinterpret_cast< void* >( plane.d_srts ) ) );
+    CUDA_CHECK( cudaFree( reinterpret_cast< void* >( plane.d_srtsPropeller ) ) );
 }
 
 

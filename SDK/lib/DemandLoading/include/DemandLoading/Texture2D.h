@@ -35,6 +35,7 @@
 
 #include <DemandLoading/DeviceContext.h>
 #include <DemandLoading/Paging.h>
+#include <DemandLoading/Texture2DFootprint.h>
 #include <DemandLoading/TextureSampler.h>
 #include <DemandLoading/TileIndexing.h>
 
@@ -54,27 +55,6 @@ struct half4
 #endif
 
 namespace demandLoading {
-
-/// Texture2DFootprint is binary compatible with the uint4 returned by the texture footprint intrinsics.
-///
-/// See optixTexFootprint2DGrad (etc.) in the OptiX API documentation.
-/// (https://raytracing-docs.nvidia.com/optix7/api/html/index.html)
-// clang-format off
-struct Texture2DFootprint
-{
-    unsigned long long mask;             ///< Toroidally rotated 8x8 texel group mask to store footprint coverage
-    unsigned int       tileY : 12;       ///< Y position of anchor tile. Tiles are 8x8 blocks of texel groups.
-    unsigned int       reserved1 : 4;    ///< not used
-    unsigned int       dx : 3;           ///< X rotation of mask relative to anchor tile. Mask starts at 8*tileX-dx in texel group coordinates.
-    unsigned int       dy : 3;           ///< Y rotation of mask relative to anchor tile. Mask starts at 8*tileY-dy in texel group coordinates.
-    unsigned int       reserved2 : 2;    ///< not used
-    unsigned int       granularity : 4;  ///< enum giving texel group size. 0 indicates "same size as requested"
-    unsigned int       reserved3 : 4;    ///< not used
-    unsigned int       tileX : 12;       ///< X position of anchor tile
-    unsigned int       level : 4;        ///< mip level
-    unsigned int       reserved4 : 16;   ///< not used
-};
-// clang-format on
 
 #if defined( __CUDACC__ ) || defined( OPTIX_PAGING_BIT_OPS )
 
@@ -122,13 +102,16 @@ __device__ static __forceinline__ void fixOddSizeWrapFootprint( uint4& fp )
     }
 }
 
-__device__ static __forceinline__ void requestTexFootprint2D( unsigned int*         referenceBits,
+__device__ static __forceinline__ bool requestTexFootprint2D( unsigned int*         referenceBits,
+                                                              unsigned int*         residenceBits,
                                                               const TextureSampler& sampler,
                                                               unsigned int          fx,
                                                               unsigned int          fy,
                                                               unsigned int          fz,
                                                               unsigned int          fw )
 {
+    bool isResident = true;
+
     // Reconstitute the footprint
     uint4               result    = make_uint4( fx, fy, fz, fw );
     Texture2DFootprint* footprint = reinterpret_cast<Texture2DFootprint*>( &result );
@@ -138,7 +121,8 @@ __device__ static __forceinline__ void requestTexFootprint2D( unsigned int*     
     if( mipLevel >= sampler.mipTailFirstLevel )
     {
         pagingRequest( referenceBits, sampler.startPage );
-        return;
+        isResident = checkBitSet( sampler.startPage, residenceBits ) && isResident;
+        return isResident;
     }
 
     // Load MipLevelSizes as 64-bit int.
@@ -164,7 +148,10 @@ __device__ static __forceinline__ void requestTexFootprint2D( unsigned int*     
         unsigned int blockWordIndex = mipLevelWordStart + 2 * ( levelWidthInBlocks * footprint->tileY + footprint->tileX );
         pagingRequestWord( referenceBits + blockWordIndex, result.x );
         pagingRequestWord( referenceBits + blockWordIndex + 1, result.y );
-        return;
+
+        isResident = ( ( residenceBits[blockWordIndex] & result.x ) == result.x ) && isResident;
+        isResident = ( ( residenceBits[blockWordIndex + 1] & result.y ) == result.y ) && isResident;
+        return isResident;
     }
 
     // Uncommon case, in which dx or dy is non-zero (or level size in tiles is not evenly divisible by 8).
@@ -185,7 +172,9 @@ __device__ static __forceinline__ void requestTexFootprint2D( unsigned int*     
 
         unsigned int pageOffset = getPageOffsetFromTileCoords( x, y, levelWidthInTiles );
         unsigned int pageId     = sampler.startPage + sizes.mipLevelStart + pageOffset;
+
         pagingRequest( referenceBits, pageId );
+        isResident = checkBitSet( pageId, residenceBits ) && isResident;
 
         mask ^= ( 1 << idx );
         if( ( mask | offset ) == 0 )
@@ -194,78 +183,10 @@ __device__ static __forceinline__ void requestTexFootprint2D( unsigned int*     
             offset = 4;
         }
     }
+
+    return isResident;
 }
 
-__device__ static __forceinline__ bool footprintResident( unsigned int*         residenceBits,
-                                                          const TextureSampler& sampler,
-                                                          unsigned int          fx,
-                                                          unsigned int          fy,
-                                                          unsigned int          fz,
-                                                          unsigned int          fw )
-{
-    // Reconstitute the footprint
-    uint4               result    = make_uint4( fx, fy, fz, fw );
-    Texture2DFootprint* footprint = reinterpret_cast<Texture2DFootprint*>( &result );
-
-    // Handle mip tail explicitly
-    unsigned int mipLevel = footprint->level;
-    if( mipLevel >= sampler.mipTailFirstLevel )
-        return checkBitSet( sampler.startPage, residenceBits );
-
-    // Load MipLevelSizes as 64-bit int.
-    TextureSampler::MipLevelSizes sizes = sampler.mipLevelSizes[mipLevel];
-
-    unsigned int levelWidthInTiles   = sizes.levelWidthInTiles;
-    unsigned int levelWidthInBlocks  = ( levelWidthInTiles + 7 ) >> 3;
-    unsigned int levelHeightInTiles  = sizes.levelHeightInTiles;
-    unsigned int levelHeightInBlocks = ( levelHeightInTiles + 7 ) >> 3;
-
-    // Wrap tileX and tileY
-    if( footprint->tileX * 8 >= levelWidthInTiles )
-        footprint->tileX -= levelWidthInBlocks;
-    if( footprint->tileY * 8 >= levelHeightInTiles )
-        footprint->tileY -= levelHeightInBlocks;
-
-    // Common, fast case, in which dx and dy are 0, and levelWidthInTiles and levelHeightInTiles are
-    // multiples of 8.  Here, the mask lines up with the page table.
-    const int fastCase = !( ( result.z & 0x3f0000 ) | ( ( levelWidthInTiles | levelHeightInTiles ) & 0x7 ) );
-    if( fastCase )
-    {
-        unsigned int mipLevelWordStart = ( sampler.startPage + sizes.mipLevelStart ) / 32;
-        unsigned int blockWordIndex = mipLevelWordStart + 2 * ( levelWidthInBlocks * footprint->tileY + footprint->tileX );
-        return ( ( ( residenceBits[blockWordIndex] & result.x ) == result.x )
-                 && ( ( residenceBits[blockWordIndex + 1] & result.y ) == result.y ) );
-    }
-
-    // Uncommon case, in which dx or dy is non-zero (or level size in tiles is not evenly divisible by 8).
-    // Here, the mask is toroidally rotated to span multiple 8x8 blocks.
-
-    // The 8x8 bitmask is separated into result.x and result.y.
-    // Process them separately to be faster.
-    unsigned int mask   = ( result.x ) ? result.x : result.y;
-    unsigned int offset = ( result.x ) ? 0 : 4;
-
-    while( mask )
-    {
-        unsigned int idx = 31 - __clz( mask );
-
-        int x = wrapFootprintTileCoord( idx % 8, footprint->dx, footprint->tileX, levelWidthInTiles );
-        int y = wrapFootprintTileCoord( offset + idx / 8, footprint->dy, footprint->tileY, levelHeightInTiles );
-
-        unsigned int pageOffset = getPageOffsetFromTileCoords( x, y, levelWidthInTiles );
-        unsigned int pageId     = sampler.startPage + sizes.mipLevelStart + pageOffset;
-        if( checkBitSet( pageId, residenceBits ) == 0 )
-            return false;
-
-        mask ^= ( 1 << idx );
-        if( ( mask | offset ) == 0 )
-        {
-            mask   = result.y;
-            offset = 4;
-        }
-    }
-    return true;
-}
 
 /// Compute mip level from the texture gradients.
 __device__ __forceinline__ float getMipLevel( float2 ddx, float2 ddy, int texWidth, int texHeight, float invAnisotropy )
@@ -293,21 +214,16 @@ __device__ __forceinline__ float getMipLevel( float2 ddx, float2 ddy, int texWid
     return mipLevel;
 }
 
-__device__ static __forceinline__ void requestTexFootprint2DGrad( const TextureSampler& sampler,
+__device__ static __forceinline__ bool requestTexFootprint2DGrad( const TextureSampler& sampler,
                                                                   unsigned int*         referenceBits,
+                                                                  unsigned int*         residenceBits,
                                                                   float                 x,
                                                                   float                 y,
                                                                   float                 dPdx_x,
                                                                   float                 dPdx_y,
                                                                   float                 dPdy_x,
-                                                                  float                 dPdy_y,
-                                                                  bool                  texResident,
-                                                                  bool                  requestIfResident,
-                                                                  unsigned int*         residenceBits )
+                                                                  float                 dPdy_y )
 {
-    if( texResident && !requestIfResident )
-        return;
-
     const CUaddress_mode wrapMode0 = static_cast<CUaddress_mode>( sampler.desc.wrapMode0 );
     const CUaddress_mode wrapMode1 = static_cast<CUaddress_mode>( sampler.desc.wrapMode1 );
 
@@ -334,7 +250,7 @@ __device__ static __forceinline__ void requestTexFootprint2DGrad( const TextureS
     uint4        finefp = optixTexFootprint2DGrad( sampler.texture, desc, x, y, dPdx_x, dPdx_y, dPdy_x, dPdy_y, FINE_MIP_LEVEL, &singleMipLevel );
     if( oddSizeWrap )
         fixOddSizeWrapFootprint( finefp );
-    requestTexFootprint2D( referenceBits, sampler, finefp.x, finefp.y, finefp.z, finefp.w );
+    bool isResident = requestTexFootprint2D( referenceBits, residenceBits, sampler, finefp.x, finefp.y, finefp.z, finefp.w );
 
     uint4 coarsefp = uint4{0, 0, 0, 0};
     if( !singleMipLevel )
@@ -343,7 +259,7 @@ __device__ static __forceinline__ void requestTexFootprint2DGrad( const TextureS
                                             COARSE_MIP_LEVEL, &singleMipLevel );
         if( oddSizeWrap )
             fixOddSizeWrapFootprint( coarsefp );
-        requestTexFootprint2D( referenceBits, sampler, coarsefp.x, coarsefp.y, coarsefp.z, coarsefp.w );
+        isResident = requestTexFootprint2D( referenceBits, residenceBits, sampler, coarsefp.x, coarsefp.y, coarsefp.z, coarsefp.w ) && isResident;
     }
 
     // Handle discrepancy between mip levels in SW and HW footprint implementations.
@@ -351,48 +267,48 @@ __device__ static __forceinline__ void requestTexFootprint2DGrad( const TextureS
     // routine thinks it is (footprintResident), scale the gradients and request again.
     const Texture2DFootprint* fineFootprint = reinterpret_cast<Texture2DFootprint*>( &finefp );
     const unsigned int        swFootprint   = fineFootprint->reserved1;
-    if( !texResident && swFootprint )
+    if( swFootprint && isResident )
     {
-        if( !footprintResident( residenceBits, sampler, finefp.x, finefp.y, finefp.z, finefp.w )
-            || !footprintResident( residenceBits, sampler, coarsefp.x, coarsefp.y, coarsefp.z, coarsefp.w ) )
-            return;
-
         float mipLevel = getMipLevel( make_float2( dPdx_x, dPdx_y ), make_float2( dPdy_x, dPdy_y ), sampler.width,
                                       sampler.height, 1.0f / sampler.desc.maxAnisotropy );
         float fracLevel = mipLevel - floorf( mipLevel );
 
-        // scale to just over the integer boundary
-        float        gradScale = ( fracLevel < 0.5f ) ? 0.99f * exp2f( -fracLevel ) : 1.01f * exp2f( 1.0f - fracLevel );
-        unsigned int coarseLevel = ( fracLevel < 0.5f ) ? FINE_MIP_LEVEL : COARSE_MIP_LEVEL;
+        const float MAX_SW_MIPLEVEL_ERROR = 0.18f;
 
-        uint4 fp = optixTexFootprint2DGrad( sampler.texture, desc, x, y, dPdx_x * gradScale, dPdx_y * gradScale,
-                                            dPdy_x * gradScale, dPdy_y * gradScale, coarseLevel, &singleMipLevel );
-        requestTexFootprint2D( referenceBits, sampler, fp.x, fp.y, fp.z, fp.w );
-
-        // Handle case of landing exactly on mip level
-        if( fracLevel == 0.0f )
+        if( fracLevel < MAX_SW_MIPLEVEL_ERROR || fracLevel > (1.0f - MAX_SW_MIPLEVEL_ERROR) )
         {
-            gradScale   = 1.01f;
-            coarseLevel = COARSE_MIP_LEVEL;
+            // scale to just over the integer boundary
+            float        gradScale = ( fracLevel < 0.5f ) ? 0.99f * exp2f( -fracLevel ) : 1.01f * exp2f( 1.0f - fracLevel );
+            unsigned int coarseLevel = ( fracLevel < 0.5f ) ? FINE_MIP_LEVEL : COARSE_MIP_LEVEL;
 
-            fp = optixTexFootprint2DGrad( sampler.texture, desc, x, y, dPdx_x * gradScale, dPdx_y * gradScale,
-                                          dPdy_x * gradScale, dPdy_y * gradScale, coarseLevel, &singleMipLevel );
-            requestTexFootprint2D( referenceBits, sampler, fp.x, fp.y, fp.z, fp.w );
+            uint4 fp = optixTexFootprint2DGrad( sampler.texture, desc, x, y, dPdx_x * gradScale, dPdx_y * gradScale,
+                                                dPdy_x * gradScale, dPdy_y * gradScale, coarseLevel, &singleMipLevel );
+            isResident = requestTexFootprint2D( referenceBits, residenceBits, sampler, fp.x, fp.y, fp.z, fp.w ) && isResident;
+
+            // Handle case of landing exactly on mip level
+            if( fracLevel == 0.0f )
+            {
+                gradScale   = 1.01f;
+                coarseLevel = COARSE_MIP_LEVEL;
+
+                fp = optixTexFootprint2DGrad( sampler.texture, desc, x, y, dPdx_x * gradScale, dPdx_y * gradScale,
+                                            dPdy_x * gradScale, dPdy_y * gradScale, coarseLevel, &singleMipLevel );
+                isResident = requestTexFootprint2D( referenceBits, residenceBits, sampler, fp.x, fp.y, fp.z, fp.w ) && isResident;
+            }
         }
     }
+
+    return isResident;
 }
 
-__device__ static __forceinline__ void requestTexFootprint2DLod( const TextureSampler& sampler,
+
+__device__ static __forceinline__ bool requestTexFootprint2DLod( const TextureSampler& sampler,
                                                                  unsigned int*         referenceBits,
+                                                                 unsigned int*         residenceBits,
                                                                  float                 x,
                                                                  float                 y,
-                                                                 float                 lod,
-                                                                 bool                  texResident,
-                                                                 bool                  requestIfResident )
+                                                                 float                 lod )
 {
-    if( texResident && !requestIfResident )
-        return;
-
     const CUaddress_mode wrapMode0 = static_cast<CUaddress_mode>( sampler.desc.wrapMode0 );
     const CUaddress_mode wrapMode1 = static_cast<CUaddress_mode>( sampler.desc.wrapMode1 );
 
@@ -411,37 +327,17 @@ __device__ static __forceinline__ void requestTexFootprint2DLod( const TextureSa
     unsigned int desc = *reinterpret_cast<const unsigned int*>( &sampler.desc );
 
     uint4 fp = optixTexFootprint2DLod( sampler.texture, desc, x, y, lod, FINE_MIP_LEVEL, &singleMipLevel );
-    requestTexFootprint2D( referenceBits, sampler, fp.x, fp.y, fp.z, fp.w );
+    bool isResident = requestTexFootprint2D( referenceBits, residenceBits, sampler, fp.x, fp.y, fp.z, fp.w );
 
     if( !singleMipLevel )
     {
         fp = optixTexFootprint2DLod( sampler.texture, desc, x, y, lod, COARSE_MIP_LEVEL, &singleMipLevel );
-        requestTexFootprint2D( referenceBits, sampler, fp.x, fp.y, fp.z, fp.w );
+        isResident = requestTexFootprint2D( referenceBits, residenceBits, sampler, fp.x, fp.y, fp.z, fp.w ) && isResident;
     }
+
+    return isResident;
 }
 
-__device__ static __forceinline__ void requestTexFootprint2D( const TextureSampler& sampler,
-                                                              unsigned int*         referenceBits,
-                                                              float                 x,
-                                                              float                 y,
-                                                              bool                  texResident,
-                                                              bool                  requestIfResident )
-{
-    if( texResident && !requestIfResident )
-        return;
-
-    // FIXME: Using optixTexFootprint2DLod, since optixTexFootprint2D returns the wrong granularity.
-    unsigned int singleMipLevel;
-
-    x = wrapTexCoord( x, static_cast<CUaddress_mode>( sampler.desc.wrapMode0 ) );
-    y = wrapTexCoord( y, static_cast<CUaddress_mode>( sampler.desc.wrapMode1 ) );
-
-    unsigned int desc = *reinterpret_cast<const unsigned int*>( &sampler.desc );
-    const float  lod  = 0.0f;
-    uint4        fp   = optixTexFootprint2DLod( sampler.texture, desc, x, y, lod, FINE_MIP_LEVEL, &singleMipLevel );
-
-    requestTexFootprint2D( referenceBits, sampler, fp.x, fp.y, fp.z, fp.w );
-}
 
 template <class TYPE> 
 __device__ static __forceinline__ bool
@@ -465,24 +361,19 @@ getBaseColor( const DeviceContext& context, unsigned int textureId, TYPE& rval, 
 /// that has been copied to device memory.
 template <class TYPE>
 __device__ static __forceinline__ TYPE
-tex2DGrad( const DeviceContext& context, unsigned int textureId, float x, float y, float2 ddx, float2 ddy, bool* isResident, bool requestIfResident )
+tex2DGrad( const DeviceContext& context, unsigned int textureId, float x, float y, float2 ddx, float2 ddy, bool* isResident )
 {
     // Check for base color
     TYPE rval;
     bool baseColorResident;
+    convertColor( float4{1.0f, 0.0f, 1.0f, 0.0f}, rval );
 
     const float minGradSquared = minf( ddx.x * ddx.x + ddx.y * ddx.y, ddy.x * ddy.x + ddy.y * ddy.y );
     if( minGradSquared >= 1.0f )
     {
-        if( getBaseColor<TYPE>( context, textureId, rval, &baseColorResident ) )
-        {
+        *isResident = getBaseColor<TYPE>( context, textureId, rval, &baseColorResident );
+        if( *isResident || !baseColorResident )
             return rval;
-        }
-        if( !baseColorResident ) // Don't request the sampler unless we really need to
-        {
-            convertColor( float4{1.0f, 0.0f, 1.0f, 0.0f}, rval );
-            return rval;
-        }
     }
 
     // Check whether the texture sampler is resident.  The samplers occupy the first N entries of the page table.
@@ -491,12 +382,7 @@ tex2DGrad( const DeviceContext& context, unsigned int textureId, float x, float 
     if( !sampler )
     {
         if( *isResident )
-        {
-            if( getBaseColor<TYPE>( context, textureId, rval, &baseColorResident ) )
-                return rval;
-        }
-        *isResident = false;
-        convertColor( float4{1.0f, 0.0f, 1.0f, 0.0f}, rval );
+            *isResident = getBaseColor<TYPE>( context, textureId, rval, &baseColorResident );
         return rval;
     }
 
@@ -515,34 +401,50 @@ tex2DGrad( const DeviceContext& context, unsigned int textureId, float x, float 
             ddy         = make_float2( ddy.x * scale, ddy.y * scale );
         }
     }
-
-    rval = tex2DGrad<TYPE>( sampler->texture, x, y, ddx, ddy, isResident );
     
-    if( sampler->desc.isSparseTexture )
+    // If requestIfResident is false, use the predicated texture fetch to try and avoid requesting the footprint
+    *isResident = !sampler->desc.isSparseTexture;
+    if( context.requestIfResident == false )
+        rval = tex2DGrad<TYPE>( sampler->texture, x, y, ddx, ddy, isResident );
+
+    // Request the footprint if we don't know that it is resident (or if requestIfResident is true)
+    if( *isResident == false && sampler->desc.isSparseTexture)
+        *isResident = requestTexFootprint2DGrad( *sampler, context.referenceBits, context.residenceBits, x, y, ddx.x, ddx.y, ddy.x, ddy.y );
+
+    // We know the footprint is resident, but we have not yet fetched the texture, so do it now.
+    if( *isResident && context.requestIfResident )
+        rval = tex2DGrad<TYPE>( sampler->texture, x, y, ddx, ddy ); // non-pedicated texture fetch
+
+    // Debug Code: This checks consistency between residency result from requestTexFootprint2DGrad and predicated tex2DGrad
+    /*
+    if( *isResident && context.requestIfResident )
     {
-        requestTexFootprint2DGrad( *sampler, context.referenceBits, x, y, ddx.x, ddx.y, ddy.x, ddy.y, *isResident,
-                                   requestIfResident, context.residenceBits );
+        bool texResident;
+        rval = tex2DGrad<TYPE>( sampler->texture, x, y, ddx, ddy, &texResident );
+        if( !texResident )
+            printf("ERROR: Mipmap mismatch between tex2DGrad and requestTexFootprint2DGrad!\n");
     }
+    */
 
     return rval;
 }
+
 
 /// Fetch from a demand-loaded texture with the specified identifer, obtained via DemandLoader::createTexture.
 /// The given DeviceContext is typically a launch parameter, obtained via DemandLoader::launchPrepare,
 /// that has been copied to device memory.
 template <class TYPE>
 __device__ static __forceinline__ TYPE
-tex2DLod( const DeviceContext& context, unsigned int textureId, float x, float y, float lod, bool* isResident, bool requestIfResident )
+tex2DLod( const DeviceContext& context, unsigned int textureId, float x, float y, float lod, bool* isResident )
 {
     // Check whether the texture sampler is resident.  The samplers occupy the first N entries of the page table.
     const TextureSampler* sampler =
         reinterpret_cast<const TextureSampler*>( pagingMapOrRequest( context, textureId, isResident ) );
+    
     TYPE rval;
+    convertColor( float4{1.0f, 0.0f, 1.0f, 0.0f}, rval );
     if( *isResident == false )
-    {
-        convertColor( float4{1.0f, 0.0f, 1.0f, 0.0f}, rval );
         return rval;
-    }
 
     // Prevent footprint from exceeding min tile width for non-mipmapped textures
     if( sampler && sampler->desc.numMipLevels == 1 )
@@ -557,46 +459,36 @@ tex2DLod( const DeviceContext& context, unsigned int textureId, float x, float y
         if( getBaseColor<TYPE>( context, textureId, rval, &baseColorResident ) )
             return rval;
         *isResident = false;
-        convertColor( float4{1.0f, 0.0f, 1.0f, 0.0f}, rval );
         return rval;
     }
 
-    rval = tex2DLod<TYPE>( sampler->texture, x, y, lod, isResident );
-    if( sampler->desc.isSparseTexture )
-    {
-        requestTexFootprint2DLod( *sampler, context.referenceBits, x, y, lod, *isResident, requestIfResident );
-    }
+    // If requestIfResident is false, use the predicated texture fetch to try and avoid requesting the footprint
+    *isResident = false;
+    if( context.requestIfResident == false )
+        rval = tex2DLod<TYPE>( sampler->texture, x, y, lod, isResident );
+
+    // Request the footprint if we don't know that it is resident (or if requestIfResident is true)
+    if( *isResident == false && sampler->desc.isSparseTexture )
+        *isResident = requestTexFootprint2DLod( *sampler, context.referenceBits, context.residenceBits, x, y, lod );
+
+    // We know the footprint is resident, but we have not yet fetched the texture, so do it now.
+    if( *isResident && context.requestIfResident )
+        rval = tex2DLod<TYPE>( sampler->texture, x, y, lod ); // non-pedicated texture fetch
+
     return rval;
 }
+
 
 /// Fetch from a demand-loaded texture with the specified identifer, obtained via DemandLoader::createTexture.
 /// The given DeviceContext is typically a launch parameter, obtained via DemandLoader::launchPrepare,
 /// that has been copied to device memory.
 template <class TYPE>
 __device__ static __forceinline__ TYPE
-tex2D( const DeviceContext& context, unsigned int textureId, float x, float y, bool* isResident, bool requestIfResident )
+tex2D( const DeviceContext& context, unsigned int textureId, float x, float y, bool* isResident )
 {
-    // Check whether the texture sampler is resident.  The samplers occupy the first N entries of the page table.
-    const TextureSampler* sampler =
-        reinterpret_cast<const TextureSampler*>( pagingMapOrRequest( context, textureId, isResident ) );
-    TYPE rval;
-    if( !sampler )
-    {
-        bool baseColorResident;
-        if( *isResident && getBaseColor<TYPE>( context, textureId, rval, &baseColorResident ) )
-            return rval;
-        *isResident = false;
-        convertColor( float4{1.0f, 0.0f, 1.0f, 0.0f}, rval );
-        return rval;
-    }
-
-    rval = tex2D<TYPE>( sampler->texture, x, y, isResident );
-    if( sampler->desc.isSparseTexture )
-    {
-        requestTexFootprint2D( *sampler, context.referenceBits, x, y, *isResident, requestIfResident );
-    }
-    return rval;
+    return tex2DLod<TYPE>( context, textureId, x, y, 0.0f, isResident );
 }
+
 
 #endif
 

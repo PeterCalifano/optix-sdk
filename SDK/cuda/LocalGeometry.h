@@ -42,11 +42,17 @@ struct LocalGeometry
     float3 P;
     float3 N;
     float3 Ng;
-    float2 UV;
-    float3 dndu;
-    float3 dndv;
-    float3 dpdu;
-    float3 dpdv;
+
+    struct Texcoord
+    {
+        float2 UV;
+        float3 dndu;
+        float3 dndv;
+        float3 dpdu;
+        float3 dpdv;
+    } texcoord[GeometryData::num_textcoords];
+
+    float4 color;
 };
 
 
@@ -68,13 +74,18 @@ SUTIL_HOSTDEVICE LocalGeometry getLocalGeometry( const GeometryData& geometry_da
                 const uint3* indices = reinterpret_cast<uint3*>( mesh_data.indices.data );
                 tri = indices[ prim_idx ];
             }
-            else
+            else if( mesh_data.indices.elmt_byte_size == 2 )
             {
                 const unsigned short* indices = reinterpret_cast<unsigned short*>( mesh_data.indices.data );
                 const unsigned short  idx0    = indices[prim_idx * 3 + 0];
                 const unsigned short  idx1    = indices[prim_idx * 3 + 1];
                 const unsigned short  idx2    = indices[prim_idx * 3 + 2];
                 tri                           = make_uint3( idx0, idx1, idx2 );
+            }
+            else
+            {
+                const unsigned int base_idx = prim_idx * 3;
+                tri = make_uint3( base_idx + 0, base_idx + 1, base_idx + 2 );
             }
 
             const float3 P0 = mesh_data.positions[ tri.x ];
@@ -83,24 +94,20 @@ SUTIL_HOSTDEVICE LocalGeometry getLocalGeometry( const GeometryData& geometry_da
             lgeom.P = ( 1.0f-barys.x-barys.y)*P0 + barys.x*P1 + barys.y*P2;
             lgeom.P = optixTransformPointFromObjectToWorldSpace( lgeom.P );
 
-            float2 UV0, UV1, UV2;
-            if( mesh_data.texcoords )
+            if( mesh_data.colors )
             {
-                UV0 = mesh_data.texcoords[ tri.x ];
-                UV1 = mesh_data.texcoords[ tri.y ];
-                UV2 = mesh_data.texcoords[ tri.z ];
-                lgeom.UV = ( 1.0f-barys.x-barys.y)*UV0 + barys.x*UV1 + barys.y*UV2;
+                const float4 COLOR0 = mesh_data.colors[tri.x];
+                const float4 COLOR1 = mesh_data.colors[tri.y];
+                const float4 COLOR2 = mesh_data.colors[tri.z];
+                lgeom.color = ( 1.0f - barys.x - barys.y )*COLOR0 + barys.x*COLOR1 + barys.y*COLOR2;
             }
             else
             {
-                UV0 = make_float2( 0.0f, 0.0f );
-                UV1 = make_float2( 0.0f, 1.0f );
-                UV2 = make_float2( 1.0f, 0.0f );
-                lgeom.UV = barys;
+                lgeom.color = make_float4(1);
             }
 
-            lgeom.Ng = normalize( cross( P1-P0, P2-P0 ) );
-            lgeom.Ng = optixTransformNormalFromObjectToWorldSpace( lgeom.Ng );
+            lgeom.Ng = cross( P1-P0, P2-P0 );
+            lgeom.Ng = normalize( optixTransformNormalFromObjectToWorldSpace( lgeom.Ng ) );
 
             float3 N0, N1, N2;
             if( mesh_data.normals )
@@ -116,25 +123,44 @@ SUTIL_HOSTDEVICE LocalGeometry getLocalGeometry( const GeometryData& geometry_da
                 lgeom.N = N0 = N1 = N2 = lgeom.Ng;
             }
 
-            const float du1 = UV0.x - UV2.x;
-            const float du2 = UV1.x - UV2.x;
-            const float dv1 = UV0.y - UV2.y;
-            const float dv2 = UV1.y - UV2.y;
-
             const float3 dp1 = P0 - P2;
             const float3 dp2 = P1 - P2;
 
             const float3 dn1 = N0 - N2;
             const float3 dn2 = N1 - N2;
 
-            const float det = du1*dv2 - dv1*du2;
+            for( size_t j = 0; j < GeometryData::num_textcoords; j++ )
+            {
+                float2 UV0, UV1, UV2;
+                if( mesh_data.texcoords[j] )
+                {
+                    UV0 = mesh_data.texcoords[j][tri.x];
+                    UV1 = mesh_data.texcoords[j][tri.y];
+                    UV2 = mesh_data.texcoords[j][tri.z];
+                    lgeom.texcoord[j].UV = ( 1.0f - barys.x - barys.y )*UV0 + barys.x*UV1 + barys.y*UV2;
 
-            const float invdet = 1.f / det;
-            lgeom.dpdu = ( dv2 * dp1 - dv1 * dp2) * invdet;
-            lgeom.dpdv = (-du2 * dp1 + du1 * dp2) * invdet;
-            lgeom.dndu = ( dv2 * dn1 - dv1 * dn2) * invdet;
-            lgeom.dndv = (-du2 * dn1 + du1 * dn2) * invdet;
+                    const float du1 = UV0.x - UV2.x;
+                    const float du2 = UV1.x - UV2.x;
+                    const float dv1 = UV0.y - UV2.y;
+                    const float dv2 = UV1.y - UV2.y;
 
+                    const float det = du1 * dv2 - dv1 * du2;
+
+                    const float invdet = 1.f / det;
+                    lgeom.texcoord[j].dpdu = (  dv2 * dp1 - dv1 * dp2 ) * invdet;
+                    lgeom.texcoord[j].dpdv = ( -du2 * dp1 + du1 * dp2 ) * invdet;
+                    lgeom.texcoord[j].dndu = (  dv2 * dn1 - dv1 * dn2 ) * invdet;
+                    lgeom.texcoord[j].dndv = ( -du2 * dn1 + du1 * dn2 ) * invdet;
+                }
+                else
+                {
+                    lgeom.texcoord[j].UV   = barys;
+                    lgeom.texcoord[j].dpdu = -dp1;
+                    lgeom.texcoord[j].dpdv = -dp1 + dp2;
+                    lgeom.texcoord[j].dndu = -dn1;
+                    lgeom.texcoord[j].dndv = -dn1 + dn2;
+                }
+            }
 
             break;
         }

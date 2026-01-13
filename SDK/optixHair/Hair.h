@@ -51,7 +51,8 @@ class Hair
     {
         LINEAR_BSPLINE,
         QUADRATIC_BSPLINE,
-        CUBIC_BSPLINE
+        CUBIC_BSPLINE,
+        CATROM_SPLINE
     };
     enum Shade
     {
@@ -114,9 +115,10 @@ class Hair
             return OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_QUADRATIC_BSPLINE;
         case CUBIC_BSPLINE:
             return OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CUBIC_BSPLINE;
-        default:
-            SUTIL_ASSERT_MSG(false, "Invalid b-spline mode.");
+        case CATROM_SPLINE:
+            return OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CATMULLROM;
         }
+        SUTIL_ASSERT_FAIL_MSG( "Invalid b-spline mode." );
     }
 
   protected:
@@ -189,10 +191,10 @@ class Hair
         case QUADRATIC_BSPLINE:
             return 2;
         case CUBIC_BSPLINE:
+        case CATROM_SPLINE:
             return 3;
-        default:
-            SUTIL_ASSERT_MSG( false, "Invalid spline mode." );
         }
+        SUTIL_ASSERT_FAIL_MSG( "Invalid spline mode." );
     }
     Shade  m_shadeMode  = SEGMENT_U;
     Radius m_radiusMode = CONSTANT_R;
@@ -204,5 +206,5 @@ class Hair
     friend std::ostream& operator<<( std::ostream& o, const Hair& hair );
 };
 
-// Ouput operator for Hair
+// Output operator for Hair
 std::ostream& operator<<( std::ostream& o, const Hair& hair );

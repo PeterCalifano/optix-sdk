@@ -38,19 +38,59 @@ struct MaterialData
         PBR = 0
     };
 
+    MaterialData()
+    {
+        type                       = MaterialData::PBR;
+        pbr.base_color             = { 1.0f, 1.0f, 1.0f, 1.0f };
+        pbr.metallic               = 1.0f;
+        pbr.roughness              = 1.0f;
+        pbr.base_color_tex         = { 0, 0 };
+        pbr.metallic_roughness_tex = { 0, 0 };
+    }
+
+    enum AlphaMode
+    {
+        ALPHA_MODE_OPAQUE = 0,
+        ALPHA_MODE_MASK   = 1,
+        ALPHA_MODE_BLEND  = 2
+    };
+
+    struct Texture
+    {
+        __device__ __forceinline__ operator bool() const
+        {
+            return tex != 0;
+        }
+
+        int                  texcoord;
+        cudaTextureObject_t  tex;
+
+        float2               texcoord_offset;
+        float2               texcoord_rotation; // sin,cos
+        float2               texcoord_scale;
+    };
 
     struct Pbr
     {
-        float4               base_color = { 1.0f, 1.0f, 1.0f, 1.0f };
-        float                metallic   = 1.0f;
-        float                roughness  = 1.0f;
+        float4               base_color;
+        float                metallic;
+        float                roughness;
 
-        cudaTextureObject_t  base_color_tex         = 0;
-        cudaTextureObject_t  metallic_roughness_tex = 0;
-        cudaTextureObject_t  normal_tex             = 0;
+        Texture              base_color_tex;
+        Texture              metallic_roughness_tex;
     };
 
-    Type type;
+    Type                 type            = PBR;
+
+    Texture              normal_tex      = { 0 , 0 };
+
+    AlphaMode            alpha_mode      = ALPHA_MODE_OPAQUE;
+    float                alpha_cutoff    = 0.f;
+
+    float3               emissive_factor = { 0.f, 0.f, 0.f };
+    Texture              emissive_tex    = { 0, 0 };
+
+    bool                 doubleSided     = false;
 
     union
     {

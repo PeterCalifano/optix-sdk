@@ -34,6 +34,8 @@
 
 #include <DemandLoading/TileIndexing.h>
 
+#include "TransferBufferDesc.h"
+
 namespace demandLoading {
 
 void TextureRequestHandler::fillRequest( unsigned int deviceIndex, CUstream stream, unsigned int pageId )
@@ -50,6 +52,7 @@ void TextureRequestHandler::fillRequest( unsigned int deviceIndex, CUstream stre
     if( m_loader->getPagingSystem( deviceIndex )->isResident( pageId ) )
         return;
 
+    // Decide if we need to fill a mip tail or a tile
     if( pageId == m_startPage && m_texture->isMipmapped() )
         fillMipTailRequest( deviceIndex, stream, pageId );
     else
@@ -77,86 +80,86 @@ void TextureRequestHandler::fillTileRequest( unsigned int deviceIndex, CUstream 
     if( !tileLocator.isValid() )
         return;
 
-    // Allocate a tile in pinned memory.
-    PinnedItemPool<TileBuffer>* pinnedTilePool = m_loader->getPinnedMemoryManager()->getPinnedTilePool();
-    TileBuffer*                 pinnedTile     = pinnedTilePool->allocate();
-    if( pinnedTile == nullptr )
+    // Allocate a transfer buffer.
+    TransferBufferDesc transferBuffer =
+        m_loader->allocateTransferBuffer( deviceIndex, m_texture->getImageSource()->getFillType(), sizeof( TileBuffer ), stream );
+    if( transferBuffer.size == 0 )
     {
         tilePool->freeBlock( tileLocator );
         return;
     }
 
-    // Read the tile (from disk) into pinned tile buffer.  We use a thread-local tile buffer to amortize the
-    // allocation overhead across multiple tile requests.
-    const bool ok = m_texture->readTile( mipLevel, tileX, tileY, pinnedTile->data, sizeof( TileBuffer ) );
-    DEMAND_ASSERT_MSG( ok, "readTile call failed" );
+    // Read the tile (possibly from disk) into the transfer buffer.  
+    try
+    {
+        m_texture->readTile( mipLevel, tileX, tileY, transferBuffer.buffer, transferBuffer.size, stream );
+    }
+    catch( const std::exception& e )
+    {
+        std::stringstream ss;
+        ss << "readTile call failed: " << e.what() << ": " << __FILE__ << " (" << __LINE__ << ")";
+        throw Exception( ss.str().c_str() );
+    }
 
-    // Fill the tile 
+    // Copy data from transfer buffer to the sparse texture on the device
     CUmemGenericAllocationHandle handle;
     size_t                       offset;
     tilePool->getHandle( tileLocator, &handle, &offset );
-    m_texture->fillTile( deviceIndex, stream, mipLevel, tileX, tileY, pinnedTile->data, sizeof( TileBuffer ), handle, offset );
+
+    m_texture->fillTile( deviceIndex, stream, mipLevel, tileX, tileY, transferBuffer.buffer, transferBuffer.memoryType,
+                         sizeof( TileBuffer ), handle, offset );
 
     const unsigned int lruVal = 0;
     m_loader->getPagingSystem( deviceIndex )->addMapping( pageId, lruVal, tileLocator.getData() );
 
-    // Free the pinned memory buffer.  This doesn't immediately reclaim it: an event is recorded on
-    // the stream, and the buffer isn't reused until all preceding operations are complete,
-    // including the asynchronous memcpy issued by fillTile().
-    pinnedTilePool->free( pinnedTile, deviceIndex, stream );
+    m_loader->freeTransferBuffer( transferBuffer, stream );
 }
 
 void TextureRequestHandler::fillMipTailRequest( unsigned int deviceIndex, CUstream stream, unsigned int pageId )
 {
     SCOPED_NVTX_RANGE_FUNCTION_NAME();
 
-    const size_t mipTailSize         = m_texture->getMipTailSize();
-    const bool   usePinnedTileBuffer = ( mipTailSize <= sizeof( TileBuffer ) );
-
+    const size_t mipTailSize  = m_texture->getMipTailSize();
+    
     // Allocate device memory for the mip tail from TilePool.
     TilePool*     tilePool  = m_loader->getDeviceMemoryManager( deviceIndex )->getTilePool();
     TileBlockDesc tileBlock = tilePool->allocate( mipTailSize );
     if( !tileBlock.isValid() )
         return;
 
-    // Use a TileBuffer or a MipTailBuffer depending on the size of the mip tail
-    PinnedItemPool<TileBuffer>*    pinnedTilePool    = m_loader->getPinnedMemoryManager()->getPinnedTilePool();
-    PinnedItemPool<MipTailBuffer>* pinnedMipTailPool = m_loader->getPinnedMemoryManager()->getPinnedMipTailPool();
-
-    TileBuffer*    pinnedTileBuffer    = usePinnedTileBuffer ? pinnedTilePool->allocate() : nullptr;
-    MipTailBuffer* pinnedMipTailBuffer = !usePinnedTileBuffer ? pinnedMipTailPool->allocate() : nullptr;
-    char*          pinnedData          = usePinnedTileBuffer ? pinnedTileBuffer->data : pinnedMipTailBuffer->data;
-    size_t         pinnedBuffSize      = usePinnedTileBuffer ? sizeof( TileBuffer ) : sizeof( MipTailBuffer );
-
-    // If it failed to allocate pinned memory, just return
-    if( pinnedTileBuffer == nullptr && pinnedMipTailBuffer == nullptr )
+    // Allocate a transfer buffer.
+    TransferBufferDesc transferBuffer =
+        m_loader->allocateTransferBuffer( deviceIndex, m_texture->getImageSource()->getFillType(), mipTailSize, stream );
+    if( transferBuffer.size == 0 )
     {
         tilePool->freeBlock( tileBlock );
         return;
     }
 
-    // Read the mip tail.
-    const bool ok = m_texture->readMipTail( pinnedData, pinnedBuffSize );
-    DEMAND_ASSERT_MSG( ok, "readMipTail call failed" );
+    // Read the mip tail into the transfer buffer.
+    try
+    {
+        m_texture->readMipTail( transferBuffer.buffer, mipTailSize, stream );
+    }
+    catch( const std::exception& e )
+    {
+        std::stringstream ss;
+        ss << "readMipTail call failed: " << e.what() << ": " << __FILE__ << " (" << __LINE__ << ")";
+        throw Exception( ss.str().c_str() );
+    }
 
     CUmemGenericAllocationHandle handle;
     size_t                       offset;
     tilePool->getHandle( tileBlock, &handle, &offset );
 
-    // Fill the mip tail.
-    m_texture->fillMipTail( deviceIndex, stream, pinnedData, mipTailSize, handle, offset );
+    // Copy data from the transfer buffer to the sparse texture on the device
+    m_texture->fillMipTail( deviceIndex, stream, transferBuffer.buffer, transferBuffer.memoryType, mipTailSize, handle, offset );
 
     // Add a mapping for the mip tail, which will be sent to the device in pushMappings().
     unsigned int lruVal = 0;
     m_loader->getPagingSystem( deviceIndex )->addMapping( pageId, lruVal, tileBlock.getData() );
 
-    // Free the pinned memory buffer.  This doesn't immediately reclaim it: an event is recorded on
-    // the stream, and the buffer isn't reused until all preceding operations are complete,
-    // including the asynchronous memcpy issued by fillTile().
-    if( usePinnedTileBuffer )
-        pinnedTilePool->free( pinnedTileBuffer, deviceIndex, stream );
-    else
-        pinnedMipTailPool->free( pinnedMipTailBuffer, deviceIndex, stream );
+    m_loader->freeTransferBuffer( transferBuffer, stream );
 }
 
 void TextureRequestHandler::unmapTileResource( unsigned int deviceIndex, CUstream stream, unsigned int pageId )

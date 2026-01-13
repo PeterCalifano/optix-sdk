@@ -46,8 +46,9 @@ class RequestProcessor
   public:
     /// Construct request processor, which uses the given PageTableManager to
     /// find the RequestHandler associated with a range of pages.
-    RequestProcessor( PageTableManager* pageTableManager )
+    RequestProcessor( PageTableManager* pageTableManager, unsigned int maxRequestQueueSize )
         : m_pageTableManager( pageTableManager )
+        , m_requests( maxRequestQueueSize )
     {
     }
 

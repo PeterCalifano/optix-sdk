@@ -62,7 +62,7 @@ OPTIX_add_sample_executable( optixNVLink target_name
   optixNVLink.cpp
   optixNVLink.h
 
-  nvml_configure.h
+  ${CMAKE_CURRENT_BINARY_DIR}/nvml_configure.h
   )
 set_property( TARGET ${target_name} PROPERTY CUDA_SEPARABLE_COMPILATION ON )
 

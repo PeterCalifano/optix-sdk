@@ -29,7 +29,7 @@
 #include "Textures/SparseTexture.h"
 #include "Util/Exception.h"
 
-#include <ImageReader/ImageReader.h>
+#include <ImageSource/ImageSource.h>
 
 #include <algorithm>
 #include <cmath>
@@ -48,7 +48,7 @@ SparseArray::~SparseArray()
     }
 }
 
-void SparseArray::init( unsigned int deviceIndex, const imageReader::TextureInfo& info )
+void SparseArray::init( unsigned int deviceIndex, const imageSource::TextureInfo& info )
 {
     if( m_initialized )
         return;
@@ -62,7 +62,7 @@ void SparseArray::init( unsigned int deviceIndex, const imageReader::TextureInfo
     // of miplevels is less than the start of the mip tail.  See bug 3139148.
     // Note that the texture descriptor clamps the maximum miplevel appropriately, and we'll never
     // map tiles (or the mip tail) beyond the actual maximum miplevel.
-    const unsigned int nominalNumMipLevels = imageReader::calculateNumMipLevels( m_info.width, m_info.height );
+    const unsigned int nominalNumMipLevels = imageSource::calculateNumMipLevels( m_info.width, m_info.height );
     DEMAND_ASSERT( m_info.numMipLevels <= nominalNumMipLevels );
 
     // Create CUDA array
@@ -202,7 +202,7 @@ void SparseArray::unmapMipTailAsync( CUstream stream, size_t mipTailSize ) const
     DEMAND_CUDA_CHECK( cuMemMapArrayAsync( &mapInfo, 1, stream ) );
 }
 
-void SparseTexture::init( const TextureDescriptor& descriptor, const imageReader::TextureInfo& info )
+void SparseTexture::init( const TextureDescriptor& descriptor, const imageSource::TextureInfo& info )
 {
     // Redundant initialization can occur because requests from multiple streams are not yet
     // deduplicated.
@@ -257,6 +257,7 @@ void SparseTexture::fillTile( CUstream                     stream,
                               unsigned int                 tileX,
                               unsigned int                 tileY,
                               const char*                  tileData,
+                              CUmemorytype                 tileMemoryType,
                               size_t                       tileSize,
                               CUmemGenericAllocationHandle tileHandle,
                               size_t                       tileOffset ) const
@@ -271,11 +272,13 @@ void SparseTexture::fillTile( CUstream                     stream,
     CUarray mipLevelArray = m_array.getLevel( mipLevel );
 
     // Copy tile data into CUDA array
-    const unsigned int pixelSize = m_info.numChannels * imageReader::getBytesPerChannel( m_info.format );
-    CUDA_MEMCPY2D      copyArgs  = {};
-    copyArgs.srcMemoryType       = CU_MEMORYTYPE_HOST;
-    copyArgs.srcHost             = tileData;
-    copyArgs.srcPitch            = getTileWidth() * pixelSize;
+    const unsigned int pixelSize = m_info.numChannels * imageSource::getBytesPerChannel( m_info.format );
+
+    CUDA_MEMCPY2D copyArgs{};
+    copyArgs.srcMemoryType = tileMemoryType;
+    copyArgs.srcHost       = ( tileMemoryType == CU_MEMORYTYPE_HOST ) ? tileData : nullptr;
+    copyArgs.srcDevice     = ( tileMemoryType == CU_MEMORYTYPE_DEVICE ) ? reinterpret_cast<CUdeviceptr>( tileData ) : 0;
+    copyArgs.srcPitch      = getTileWidth() * pixelSize;
 
     copyArgs.dstXInBytes = tileX * getTileWidth() * pixelSize;
     copyArgs.dstY        = tileY * getTileHeight();
@@ -287,6 +290,7 @@ void SparseTexture::fillTile( CUstream                     stream,
     copyArgs.Height       = tileDims.y;
 
     DEMAND_CUDA_CHECK( cuMemcpy2DAsync( &copyArgs, stream ) );
+    m_numBytesFilled += getTileWidth() * getTileHeight() * pixelSize;
 }
 
 
@@ -297,26 +301,34 @@ void SparseTexture::unmapTile( CUstream stream, unsigned int mipLevel, unsigned 
     const uint2 levelExtent{getTileDimensions( mipLevel, tileX, tileY )};
     const uint2 levelOffset{make_uint2( tileX * getTileWidth(), tileY * getTileHeight() )};
     m_array.unmapTileAsync( stream, mipLevel, levelOffset, levelExtent );
+    m_numUnmappings++;
 }
 
 
-void SparseTexture::fillMipTail( CUstream stream, const char* mipTailData, size_t mipTailSize, CUmemGenericAllocationHandle tileHandle, size_t tileOffset ) const
+void SparseTexture::fillMipTail( CUstream                     stream,
+                                 const char*                  mipTailData,
+                                 CUmemorytype                 mipTailMemoryType,
+                                 size_t                       mipTailSize,
+                                 CUmemGenericAllocationHandle tileHandle,
+                                 size_t                       tileOffset ) const
 {
     DEMAND_ASSERT( m_isInitialized );
+    DEMAND_ASSERT( mipTailSize >= getMipTailSize() );
 
     m_array.mapMipTailAsync(stream, getMipTailSize(), tileHandle, tileOffset);
 
     // Fill each level in the mip tail.
     size_t             offset    = 0;
-    const unsigned int pixelSize = m_info.numChannels * imageReader::getBytesPerChannel( m_info.format );
+    const unsigned int pixelSize = m_info.numChannels * imageSource::getBytesPerChannel( m_info.format );
     for( unsigned int mipLevel = getMipTailFirstLevel(); mipLevel < m_info.numMipLevels; ++mipLevel )
     {
         CUarray mipLevelArray = m_array.getLevel( mipLevel );
         uint2 levelDims = getMipLevelDims( mipLevel );
 
         CUDA_MEMCPY2D copyArgs{};
-        copyArgs.srcMemoryType = CU_MEMORYTYPE_HOST;
-        copyArgs.srcHost       = mipTailData + offset;
+        copyArgs.srcMemoryType = mipTailMemoryType;
+        copyArgs.srcHost       = ( mipTailMemoryType == CU_MEMORYTYPE_HOST ) ? mipTailData + offset : nullptr;
+        copyArgs.srcDevice     = ( mipTailMemoryType == CU_MEMORYTYPE_DEVICE ) ? reinterpret_cast<CUdeviceptr>( mipTailData + offset ) : 0;
         copyArgs.srcPitch      = levelDims.x * pixelSize;
 
         copyArgs.dstMemoryType = CU_MEMORYTYPE_ARRAY;
@@ -329,6 +341,8 @@ void SparseTexture::fillMipTail( CUstream stream, const char* mipTailData, size_
 
         offset += levelDims.x * levelDims.y * pixelSize;
     }
+
+    m_numBytesFilled += getMipTailSize();
 }
 
 void SparseTexture::unmapMipTail( CUstream stream ) const
@@ -336,6 +350,7 @@ void SparseTexture::unmapMipTail( CUstream stream ) const
     DEMAND_ASSERT( m_isInitialized );
 
     m_array.unmapMipTailAsync(stream, getMipTailSize());
+    m_numUnmappings++;
 }
 
 

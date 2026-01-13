@@ -31,9 +31,6 @@
 /// \file Texture2DExtended.h 
 /// Extended device-side entry points for fetching from demand-loaded sparse textures.
 
-// Note: #define SMALL_TEXTURE_OPTIMIZATION before including Texture2DExtended.h to use
-// small texture optimizations (base colors or standard textures)
-
 #include <DemandLoading/Texture2D.h>
 
 namespace demandLoading {
@@ -51,26 +48,34 @@ __device__ static __forceinline__ void wrapAndSeparateUdimCoord( float x, CUaddr
 /// When using this entry point, use CU_TR_ADDRESS_MODE_CLAMP when defining all subtextures to prevent dark lines between textures.
 template <class TYPE>
 __device__ static __forceinline__ TYPE
-tex2DGradUdim( const DeviceContext& context, unsigned int textureId, float x, float y, float2 ddx, float2 ddy, bool* isResident, bool requestIfResident )
+tex2DGradUdim( const DeviceContext& context, unsigned int textureId, float x, float y, float2 ddx, float2 ddy, bool* isResident )
 {
     // Check for base color
     TYPE rval;
-    bool baseColorResdient;
+    bool baseColorResident;
 
     const float minGradSquared = minf( ddx.x * ddx.x + ddx.y * ddx.y, ddy.x * ddy.x + ddy.y * ddy.y );
     if( minGradSquared >= 1.0f )
     {
         *isResident = true;
-        if( getBaseColor<TYPE>( context, textureId, rval, &baseColorResdient ) )
+        if ( getBaseColor<TYPE>( context, textureId, rval, &baseColorResident ) )
+        {
             return rval;
+        }
+        if( !baseColorResident ) // Don't request the sampler unless we really need to
+        {
+            convertColor( float4{1.0f, 0.0f, 1.0f, 0.0f}, rval );
+            return rval;
+        }
     }
 
     // Get the base texture
     TextureSampler* baseSampler = reinterpret_cast<TextureSampler*>( pagingMapOrRequest( context, textureId, isResident ) );
     if( !baseSampler )
     {
-        *isResident = false;
         convertColor( float4{1.0f, 0.0f, 1.0f, 0.0f}, rval );
+        if( *isResident )
+            *isResident = getBaseColor<TYPE>( context, textureId, rval, &baseColorResident );
         return rval;
     }
 
@@ -95,8 +100,9 @@ tex2DGradUdim( const DeviceContext& context, unsigned int textureId, float x, fl
         wrapAndSeparateUdimCoord( y, CU_TR_ADDRESS_MODE_WRAP, vdim, sy, yidx );
 
         unsigned int subTexId = baseSampler->udimStartPage + yidx * udim + xidx;
-        const float2 uvdim    = make_float2( udim, vdim );
-        rval = tex2DGrad<TYPE>( context, subTexId, sx, sy, ddx * uvdim, ddy * uvdim, isResident, requestIfResident );
+        const float2 ddx_dim = make_float2( ddx.x * udim, ddx.y * vdim );
+        const float2 ddy_dim = make_float2( ddy.x * udim, ddy.y * vdim );
+        rval = tex2DGrad<TYPE>( context, subTexId, sx, sy, ddx_dim, ddy_dim, isResident );
         if( *isResident )
             return rval;
     }
@@ -104,15 +110,22 @@ tex2DGradUdim( const DeviceContext& context, unsigned int textureId, float x, fl
     // If the mip level was coarse enough (or not a udim texture), use the base texture if one exists.
     if( isUdimBaseTexture || udim == 0 )
     {
-        rval = tex2DGrad<TYPE>( baseSampler->texture, x, y, ddx, ddy, isResident );
-        if( baseSampler->desc.isSparseTexture )
-        {
-            requestTexFootprint2DGrad( *baseSampler, context.referenceBits, x, y, ddx.x, ddx.y, ddy.x, ddy.y,
-                                       *isResident, requestIfResident, context.residenceBits );
-        }
+        // If requestIfResident is false, use the predicated texture fetch to try and avoid requesting the footprint
+        *isResident = !baseSampler->desc.isSparseTexture;
+        if( context.requestIfResident == false )
+            rval = tex2DGrad<TYPE>( baseSampler->texture, x, y, ddx, ddy, isResident );
+
+        // Request the footprint if we don't know that it is resident (or if requestIfResident is true)
+        if( *isResident == false  && baseSampler->desc.isSparseTexture)
+            *isResident = requestTexFootprint2DGrad( *baseSampler, context.referenceBits, context.residenceBits, x, y, ddx.x, ddx.y, ddy.x, ddy.y );
+
+        // We know the footprint is resident, but we have not yet fetched the texture, so do it now.
+        if( *isResident && context.requestIfResident )
+            rval = tex2DGrad<TYPE>( baseSampler->texture, x, y, ddx, ddy ); // non-pedicated texture fetch
     }
     return rval;
 }
+
 
 /// Fetch from demand-loaded udim texture.  A "udim" texture is an array of texture images that are treated as a single texture
 /// object (with an optional base texture).  This entry point will combine multiple samples to blend across subtexture boundaries.  
@@ -120,11 +133,12 @@ tex2DGradUdim( const DeviceContext& context, unsigned int textureId, float x, fl
 /// between subtextures.
 template <class TYPE>
 __device__ static __forceinline__ TYPE
-tex2DGradUdimBlend( const DeviceContext& context, unsigned int textureId, float x, float y, float2 ddx, float2 ddy, bool* isResident, bool requestIfResident )
+tex2DGradUdimBlend( const DeviceContext& context, unsigned int textureId, float x, float y, float2 ddx, float2 ddy, bool* isResident )
 {
     // Check for base color
     TYPE rval;
     bool baseColorResident;
+    convertColor( float4{1.0f, 0.0f, 1.0f, 0.0f}, rval );
 
     float minGradSquared = minf( ddx.x * ddx.x + ddx.y * ddx.y, ddy.x * ddy.x + ddy.y * ddy.y );
     if( minGradSquared >= 1.0f )
@@ -132,14 +146,16 @@ tex2DGradUdimBlend( const DeviceContext& context, unsigned int textureId, float 
         *isResident = true;
         if ( getBaseColor<TYPE>( context, textureId, rval, &baseColorResident ) )
             return rval;
+        if( !baseColorResident ) // Don't request the sampler unless we really need to
+            return rval;
     }
 
     // Get the base texture
     TextureSampler* baseSampler = reinterpret_cast<TextureSampler*>( pagingMapOrRequest( context, textureId, isResident ) );
     if( !baseSampler )
     {
-        *isResident = false;
-        convertColor( float4{1.0f, 0.0f, 1.0f, 0.0f}, rval );
+        if( *isResident )
+            *isResident = getBaseColor<TYPE>( context, textureId, rval, &baseColorResident );  
         return rval;
     }
 
@@ -178,12 +194,19 @@ tex2DGradUdimBlend( const DeviceContext& context, unsigned int textureId, float 
     // If the mip level is coarse enough, use the base texture if one exists.
     if( mipLevel >= 0.0f && ( isUdimBaseTexture || udim == 0 ) )
     {
-        rval = tex2DGrad<TYPE>( baseSampler->texture, x, y, ddx, ddy, isResident );
-        if( baseSampler->desc.isSparseTexture )
-        {
-            requestTexFootprint2DGrad( *baseSampler, context.referenceBits, x, y, ddx.x, ddx.y, ddy.x, ddy.y,
-                                       *isResident, requestIfResident, context.residenceBits );
-        }
+        // If requestIfResident is false, use the predicated texture fetch to try and avoid requesting the footprint
+        *isResident = !baseSampler->desc.isSparseTexture;
+        if( context.requestIfResident == false )
+            rval = tex2DGrad<TYPE>( baseSampler->texture, x, y, ddx, ddy, isResident );
+
+        // Request the footprint if we don't know that it is resident (or if requestIfResident is true)
+        if( *isResident == false  && baseSampler->desc.isSparseTexture)
+            *isResident = requestTexFootprint2DGrad( *baseSampler, context.referenceBits, context.residenceBits, x, y, ddx.x, ddx.y, ddy.x, ddy.y );
+
+        // We know the footprint is resident, but we have not yet fetched the texture, so do it now.
+        if( *isResident && context.requestIfResident )
+            rval = tex2DGrad<TYPE>( baseSampler->texture, x, y, ddx, ddy ); // non-pedicated texture fetch
+
         return rval;
     }
 
@@ -209,14 +232,9 @@ tex2DGradUdimBlend( const DeviceContext& context, unsigned int textureId, float 
     if( minGradSquared >= 1.0f )
     {
         if( getBaseColor<TYPE>( context, subTexId, rval, &baseColorResident ) )
-        {
             return rval;
-        }
         if( !baseColorResident ) // don't request sampler unless we really need to
-        {
-            convertColor( float4{1.0f, 0.0f, 1.0f, 0.0f}, rval );
             return rval;
-        }
     }
     
     samplers[0] = reinterpret_cast<TextureSampler*>( pagingMapOrRequest( context, subTexId, &subTexResident ) );
@@ -231,7 +249,6 @@ tex2DGradUdimBlend( const DeviceContext& context, unsigned int textureId, float 
                 if( getBaseColor<TYPE>( context, subTexId, rval, isResident ) )
                     return rval;
             }
-            convertColor( float4{1.0f, 0.0f, 1.0f, 0.0f}, rval );
             return rval;
         }
         samplers[0] = baseSampler;
@@ -322,7 +339,6 @@ tex2DGradUdimBlend( const DeviceContext& context, unsigned int textureId, float 
     }
 
     // Do the sampling and combine the results (just add them together)
-    bool res;
     rval = TYPE();
     for( unsigned int i = 0; i < 4; ++i )
     {
@@ -333,14 +349,20 @@ tex2DGradUdimBlend( const DeviceContext& context, unsigned int textureId, float 
         float xx = x - static_cast<float>( i & 1 );
         float yy = y - static_cast<float>( i >> 1 );
 
-        rval += tex2DGrad<TYPE>( samplers[i]->texture, xx, yy, ddx, ddy, &res );
-        if( samplers[i]->desc.isSparseTexture )
-        {
-            requestTexFootprint2DGrad( *samplers[i], context.referenceBits, xx, yy, ddx.x, ddx.y, ddy.x, ddy.y, res,
-                                       requestIfResident, context.residenceBits );
-        }
-        *isResident = *isResident & res;
+        // If requestIfResident is false, use the predicated texture fetch to try and avoid requesting the footprint
+        bool texResident = !samplers[i]->desc.isSparseTexture;
+        if( context.requestIfResident == false )
+            rval += tex2DGrad<TYPE>( samplers[i]->texture, xx, yy, ddx, ddy, &texResident );
 
+        // Request the footprint if we don't know that it is resident (or if requestIfResident is true)
+        if( texResident == false && samplers[i]->desc.isSparseTexture)
+            texResident = requestTexFootprint2DGrad( *samplers[i], context.referenceBits, context.residenceBits, x, y, ddx.x, ddx.y, ddy.x, ddy.y );
+
+        // We know the footprint is resident, but we have not yet fetched the texture, so do it now.
+        if( texResident && context.requestIfResident )
+            rval += tex2DGrad<TYPE>( samplers[i]->texture, xx, yy, ddx, ddy ); // non-pedicated texture fetch
+
+        *isResident = *isResident && texResident;
         if( oneSampler )  // Early exit
             break;
     }

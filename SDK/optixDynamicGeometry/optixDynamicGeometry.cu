@@ -48,9 +48,9 @@ static __forceinline__ __device__ void trace(
 )
 {
     unsigned int p0, p1, p2;
-    p0 = float_as_int( prd->x );
-    p1 = float_as_int( prd->y );
-    p2 = float_as_int( prd->z );
+    p0 = __float_as_uint( prd->x );
+    p1 = __float_as_uint( prd->y );
+    p2 = __float_as_uint( prd->z );
     optixTrace(
         handle,
         ray_origin,
@@ -64,26 +64,26 @@ static __forceinline__ __device__ void trace(
         0,                   // SBT stride
         0,                   // missSBTIndex
         p0, p1, p2 );
-    prd->x = int_as_float( p0 );
-    prd->y = int_as_float( p1 );
-    prd->z = int_as_float( p2 );
+    prd->x = __uint_as_float( p0 );
+    prd->y = __uint_as_float( p1 );
+    prd->z = __uint_as_float( p2 );
 }
 
 
 static __forceinline__ __device__ void setPayload( float3 p )
 {
-    optixSetPayload_0( float_as_int( p.x ) );
-    optixSetPayload_1( float_as_int( p.y ) );
-    optixSetPayload_2( float_as_int( p.z ) );
+    optixSetPayload_0( __float_as_uint( p.x ) );
+    optixSetPayload_1( __float_as_uint( p.y ) );
+    optixSetPayload_2( __float_as_uint( p.z ) );
 }
 
 
 static __forceinline__ __device__ float3 getPayload()
 {
     return make_float3(
-        int_as_float( optixGetPayload_0() ),
-        int_as_float( optixGetPayload_1() ),
-        int_as_float( optixGetPayload_2() )
+        __uint_as_float( optixGetPayload_0() ),
+        __uint_as_float( optixGetPayload_1() ),
+        __uint_as_float( optixGetPayload_2() )
     );
 }
 

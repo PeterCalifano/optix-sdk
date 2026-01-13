@@ -272,14 +272,14 @@ extern "C" __global__ void __intersection__is()
         float3 texcoord = make_float3( polar.x * 0.5f * M_1_PIf, ( polar.y + M_PI_2f ) * M_1_PIf, polar.z / radius );
 
         unsigned int p0, p1, p2;
-        p0 = float_as_int( texcoord.x );
-        p1 = float_as_int( texcoord.y );
-        p2 = float_as_int( texcoord.z );
+        p0 = __float_as_uint( texcoord.x );
+        p1 = __float_as_uint( texcoord.y );
+        p2 = __float_as_uint( texcoord.z );
 
         unsigned int n0, n1, n2;
-        n0 = float_as_int( shading_normal.x );
-        n1 = float_as_int( shading_normal.y );
-        n2 = float_as_int( shading_normal.z );
+        n0 = __float_as_uint( shading_normal.x );
+        n1 = __float_as_uint( shading_normal.y );
+        n2 = __float_as_uint( shading_normal.z );
 
         optixReportIntersection( root1,         // t hit
                                  0,             // user hit kind
@@ -298,11 +298,11 @@ extern "C" __global__ void __closesthit__ch()
     const float   radius       = hg_data->radius;
 
     // The texture coordinates and normal are calculated by the intersection shader are provided as attributes.
-    const float3 texcoord = make_float3( int_as_float( optixGetAttribute_0() ), int_as_float( optixGetAttribute_1() ),
-                                         int_as_float( optixGetAttribute_2() ) );
+    const float3 texcoord = make_float3( __uint_as_float( optixGetAttribute_0() ), __uint_as_float( optixGetAttribute_1() ),
+                                         __uint_as_float( optixGetAttribute_2() ) );
 
-    const float3 N = make_float3( int_as_float( optixGetAttribute_3() ), int_as_float( optixGetAttribute_4() ),
-                                  int_as_float( optixGetAttribute_5() ) );
+    const float3 N = make_float3( __uint_as_float( optixGetAttribute_3() ), __uint_as_float( optixGetAttribute_4() ),
+                                  __uint_as_float( optixGetAttribute_5() ) );
 
     // Compute world space texture derivatives based on normal and radius, assuming a lat/long projection
     float3 dPds = radius * 2.0f * M_PIf * make_float3( N.y, -N.x, 0.0f );
@@ -335,11 +335,8 @@ extern "C" __global__ void __closesthit__ch()
     ddy *= textureScale * biasScale;
 
     // Sample the texture
-    const bool requestIfResident = true;
-    bool       isResident        = true;
-
-    float4 color = tex2DGrad<float4>(
-        params.demandTextureContext, textureId, s, t, ddx, ddy, &isResident, requestIfResident );
+    bool   isResident = true;
+    float4 color      = tex2DGrad<float4>( params.demandTextureContext, textureId, s, t, ddx, ddy, &isResident );
 
     prd->rgb = make_float3( color );
 }

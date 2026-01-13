@@ -113,8 +113,8 @@ extern "C" __global__ void __closesthit__radiance()
     const float  ray_t     = optixGetRayTmax();
     float3       hit_point = ray_orig + ray_t * ray_dir;
 
-    float3 object_normal = make_float3( int_as_float( optixGetAttribute_0() ), int_as_float( optixGetAttribute_1() ),
-                                        int_as_float( optixGetAttribute_2() ) );
+    float3 object_normal = make_float3( __uint_as_float( optixGetAttribute_0() ), __uint_as_float( optixGetAttribute_1() ),
+                                        __uint_as_float( optixGetAttribute_2() ) );
     float3 world_normal  = normalize( optixTransformNormalFromObjectToWorldSpace( object_normal ) );
     float3 ffnormal      = faceforward( world_normal, -ray_dir, world_normal );
 

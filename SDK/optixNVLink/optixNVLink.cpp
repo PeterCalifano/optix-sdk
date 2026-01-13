@@ -803,7 +803,7 @@ void initLaunchParams( PerDeviceSampleState& pd_state )
     pd_state.params.device_color_scale = g_device_color_scale;
 
     // IO buffers are assigned in allocIOBuffers
-
+    CUDA_CHECK( cudaSetDevice( pd_state.device_idx ) );
     CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &pd_state.d_params), sizeof( Params ) ) );
 }
 
@@ -816,8 +816,7 @@ void allocIOBuffers( PerDeviceSampleState& pd_state, int num_gpus )
 
     pd_state.num_samples = wd.numSamples( pd_state.device_idx );
 
-    CUDA_CHECK( cudaSetDevice( pd_state.device_idx ) );
-
+    // The correct device has been set by the callers of allocIOBuffers
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( pd_state.d_sample_indices ) ) );
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( pd_state.d_sample_accum   ) ) );
 
@@ -866,7 +865,6 @@ void handleResize( sutil::CUDAOutputBuffer<uchar4>& output_buffer, std::vector<P
         return;
     resize_dirty = false;
 
-    CUDA_CHECK( cudaSetDevice( pd_states.front().device_idx ) );
     output_buffer.resize( width, height );
 
     // Realloc accumulation buffer
@@ -874,6 +872,7 @@ void handleResize( sutil::CUDAOutputBuffer<uchar4>& output_buffer, std::vector<P
     {
         pd_state.params.width  = width;
         pd_state.params.height = height;
+        CUDA_CHECK( cudaSetDevice( pd_state.device_idx ) );
         allocIOBuffers( pd_state, static_cast<int>( pd_states.size() ) );
     }
 }
@@ -905,6 +904,7 @@ void launchSubframe( sutil::CUDAOutputBuffer<uchar4>& output_buffer, std::vector
                     pd_state.stream
                     ) );
 
+        CUDA_CHECK( cudaSetDevice( pd_state.device_idx ) );
         OPTIX_CHECK( optixLaunch(
                     pd_state.pipeline,
                     pd_state.stream,
@@ -1119,9 +1119,10 @@ void buildMeshAccel( PerDeviceSampleState& pd_state )
 void createModule( PerDeviceSampleState& pd_state )
 {
     OptixModuleCompileOptions module_compile_options = {};
-    module_compile_options.maxRegisterCount  = OPTIX_COMPILE_DEFAULT_MAX_REGISTER_COUNT;
-    module_compile_options.optLevel          = OPTIX_COMPILE_OPTIMIZATION_DEFAULT;
-    module_compile_options.debugLevel        = OPTIX_COMPILE_DEBUG_LEVEL_MINIMAL;
+#if !defined( NDEBUG )
+    module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
+    module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+#endif
 
     pd_state.pipeline_compile_options.usesMotionBlur            = false;
     pd_state.pipeline_compile_options.traversableGraphFlags     = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
@@ -1378,6 +1379,7 @@ void cleanupState( PerDeviceSampleState& pd_state )
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( pd_state.d_sample_indices       ) ) );
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( pd_state.d_sample_accum         ) ) );
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( pd_state.d_params               ) ) );
+    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( pd_state.d_tex_coords           ) ) );
 }
 
 

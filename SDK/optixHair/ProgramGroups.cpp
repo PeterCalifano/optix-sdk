@@ -81,13 +81,17 @@ unsigned int ProgramGroups::size() const
 //
 // HairProgramGroups
 //
-HairProgramGroups::HairProgramGroups( const OptixDeviceContext context, OptixPipelineCompileOptions pipeOptions )
+HairProgramGroups::HairProgramGroups( const OptixDeviceContext context, OptixPipelineCompileOptions pipeOptions, unsigned int buildFlags )
     : ProgramGroups( context, pipeOptions )
 {
     //
     // Create modules
     //
-    const OptixModuleCompileOptions defaultOptions = {};
+    OptixModuleCompileOptions defaultOptions = {};
+#if !defined( NDEBUG )
+    defaultOptions.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
+    defaultOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+#endif
 
     size_t      inputSize = 0;
     const char* input = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixHair.cu", inputSize );
@@ -108,19 +112,22 @@ HairProgramGroups::HairProgramGroups( const OptixDeviceContext context, OptixPip
                                                 LOG, &LOG_SIZE,
                                                 &m_whittedModule ) );
 
+    OptixBuiltinISOptions builtinISOptions = {};
+    builtinISOptions.buildFlags = buildFlags;
     if( pipeOptions.usesPrimitiveTypeFlags & OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_QUADRATIC_BSPLINE ) {
-        OptixBuiltinISOptions builtinISOptions = {};
         builtinISOptions.builtinISModuleType   = OPTIX_PRIMITIVE_TYPE_ROUND_QUADRATIC_BSPLINE;
         OPTIX_CHECK( optixBuiltinISModuleGet( context, &defaultOptions, &pipeOptions, &builtinISOptions, &m_quadraticCurveModule ) );
     }
     if( pipeOptions.usesPrimitiveTypeFlags & OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CUBIC_BSPLINE ) {
-        OptixBuiltinISOptions builtinISOptions = {};
         builtinISOptions.builtinISModuleType   = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BSPLINE;
         OPTIX_CHECK( optixBuiltinISModuleGet( context, &defaultOptions, &pipeOptions, &builtinISOptions, &m_cubicCurveModule ) );
     }
     if( pipeOptions.usesPrimitiveTypeFlags & OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_LINEAR ) {
-        OptixBuiltinISOptions builtinISOptions = {};
         builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_LINEAR;
         OPTIX_CHECK( optixBuiltinISModuleGet( context, &defaultOptions, &pipeOptions, &builtinISOptions, &m_linearCurveModule ) );
+    }
+    if( pipeOptions.usesPrimitiveTypeFlags & OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CATMULLROM ) {
+        builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_CATMULLROM;
+        OPTIX_CHECK( optixBuiltinISModuleGet( context, &defaultOptions, &pipeOptions, &builtinISOptions, &m_catromCurveModule ) );
     }
 }

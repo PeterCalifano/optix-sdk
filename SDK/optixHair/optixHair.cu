@@ -54,7 +54,9 @@ static __forceinline__ __device__ float3 normalLinear( const int primitiveIndex 
 
     optixGetLinearCurveVertexData( gas, primitiveIndex, gasSbtIndex, 0.0f, controlPoints );
 
-    LinearBSplineSegment interpolator( controlPoints );
+    LinearInterpolator interpolator;
+    interpolator.initialize(controlPoints);
+
     float3               hitPoint = getHitPoint();
     // interpolators work in object space
     hitPoint            = optixTransformPointFromWorldToObjectSpace( hitPoint );
@@ -71,7 +73,9 @@ static __forceinline__ __device__ float3 normalQuadratic( const int primitiveInd
 
     optixGetQuadraticBSplineVertexData( gas, primitiveIndex, gasSbtIndex, 0.0f, controlPoints );
 
-    QuadraticBSplineSegment interpolator( controlPoints );
+    QuadraticInterpolator interpolator;
+    interpolator.initializeFromBSpline(controlPoints);
+
     float3                  hitPoint = getHitPoint();
     // interpolators work in object space
     hitPoint            = optixTransformPointFromWorldToObjectSpace( hitPoint );
@@ -88,7 +92,28 @@ static __forceinline__ __device__ float3 normalCubic( const int primitiveIndex )
 
     optixGetCubicBSplineVertexData( gas, primitiveIndex, gasSbtIndex, 0.0f, controlPoints );
 
-    CubicBSplineSegment interpolator( controlPoints );
+    CubicInterpolator interpolator;
+    interpolator.initializeFromBSpline(controlPoints);
+
+    float3              hitPoint = getHitPoint();
+    // interpolators work in object space
+    hitPoint            = optixTransformPointFromWorldToObjectSpace( hitPoint );
+    const float3 normal = surfaceNormal( interpolator, optixGetCurveParameter(), hitPoint );
+    return optixTransformNormalFromObjectToWorldSpace( normal );
+}
+
+// Compute surface normal of cubic pimitive in world space.
+static __forceinline__ __device__ float3 normalCatrom( const int primitiveIndex )
+{
+    const OptixTraversableHandle gas         = optixGetGASTraversableHandle();
+    const unsigned int           gasSbtIndex = optixGetSbtGASIndex();
+    float4                       controlPoints[4];
+
+    optixGetCatmullRomVertexData( gas, primitiveIndex, gasSbtIndex, 0.0f, controlPoints );
+
+    CubicInterpolator interpolator;
+    interpolator.initializeFromCatrom(controlPoints);
+
     float3              hitPoint = getHitPoint();
     // interpolators work in object space
     hitPoint            = optixTransformPointFromWorldToObjectSpace( hitPoint );
@@ -133,8 +158,8 @@ static __forceinline__ __device__ float3 shade( const whitted::HitGroupData* hit
             {
                 const float tmin     = 0.001f;           // TODO
                 const float tmax     = L_dist - 0.001f;  // TODO
-                const bool  occluded = whitted::traceOcclusion( whitted::params.handle, hitPoint, L, tmin, tmax );
-                if( !occluded )
+                const float attenuation = whitted::traceOcclusion( whitted::params.handle, hitPoint, L, tmin, tmax );
+                if( attenuation > 0.f )
                 {
                     const float3 F     = whitted::schlick( spec_color, V_dot_H );
                     const float  G_vis = whitted::vis( N_dot_L, N_dot_V, alpha );
@@ -143,7 +168,7 @@ static __forceinline__ __device__ float3 shade( const whitted::HitGroupData* hit
                     const float3 diff = ( 1.0f - F ) * diff_color / M_PIf;
                     const float3 spec = F * G_vis * D;
 
-                    result += light.point.color * light.point.intensity * N_dot_L * ( diff + spec );
+                    result += light.point.color * attenuation * light.point.intensity * N_dot_L * ( diff + spec );
                 }
             }
         }
@@ -180,6 +205,9 @@ static __forceinline__ __device__ float3 computeNormal( OptixPrimitiveType type,
     break;
   case OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BSPLINE:
         return  normalCubic( primitiveIndex );
+    break;
+  case OPTIX_PRIMITIVE_TYPE_ROUND_CATMULLROM:
+        return  normalCatrom( primitiveIndex );
     break;
   }
   return make_float3(0.0f);

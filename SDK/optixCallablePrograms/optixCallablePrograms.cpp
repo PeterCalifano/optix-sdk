@@ -262,14 +262,15 @@ void initLaunchParams( CallableProgramsState& state )
     state.params.handle = state.gas_handle;
 }
 
-static void sphere_bound( float3 center, float radius, float result[6] )
+inline OptixAabb sphere_bound( float3 center, float radius )
 {
-    OptixAabb* aabb = reinterpret_cast<OptixAabb*>( result );
-
     float3 m_min = center - radius;
     float3 m_max = center + radius;
 
-    *aabb = {m_min.x, m_min.y, m_min.z, m_max.x, m_max.y, m_max.z};
+    return {
+        m_min.x, m_min.y, m_min.z,
+        m_max.x, m_max.y, m_max.z
+    };
 }
 
 static void buildGas( const CallableProgramsState&  state,
@@ -325,10 +326,8 @@ void createGeometry( CallableProgramsState& state )
     //
 
     // Load AABB into device memory
-    OptixAabb   aabb;
+    OptixAabb   aabb = sphere_bound( g_sphere.center, g_sphere.radius );
     CUdeviceptr d_aabb;
-
-    sphere_bound( g_sphere.center, g_sphere.radius, reinterpret_cast<float*>( &aabb ) );
 
     CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_aabb ), sizeof( OptixAabb ) ) );
     CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( d_aabb ), &aabb, sizeof( OptixAabb ), cudaMemcpyHostToDevice ) );
@@ -366,6 +365,10 @@ void createGeometry( CallableProgramsState& state )
 void createModules( CallableProgramsState& state )
 {
     OptixModuleCompileOptions module_compile_options = {};
+#if !defined( NDEBUG )
+    module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
+    module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+#endif
 
     char   log[2048];
     size_t sizeof_log = sizeof( log );

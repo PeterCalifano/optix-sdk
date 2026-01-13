@@ -69,18 +69,18 @@ static __forceinline__ __device__ float3 traceCamera(
             r, g, b );
 
     return make_float3(
-            __int_as_float( r ),
-            __int_as_float( g ),
-            __int_as_float( b )
+            __uint_as_float( r ),
+            __uint_as_float( g ),
+            __uint_as_float( b )
             );
 }
 
 
 static __forceinline__ __device__ void setPayload( float3 p )
 {
-    optixSetPayload_0( float_as_int( p.x ) );
-    optixSetPayload_1( float_as_int( p.y ) );
-    optixSetPayload_2( float_as_int( p.z ) );
+    optixSetPayload_0( __float_as_uint( p.x ) );
+    optixSetPayload_1( __float_as_uint( p.y ) );
+    optixSetPayload_2( __float_as_uint( p.z ) );
 }
 
 //------------------------------------------------------------------------------
@@ -164,9 +164,9 @@ extern "C" __global__ void __intersection__sphere()
         const float        root11        = 0.0f;
         const float3       shading_normal = ( O + ( root1 + root11 ) * D ) / radius;
         unsigned int p0, p1, p2;
-        p0 = float_as_int( shading_normal.x );
-        p1 = float_as_int( shading_normal.y );
-        p2 = float_as_int( shading_normal.z );
+        p0 = __float_as_uint( shading_normal.x );
+        p1 = __float_as_uint( shading_normal.y );
+        p2 = __float_as_uint( shading_normal.z );
 
         optixReportIntersection(
                 root1,      // t hit

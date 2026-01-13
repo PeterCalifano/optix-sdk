@@ -89,6 +89,14 @@ class AsyncItemPool
             return &m_items[m_nextItem++];
         }
 
+        if( oldestFreedItemAvailable() )
+        {
+            FreedItem freedItem = m_freedItems.front();
+            m_freedItems.pop_front();
+            getEventPool( freedItem.deviceIndex )->free( freedItem.event );
+            return freedItem.item;
+        }
+
         // Wait for an item to be freed (until the pool is shut down).
         m_freedItemAvailable.wait( lock, [this] { return !m_freedItems.empty() || m_isShutDown; } );
         if( m_isShutDown )
@@ -183,6 +191,11 @@ class AsyncItemPool
             m_eventPools[deviceIndex].reset( new EventPool( deviceIndex, m_capacity ) );
         }
         return m_eventPools[deviceIndex].get();
+    }
+
+    bool oldestFreedItemAvailable() 
+    {
+        return !m_freedItems.empty() && ( cudaEventQuery( m_freedItems.front().event ) == cudaSuccess );
     }
 };
 

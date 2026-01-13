@@ -60,7 +60,7 @@ void makeHairGAS( HairState* pState )
     // Use default options for simplicity.  In a real use case we would want to
     // enable compaction, etc
     OptixAccelBuildOptions accelBuildOptions = {};
-    accelBuildOptions.buildFlags             = OPTIX_BUILD_FLAG_ALLOW_COMPACTION | OPTIX_BUILD_FLAG_ALLOW_RANDOM_VERTEX_ACCESS;
+    accelBuildOptions.buildFlags             = pState->buildFlags;
     accelBuildOptions.operation              = OPTIX_BUILD_OPERATION_BUILD;
     CUdeviceptr devicePoints                 = 0;
     CUdeviceptr deviceWidths                 = 0;
@@ -88,8 +88,11 @@ void makeHairGAS( HairState* pState )
         case Hair::CUBIC_BSPLINE:
             buildInput.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BSPLINE;
             break;
+        case Hair::CATROM_SPLINE:
+            buildInput.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_CATMULLROM;
+            break;
         default:
-            SUTIL_ASSERT_MSG( false, "Invalid spline mode" );
+            SUTIL_ASSERT_FAIL_MSG( "Invalid spline mode" );
     }
     buildInput.curveArray.numPrimitives        = numberOfHairSegments;
     buildInput.curveArray.vertexBuffers        = &devicePoints;
@@ -306,7 +309,8 @@ OptixPipelineCompileOptions defaultPipelineCompileOptions( HairState* pState )
 void makeProgramGroups( HairState* pState )
 {
     delete( pState->pProgramGroups );
-    pState->pProgramGroups = new HairProgramGroups( pState->context, defaultPipelineCompileOptions( pState ) );
+    pState->pProgramGroups = new HairProgramGroups( pState->context, defaultPipelineCompileOptions( pState ),
+                                                    pState->buildFlags );
     // Miss program groups
     OptixProgramGroupDesc programGroupDesc  = {};
     programGroupDesc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
@@ -358,8 +362,11 @@ std::vector<HitRecord> hairSbtHitRecords( HairState* pState, const ProgramGroups
         case Hair::CUBIC_BSPLINE:
             hitGroupRecord.data.geometry_data.type = GeometryData::CUBIC_CURVE_ARRAY;
             break;
+        case Hair::CATROM_SPLINE:
+            hitGroupRecord.data.geometry_data.type = GeometryData::CATROM_CURVE_ARRAY;
+            break;
         default:
-            SUTIL_ASSERT_MSG( false, "Invalid spline mode." );
+            SUTIL_ASSERT_FAIL_MSG( "Invalid spline mode." );
     }
 
     CUdeviceptr strandUs = 0;
@@ -454,7 +461,7 @@ void makePipeline( HairState* pState )
     OptixPipelineCompileOptions pipelineCompileOptions = defaultPipelineCompileOptions( pState );
     OptixPipelineLinkOptions    pipelineLinkOptions    = {};
     pipelineLinkOptions.maxTraceDepth                  = max_trace_depth;
-    pipelineLinkOptions.debugLevel                     = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+    pipelineLinkOptions.debugLevel                     = OPTIX_COMPILE_DEBUG_LEVEL_NONE;
     OPTIX_CHECK_LOG2( optixPipelineCreate( pState->context,
                                            &pipelineCompileOptions,
                                            &pipelineLinkOptions,
@@ -582,6 +589,7 @@ void printKeyboardCommands()
                  "  '1' linear b-spline interpretation of the geometry.\n"
                  "  '2' quadratic b-spline interpretation of the geometry.\n"
                  "  '3' cubic b-spline interpretation of the geometry.\n"
+                 "  '4' Catmull-Rom spline interpretation of the geometry.\n"
                  "  's' \"segment u\": lerp from red to green via  segment u,\n"
                  "      i.e. each segment starts green and ends red.\n"
                  "  'r' \"root-to-tip u\": lerp red to green with root-to-tip u,\n"
@@ -603,9 +611,25 @@ void printUsageAndExit( const char* argv0 )
     std::cerr << "         --dim=<width>x<height>      Set image dimensions; defaults to 1024x768\n";
     std::cerr << "         --hair <model.hair>         Specify the hair model; defaults to \"Hair/wStraight.hair\"\n";
     std::cerr << "         --deg=<1|2|3>               Specify the curve degree; defaults to 3\n";
+    std::cerr << "         --catrom                    Catmul-Rom spline for curve specification (forces deg = 3)\n";
     std::cerr << "         --help | -h                 Print this usage message\n\n\n";
     printKeyboardCommands();
     exit( 0 );
+}
+
+void cleanupState( HairState* pState )
+{
+    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( pState->deviceBufferHairGAS ) ) );
+    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( pState->SBT.raygenRecord ) ) );
+    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( pState->SBT.missRecordBase ) ) );
+    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( pState->SBT.hitgroupRecordBase ) ) );
+    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( pState->params.lights.data ) ) );
+    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( pState->deviceParams ) ) );
+    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( pState->curves.strand_u.data ) ) );
+    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( pState->curves.strand_i.data ) ) );
+    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( pState->curves.strand_info.data ) ) );
+    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( pState->deviceBufferIAS ) ) );
+    OPTIX_CHECK( optixDeviceContextDestroy( pState->context ) );
 }
 
 //
@@ -620,7 +644,8 @@ int main( int argc, char* argv[] )
     std::vector<int> image_size( 2 );
     image_size[0]           = 1024;
     image_size[1]           = 786;
-    int         curveDegree = 3;
+    int curveDegree         = 3;
+    bool catrom             = false;
     std::string outputFile;
 
     //
@@ -654,7 +679,18 @@ int main( int argc, char* argv[] )
         {
             const std::string deg_arg = arg.substr( 6 );
             curveDegree               = atoi( deg_arg.c_str() );
-            std::cerr << "curveDegree = " << curveDegree << std::endl;
+            if (catrom && curveDegree != 3) {
+                std::cerr << "Warning: --deg=" << curveDegree << " incompatible with --catrom mode. Forcing degree = 3." << std::endl;
+                curveDegree = 3;
+            }
+        }
+        else if( arg == "--catrom" )
+        {
+            catrom = true;
+            if (curveDegree != 3) {
+                std::cerr << "Warning: --deg=" << curveDegree << " incompatible with --catrom mode. Forcing degree = 3." << std::endl;
+                curveDegree = 3;
+            }
         }
         else
         {
@@ -681,14 +717,16 @@ int main( int argc, char* argv[] )
         state.outputBuffer.resize( state.width, state.height );
         state.accumBuffer.resize( state.width, state.height );
 
-        if( 1 == curveDegree )
+        if( catrom )
+            hair.setSplineMode( Hair::CATROM_SPLINE );
+        else if( 1 == curveDegree )
             hair.setSplineMode( Hair::LINEAR_BSPLINE );
         else if( 2 == curveDegree )
             hair.setSplineMode( Hair::QUADRATIC_BSPLINE );
         else if( 3 == curveDegree )
             hair.setSplineMode( Hair::CUBIC_BSPLINE );
         else
-            SUTIL_ASSERT_MSG( false, "Invalid curve degree" );
+            SUTIL_ASSERT_FAIL_MSG( "Curve type unspecified" );
         std::cout << hair << std::endl;
         state.pHair = &hair;
 
@@ -717,6 +755,8 @@ int main( int argc, char* argv[] )
             WindowRenderer renderer( &state );
             renderer.run();
         }
+
+        cleanupState( &state );
     }
     catch( std::exception& e )
     {

@@ -96,7 +96,10 @@ static __forceinline__ __device__ void traceRadiance(
         whitted::PayloadRadiance*   payload
         )
 {
-    unsigned int u0=0, u1=0, u2=0, u3=0;
+    unsigned int u0 = 0; // output only
+    unsigned int u1 = 0; // output only
+    unsigned int u2 = 0; // output only
+    unsigned int u3 = payload->depth;
     optixTrace(
             handle,
             ray_origin, ray_direction,
@@ -104,21 +107,24 @@ static __forceinline__ __device__ void traceRadiance(
             tmax,
             0.0f,                     // rayTime
             OptixVisibilityMask( 1 ),
-            OPTIX_RAY_FLAG_NONE,
+            OPTIX_RAY_FLAG_CULL_BACK_FACING_TRIANGLES,
             whitted::RAY_TYPE_RADIANCE,        // SBT offset
             whitted::RAY_TYPE_COUNT,           // SBT stride
             whitted::RAY_TYPE_RADIANCE,        // missSBTIndex
             u0, u1, u2, u3 );
 
-     payload->result.x = __int_as_float( u0 );
-     payload->result.y = __int_as_float( u1 );
-     payload->result.z = __int_as_float( u2 );
-     payload->depth    = u3;
+     payload->result.x = __uint_as_float( u0 );
+     payload->result.y = __uint_as_float( u1 );
+     payload->result.z = __uint_as_float( u2 );
+     payload->depth    = 0; // input only
 }
 
+__forceinline__ __device__ unsigned int getPayloadDepth()
+{
+    return optixGetPayload_3();
+}
 
-
-static __forceinline__ __device__ bool traceOcclusion(
+static __forceinline__ __device__ float traceOcclusion(
         OptixTraversableHandle handle,
         float3                 ray_origin,
         float3                 ray_direction,
@@ -126,7 +132,7 @@ static __forceinline__ __device__ bool traceOcclusion(
         float                  tmax
         )
 {
-    unsigned int occluded = 0u;
+    unsigned int u0 = __float_as_uint(1.f);
     optixTrace(
             handle,
             ray_origin,
@@ -139,22 +145,26 @@ static __forceinline__ __device__ bool traceOcclusion(
             whitted::RAY_TYPE_OCCLUSION,      // SBT offset
             whitted::RAY_TYPE_COUNT,          // SBT stride
             whitted::RAY_TYPE_OCCLUSION,      // missSBTIndex
-            occluded );
-    return occluded;
+            u0);
+    return __uint_as_float( u0 );
 }
 
 
 __forceinline__ __device__ void setPayloadResult( float3 p )
 {
-    optixSetPayload_0( float_as_int( p.x ) );
-    optixSetPayload_1( float_as_int( p.y ) );
-    optixSetPayload_2( float_as_int( p.z ) );
+    optixSetPayload_0( __float_as_uint( p.x ) );
+    optixSetPayload_1( __float_as_uint( p.y ) );
+    optixSetPayload_2( __float_as_uint( p.z ) );
 }
 
-
-__forceinline__ __device__ void setPayloadOcclusion( bool occluded )
+__forceinline__ __device__ float getPayloadOcclusion()
 {
-    optixSetPayload_0( static_cast<unsigned int>( occluded ) );
+    return __uint_as_float( optixGetPayload_0() );
+}
+
+__forceinline__ __device__ void setPayloadOcclusion( float attenuation )
+{
+    optixSetPayload_0( __float_as_uint( attenuation ) );
 }
 
 } // namespace whitted

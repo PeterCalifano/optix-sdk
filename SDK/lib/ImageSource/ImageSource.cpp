@@ -25,24 +25,29 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
-#pragma once
 
-#include <cuda.h>
+#include <ImageSource/ImageSource.h>
 
-namespace imageReader {
+#include <cstddef>  // for size_t
 
-/// Image info, including dimensions and format.
-struct TextureInfo
+namespace imageSource {
+
+void MipTailImageSource::readMipTail( char*        dest,
+                                      unsigned int mipTailFirstLevel,
+                                      unsigned int numMipLevels,
+                                      const uint2* mipLevelDims,
+                                      unsigned int pixelSizeInBytes,
+                                      CUstream     stream )
 {
-    unsigned int   width;
-    unsigned int   height;
-    CUarray_format format;
-    unsigned int   numChannels;
-    unsigned int   numMipLevels;
-};
+    size_t offset = 0;
+    for( unsigned int mipLevel = mipTailFirstLevel; mipLevel < numMipLevels; ++mipLevel )
+    {
+        const uint2 levelDims = mipLevelDims[mipLevel];
+        readMipLevel( dest + offset, mipLevel, levelDims.x, levelDims.y, stream );
 
-/// Get the channel size in bytes.
-unsigned int getBytesPerChannel( const CUarray_format format );
+        // Increment offset.
+        offset += levelDims.x * levelDims.y * pixelSizeInBytes;
+    }
+}
 
-
-}  // namespace imageReader
+}  // namespace imageSource

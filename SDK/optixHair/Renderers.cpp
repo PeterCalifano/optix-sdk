@@ -266,6 +266,19 @@ void WindowRenderer::keyCallback( GLFWwindow* window, int32_t key, int32_t /*sca
                 std::cout << "Switched to cubic b-spline geometry." << std::endl;
             }
             break;
+            case GLFW_KEY_4:
+            {
+                pState->pHair->setSplineMode( Hair::CATROM_SPLINE );
+                makeHairGAS( pState );
+                makeInstanceAccelerationStructure( pState );
+                pState->params.handle = pState->hIAS;
+                makeProgramGroups( pState );
+                makePipeline( pState );
+                makeSBT( pState );
+                pState->params.subframe_index = 0u;
+                std::cout << "Switched to Catmull-Rom geometry." << std::endl;
+            }
+            break;
             case GLFW_KEY_S:
             {
                 pState->pHair->setShadeMode( Hair::SEGMENT_U );

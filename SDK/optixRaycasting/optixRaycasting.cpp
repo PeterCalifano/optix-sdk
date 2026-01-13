@@ -83,7 +83,6 @@ void printUsageAndExit( const char* argv0 )
               << "Options:\n"
               << "  -h | --help                           Print this usage message\n"
               << "  -f | --file  <prefix>                 Prefix of output file\n"
-              << "       --mask  <mask.ppm>               Mask texture\n"
               << "  -m | --model <model.gltf>             Model to be rendered\n"
               << "  -w | --width <number>                 Output image width\n"
               << std::endl;
@@ -98,10 +97,13 @@ void createModule( RaycastingState& state )
     size_t sizeof_log = sizeof( log );
 
     OptixModuleCompileOptions module_compile_options = {};
-    module_compile_options.maxRegisterCount          = OPTIX_COMPILE_DEFAULT_MAX_REGISTER_COUNT;
-
+#if !defined( NDEBUG )
+    module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
+    module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+#else
     module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_DEFAULT;
     module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_MINIMAL;
+#endif
 
     state.pipeline_compile_options.usesMotionBlur        = false;
     state.pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING;
@@ -116,7 +118,7 @@ void createModule( RaycastingState& state )
                                                input, inputSize, log, &sizeof_log, &state.ptx_module ) );
 }
 
-void createProgramGroups( RaycastingState& state, bool enableAnyHit )
+void createProgramGroups( RaycastingState& state )
 {
     char   log[2048];
     size_t sizeof_log = sizeof( log );
@@ -143,11 +145,8 @@ void createProgramGroups( RaycastingState& state, bool enableAnyHit )
 
     OptixProgramGroupDesc hit_prog_group_desc = {};
     hit_prog_group_desc.kind                  = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-    if( enableAnyHit )
-    {
-        hit_prog_group_desc.hitgroup.moduleAH            = state.ptx_module;
-        hit_prog_group_desc.hitgroup.entryFunctionNameAH = "__anyhit__texture_mask";
-    }
+    hit_prog_group_desc.hitgroup.moduleAH            = state.ptx_module;
+    hit_prog_group_desc.hitgroup.entryFunctionNameAH = "__anyhit__texture_mask";
     hit_prog_group_desc.hitgroup.moduleCH            = state.ptx_module;
     hit_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__buffer_hit";
     OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context, &hit_prog_group_desc,
@@ -200,7 +199,7 @@ void createPipelines( RaycastingState& state )
 }
 
 
-void createSBT( RaycastingState& state, const std::string& maskfile )
+void createSBT( RaycastingState& state )
 {
     // raygen
     CUdeviceptr  d_raygen_record    = 0;
@@ -220,13 +219,6 @@ void createSBT( RaycastingState& state, const std::string& maskfile )
     OPTIX_CHECK( optixSbtRecordPackHeader( state.miss_prog_group, &ms_record ) );
     CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( d_miss_record ), &ms_record, miss_record_size, cudaMemcpyHostToDevice ) );
 
-    // load the mask (if there is one)
-    if( !maskfile.empty() )
-    {
-        std::cerr << "Loading mask: " << maskfile << std::endl;
-        state.mask = sutil::loadTexture( maskfile.c_str(), make_float3( 1.0f ) );
-    }
-
     // hit group
     std::vector<HitGroupRecord> hitgroup_records;
     for( const auto mesh : state.scene.meshes() )
@@ -238,12 +230,10 @@ void createSBT( RaycastingState& state, const std::string& maskfile )
             rec.data.geometry_data.type                    = GeometryData::TRIANGLE_MESH;
             rec.data.geometry_data.triangle_mesh.positions = mesh->positions[i];
             rec.data.geometry_data.triangle_mesh.normals   = mesh->normals[i];
-            rec.data.geometry_data.triangle_mesh.texcoords = mesh->texcoords[i];
+            for( size_t j = 0; j < GeometryData::num_textcoords; ++j )
+                rec.data.geometry_data.triangle_mesh.texcoords[j] = mesh->texcoords[j][i];
             rec.data.geometry_data.triangle_mesh.indices   = mesh->indices[i];
-
-            rec.data.material_data.pbr                = MaterialData::Pbr();
-            rec.data.material_data.pbr.base_color_tex = state.mask.texture;
-
+            rec.data.material_data                         = state.scene.materials()[mesh->material_idx[i]];
             hitgroup_records.push_back( rec );
         }
     }
@@ -269,8 +259,8 @@ void bufferRays( RaycastingState& state )
     // Create CUDA buffers for rays and hits
     sutil::Aabb aabb = state.scene.aabb();
     aabb.invalidate();
-    for( const auto mesh : state.scene.meshes() )
-        aabb.include( mesh->world_aabb );
+    for( const auto instance : state.scene.instances() )
+        aabb.include( instance->world_aabb );
     const float3 bbox_span = aabb.extent();
     state.height           = static_cast<int>( state.width * bbox_span.y / bbox_span.x );
 
@@ -385,7 +375,7 @@ void cleanup( RaycastingState& state )
 
 int main( int argc, char** argv )
 {
-    std::string     infile, outfile, maskfile;
+    std::string     infile, outfile;
     RaycastingState state;
     state.width = 640;
 
@@ -400,10 +390,6 @@ int main( int argc, char** argv )
         else if( ( arg == "-f" || arg == "--file" ) && i + 1 < argc )
         {
             outfile = argv[++i];
-        }
-        else if( ( arg == "--mask" ) && i + 1 < argc )
-        {
-            maskfile = argv[++i];
         }
         else if( ( arg == "-m" || arg == "--model" ) && i + 1 < argc )
         {
@@ -423,13 +409,8 @@ int main( int argc, char** argv )
     // Set default scene if user did not specify scene
     if( infile.empty() )
     {
-        std::cerr << "No model specified, using default model (Duck.gltf)" << std::endl;
-        infile = sutil::sampleDataFilePath( "Duck/Duck.gltf" );
-
-        if( maskfile.empty() )
-        {
-            maskfile = sutil::sampleDataFilePath( "Duck/DuckMask.ppm" );
-        }
+        std::cerr << "No model specified, using default model (DuckHole.gltf)" << std::endl;
+        infile = sutil::sampleDataFilePath( "Duck/DuckHole.gltf" );
     }
 
     // Set default output file prefix
@@ -444,16 +425,15 @@ int main( int argc, char** argv )
         sutil::loadScene( infile.c_str(), state.scene );
         state.scene.createContext();
 
-        uint32_t triangle_input_flags = maskfile.empty() ? OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT : OPTIX_GEOMETRY_FLAG_NONE;
-        state.scene.buildMeshAccels( triangle_input_flags );
+        state.scene.buildMeshAccels();
         state.scene.buildInstanceAccel( RAY_TYPE_COUNT );
         state.context = state.scene.context();
 
         OPTIX_CHECK( optixInit() );  // Need to initialize function table
         createModule( state );
-        createProgramGroups( state, triangle_input_flags != OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT );
+        createProgramGroups( state );
         createPipelines( state );
-        createSBT( state, maskfile );
+        createSBT( state );
 
         bufferRays( state );
         launch( state );

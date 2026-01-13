@@ -278,20 +278,19 @@ void initLaunchParams( WhittedState& state )
     state.params.handle = state.gas_handle;
 }
 
-static void sphere_bound(float3 center, float radius, float result[6])
+inline OptixAabb sphere_bound( float3 center, float radius )
 {
-    OptixAabb *aabb = reinterpret_cast<OptixAabb*>(result);
-
     float3 m_min = center - radius;
     float3 m_max = center + radius;
 
-    *aabb = {
+    return {
         m_min.x, m_min.y, m_min.z,
         m_max.x, m_max.y, m_max.z
     };
 }
 
-static void parallelogram_bound(float3 v1, float3 v2, float3 anchor, float result[6])
+
+inline OptixAabb parallelogram_bound( float3 v1, float3 v2, float3 anchor )
 {
     // v1 and v2 are scaled by 1./length^2.  Rescale back to normal for the bounds computation.
     const float3 tv1  = v1 / dot( v1, v1 );
@@ -301,11 +300,9 @@ static void parallelogram_bound(float3 v1, float3 v2, float3 anchor, float resul
     const float3 p10  = anchor + tv2;
     const float3 p11  = anchor + tv1 + tv2;
 
-    OptixAabb* aabb = reinterpret_cast<OptixAabb*>(result);
-
     float3 m_min = fminf( fminf( p00, p01 ), fminf( p10, p11 ));
     float3 m_max = fmaxf( fmaxf( p00, p01 ), fmaxf( p10, p11 ));
-    *aabb = {
+    return {
         m_min.x, m_min.y, m_min.z,
         m_max.x, m_max.y, m_max.z
     };
@@ -386,18 +383,10 @@ void createGeometry( WhittedState &state )
     //
 
     // Load AABB into device memory
-    OptixAabb   aabb[OBJ_COUNT];
+    OptixAabb   aabb[OBJ_COUNT] = { sphere_bound( g_sphere.center, g_sphere.radius ),
+                                  sphere_bound( g_sphere_shell.center, g_sphere_shell.radius2 ),
+                                  parallelogram_bound( g_floor.v1, g_floor.v2, g_floor.anchor ) };
     CUdeviceptr d_aabb;
-
-    sphere_bound(
-        g_sphere.center, g_sphere.radius,
-        reinterpret_cast<float*>(&aabb[0]));
-    sphere_bound(
-        g_sphere_shell.center, g_sphere_shell.radius2,
-        reinterpret_cast<float*>(&aabb[1]));
-    parallelogram_bound(
-        g_floor.v1, g_floor.v2, g_floor.anchor,
-        reinterpret_cast<float*>(&aabb[2]));
 
     CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_aabb
         ), OBJ_COUNT * sizeof( OptixAabb ) ) );
@@ -454,11 +443,16 @@ void createGeometry( WhittedState &state )
         state.d_gas_output_buffer);
 
     CUDA_CHECK( cudaFree( (void*)d_aabb) );
+    CUDA_CHECK( cudaFree( reinterpret_cast<void*>(d_sbt_index) ) );
 }
 
 void createModules( WhittedState &state )
 {
     OptixModuleCompileOptions module_compile_options = {};
+#if !defined( NDEBUG )
+    module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
+    module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+#endif
 
     char log[2048];
     size_t sizeof_log = sizeof(log);

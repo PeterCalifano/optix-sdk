@@ -31,10 +31,12 @@
 /// \file EXRReader.h
 /// OpenEXR image reader.
 
-#include <ImageReader/ImageReader.h>
-#include <ImageReader/TextureInfo.h>
+#include <ImageSource/ImageSource.h>
+#include <ImageSource/TextureInfo.h>
 
 #include <ImfFrameBuffer.h>
+#include <ImfHeader.h>
+#include <ImfInputFile.h>
 #include <ImfTiledInputFile.h>
 
 #include <iosfwd>
@@ -43,10 +45,10 @@
 #include <string>
 #include <vector>
 
-namespace imageReader {
+namespace imageSource {
 
 /// OpenEXR image reader.
-class EXRReader : public MipTailImageReader
+class EXRReader : public MipTailImageSource
 {
   public:
     /// The constructor copies the given filename.  The file is not opened until open() is called.
@@ -59,21 +61,36 @@ class EXRReader : public MipTailImageReader
     /// Destructor
     ~EXRReader() override { close(); }
 
-    /// Open the image and read header info, including dimensions and format.  Returns false on error.
-    bool open( TextureInfo* info ) override;
+    /// Open the image and read header info, including dimensions and format.  Throws an exception on error.
+    void open( TextureInfo* info ) override;
 
     /// Close the image.
     void close() override;
 
+    /// Check if image is currently open.
+    bool isOpen() const override { return static_cast<bool>( m_inputFile ) || static_cast<bool>( m_tiledInputFile ); }
+
     /// Get the image info.  Valid only after calling open().
-    const TextureInfo& getInfo() override { return m_info; }
+    /// The caller should check the isValid struct member to determine
+    /// if it contains valid information or not.
+    const TextureInfo& getInfo() const override { return m_info;  }
+
+    /// Return the mode in which the image fills part of itself
+    virtual CUmemorytype getFillType() const override { return CU_MEMORYTYPE_HOST; }
 
     /// Read the specified tile or mip level, returning the data in dest.  dest must be large enough
     /// to hold the tile.  Pixels outside the bounds of the mip level will be filled in with black.
-    bool readTile( char* dest, unsigned int mipLevel, unsigned int tileX, unsigned int tileY, unsigned int tileWidth, unsigned int tileHeight ) override;
+    /// Throws an exception on error.
+    void readTile( char*        dest,
+                   unsigned int mipLevel,
+                   unsigned int tileX,
+                   unsigned int tileY,
+                   unsigned int tileWidth,
+                   unsigned int tileHeight,
+                   CUstream     stream = 0 ) override;
 
-    /// Read the specified mipLevel.  Returns true for success.
-    bool readMipLevel( char* dest, unsigned int mipLevel, unsigned int expectedWidth, unsigned int expectedHeight ) override;
+    /// Read the specified mipLevel.  Throws an exception on error.
+    void readMipLevel( char* dest, unsigned int mipLevel, unsigned int expectedWidth, unsigned int expectedHeight, CUstream stream = 0 ) override;
 
     /// Read the base color of the image (1x1 mip level) as an array of floats. Returns true on success.
     virtual bool readBaseColor( float4& dest ) override;
@@ -108,12 +125,15 @@ class EXRReader : public MipTailImageReader
     /// Serialize the image filename (etc.) to the give stream.
     void serialize( std::ostream& stream ) const;
 
-    /// Deserialize an EXRReader.  Called from ImageReader::deserialize.
-    static std::shared_ptr<ImageReader> deserialize( std::istream& stream );
+    /// Deserialize an EXRReader.  Called from ImageSource::deserialize.
+    static std::shared_ptr<ImageSource> deserialize( std::istream& stream );
 
   private:
+    std::string                          m_firstChannelName = { "R" };
     std::string                          m_filename;
-    std::unique_ptr<Imf::TiledInputFile> m_inputFile;
+    std::unique_ptr<Imf::TiledInputFile> m_tiledInputFile;
+    std::unique_ptr<Imf::InputFile>      m_inputFile;
+
     TextureInfo                          m_info{};
     Imf::PixelType                       m_pixelType = Imf::NUM_PIXELTYPES;
     unsigned int                         m_tileWidth{};
@@ -128,6 +148,7 @@ class EXRReader : public MipTailImageReader
 
     void setupFrameBuffer( Imf::FrameBuffer& frameBuffer, char* base, size_t xStride, size_t yStride );
     void readActualTile( char* dest, unsigned int rowPitch, unsigned int mipLevel, unsigned int tileX, unsigned int tileY );
+    void readScanlineData( char* dest );
 };
 
-}  // namespace imageReader
+}  // namespace imageSource

@@ -30,8 +30,8 @@
 /// @author NVIDIA Corporation
 /// @brief  OptiX public API header
 
-#ifndef optix_denoiser_opticalflow_cuh
-#define optix_denoiser_opticalflow_cuh
+#ifndef optix_denoiser_opticalflow_h
+#define optix_denoiser_opticalflow_h
 
 #ifndef _WIN32
 #include <dlfcn.h>
@@ -48,12 +48,11 @@
 #include <cuda_fp16.h>
 #include <string>
 
-static inline unsigned int divUp( unsigned int nominator, unsigned int denominator )
-{
-    return ( nominator + denominator - 1 ) / denominator;
-}
+extern OptixResult convertRGBA( unsigned char* result, const OptixImage2D& input, uint32_t inStrideXInBytes, CUstream stream );
+extern OptixResult convertFlow( OptixImage2D& result, const int16_t* flow, uint32_t outStrideXInBytes, CUstream stream );
+extern OptixResult runOpticalFlow( CUcontext ctx, CUstream stream, OptixImage2D & flow, OptixImage2D input[2], float & flowTime, std::string & errMessage );
 
-static inline __device__ __host__ unsigned int getNumChannels( const OptixImage2D& image )
+static inline unsigned int getNumChannels( const OptixImage2D& image )
 {
     switch( image.format )
     {
@@ -72,85 +71,12 @@ static inline __device__ __host__ unsigned int getNumChannels( const OptixImage2
         case OPTIX_PIXEL_FORMAT_HALF4:
         case OPTIX_PIXEL_FORMAT_FLOAT4:
             return 4;
+
+        // internal format, not used in this sample
+        case OPTIX_PIXEL_FORMAT_INTERNAL_GUIDE_LAYER:
+            return 0;
     }
     return 0;
-}
-
-struct floatRdAccess
-{
-    inline floatRdAccess( const OptixImage2D& im )
-        : image( im )
-        , psb( im.pixelStrideInBytes )
-        , hf( image.format == OPTIX_PIXEL_FORMAT_HALF2 || image.format == OPTIX_PIXEL_FORMAT_HALF3 || image.format == OPTIX_PIXEL_FORMAT_HALF4 )
-    {
-        if( im.pixelStrideInBytes == 0 )
-        {
-            unsigned int dsize = hf ? sizeof( __half ) : sizeof( float );
-            psb                = getNumChannels( im ) * dsize;
-        }
-    }
-    inline __device__ float read( int x, int y, int c ) const
-    {
-        if( hf )
-            return float( *(const __half*)( image.data + y * image.rowStrideInBytes + x * psb + c * sizeof( __half ) ) );
-        else
-            return float( *(const float*)( image.data + y * image.rowStrideInBytes + x * psb + c * sizeof( float ) ) );
-    }
-    OptixImage2D image;
-    unsigned int psb;
-    bool         hf;
-};
-
-struct floatWrAccess
-{
-    inline floatWrAccess( const OptixImage2D& im )
-        : image( im )
-        , psb( im.pixelStrideInBytes )
-        , hf( image.format == OPTIX_PIXEL_FORMAT_HALF2 || image.format == OPTIX_PIXEL_FORMAT_HALF3 || image.format == OPTIX_PIXEL_FORMAT_HALF4 )
-    {
-        if( im.pixelStrideInBytes == 0 )
-        {
-            unsigned int dsize = hf ? sizeof( __half ) : sizeof( float );
-            psb                = getNumChannels( im ) * dsize;
-        }
-    }
-    inline __device__ void write( int x, int y, int c, float value )
-    {
-        if( hf )
-            *(__half*)( image.data + y * image.rowStrideInBytes + x * psb + c * sizeof( __half ) ) = value;
-        else
-            *(float*)( image.data + y * image.rowStrideInBytes + x * psb + c * sizeof( float ) ) = value;
-    }
-    OptixImage2D image;
-    unsigned int psb;
-    bool         hf;
-};
-
-static __global__ void k_convertRGBA( unsigned char* result, floatRdAccess input, int outStrideX )
-{
-    const int x = blockIdx.x * blockDim.x + threadIdx.x;
-    const int y = blockIdx.y * blockDim.y + threadIdx.y;
-
-    if( x >= input.image.width || y >= input.image.height )
-        return;
-
-    unsigned int r = __saturatef( input.read( x, y, 0 ) ) * 255.f;
-    unsigned int g = __saturatef( input.read( x, y, 1 ) ) * 255.f;
-    unsigned int b = __saturatef( input.read( x, y, 2 ) ) * 255.f;
-
-    *(unsigned int*)&result[y * outStrideX + x * 4] = b | ( g << 8 ) | ( r << 16 ) | ( 255u << 24 );
-}
-
-static __global__ void k_convertFlow( floatWrAccess result, const int16_t* input, int inStrideX )
-{
-    const int x = blockIdx.x * blockDim.x + threadIdx.x;
-    const int y = blockIdx.y * blockDim.y + threadIdx.y;
-
-    if( x >= result.image.width || y >= result.image.height )
-        return;
-
-    result.write( x, y, 0, float( input[y * inStrideX + x * 2 + 0] ) * ( 1.f / 32.f ) );
-    result.write( x, y, 1, float( input[y * inStrideX + x * 2 + 1] ) * ( 1.f / 32.f ) );
 }
 
 class OptixUtilOpticalFlow
@@ -280,22 +206,16 @@ class OptixUtilOpticalFlow
     /// \param[in] input      array of two images
     OptixResult computeFlow( OptixImage2D& flow, const OptixImage2D* input )
     {
-        dim3 block( 32, 32, 1 );
-        dim3 grid = dim3( divUp( m_width, block.x ), divUp( m_height, block.y ), 1 );
-
         // convert float/fp16 RGB input to 4x8 bit ABGR
-        for( int i = 0; i < 2; i++ )
-        {
-            if( input[i].width != m_width || input[i].height != m_height ||
-                !( getNumChannels( input[i] ) == 3 || getNumChannels( input[i] ) == 4 ) )
-                return OPTIX_ERROR_INVALID_VALUE;
-            k_convertRGBA<<<grid, block, 0, m_stream>>>( (unsigned char*)m_devPtr[i], floatRdAccess( input[i] ), m_inStrideXInBytes );
-        }
+        if( OptixResult res = convertRGBA( (unsigned char*)m_devPtr[0], input[0], m_inStrideXInBytes, m_stream ) )
+            return res;
+        if( OptixResult res = convertRGBA( (unsigned char*)m_devPtr[1], input[1], m_inStrideXInBytes, m_stream ) )
+            return res;
 
         NV_OF_EXECUTE_INPUT_PARAMS execInParams = {};
         execInParams.inputFrame                 = m_gpuBufferIn[0];
         execInParams.referenceFrame             = m_gpuBufferIn[1];
-        execInParams.disableTemporalHints       = NV_OF_TRUE;
+        execInParams.disableTemporalHints       = NV_OF_FALSE;
 
         NV_OF_EXECUTE_OUTPUT_PARAMS execOutParams = {};
         execOutParams.outputBuffer                = m_gpuBufferOut;
@@ -307,23 +227,21 @@ class OptixUtilOpticalFlow
             return OPTIX_ERROR_INVALID_VALUE;
 
         // convert 2x16 bit fixpoint to 2xfp16/2xfp32 bit flow vectors
-        k_convertFlow<<<grid, block, 0, m_stream>>>( floatWrAccess( flow ), (int16_t*)m_devPtrOut,
-                                                     m_outStrideXInBytes / sizeof( short ) );
+        if( OptixResult res = convertFlow( flow, (const int16_t*)m_devPtrOut, m_outStrideXInBytes / sizeof( short ), m_stream ) )
+            return res;
 
         return OPTIX_SUCCESS;
     }
 
-    void getLastError( std::string & message )
+    std::string getLastError()
     {
+        std::string message;
         if( m_ofh == nullptr )
-        {
-            message = std::string( "Class not initialized" );
-            return;
-        }
+            return std::string( "Class not initialized" );
         char lastError[MIN_ERROR_STRING_SIZE];
         uint32_t eSize = MIN_ERROR_STRING_SIZE;
         m_ofl.nvOFGetLastError( m_ofh, lastError, &eSize );
-        message = std::string( lastError );
+        return std::string( lastError );
     }
 
   private:

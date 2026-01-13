@@ -26,14 +26,16 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#include <ImageReader/EXRReader.h>
+#include <ImageSource/EXRReader.h>
 
 #include "Exception.h"
 #include "Stopwatch.h"
 
 #include <cuda_runtime.h>
 
+#include <half.h>
 #include <ImfChannelList.h>
+#include <ImfInputFile.h>
 #include <ImfTiledInputFile.h>
 
 #include <algorithm>
@@ -44,7 +46,7 @@
 using namespace Imf;
 using namespace Imath;
 
-namespace imageReader {
+namespace imageSource {
 
 CUarray_format pixelTypeToArrayFormat( PixelType type )
 {
@@ -62,42 +64,58 @@ CUarray_format pixelTypeToArrayFormat( PixelType type )
     }
 }
 
-// Open the image and read header info, including dimensions and format.  Returns false on error.
-bool EXRReader::open( TextureInfo* info )
+// Open the image and read header info, including dimensions and format. Throws an exception on error.
+void EXRReader::open( TextureInfo* info )
 {
     {
         Stopwatch stopwatch;
         std::unique_lock<std::mutex> lock( m_mutex );
 
         // Check to see if the image is already open
-        if( m_info.width == 0 && m_info.height == 0 )
+        if( !m_inputFile && !m_tiledInputFile )
         {
-            // Open input file.
-            DEMAND_ASSERT( !m_inputFile );
-            m_inputFile.reset( new TiledInputFile( m_filename.c_str() ) );
+            m_info.isValid = false;
+
+            // Open input file. May throw.
+            m_inputFile.reset( new InputFile( m_filename.c_str() ) );
+
+            if( m_inputFile->header().hasTileDescription() )
+            {
+                m_tiledInputFile.reset( new TiledInputFile( m_filename.c_str() ) );
+
+                // Note that non-power-of-two EXR files often have one fewer miplevel than one would expect
+                // (they don't round up from 1+log2(max(width/height))).
+                DEMAND_ASSERT( m_tiledInputFile->numLevels() != 0 );
+                m_info.numMipLevels = m_tiledInputFile->numLevels();
+                m_tileWidth         = m_tiledInputFile->tileXSize();
+                m_tileHeight        = m_tiledInputFile->tileYSize();
+                m_info.isTiled      = true;
+            }
+            else
+            {
+                m_info.numMipLevels = 1;
+                m_info.isTiled      = false;
+            }
 
             // Get the width and height from the data window of the finest mipLevel.
-            const Box2i dw = m_inputFile->dataWindowForLevel( 0, 0 );
+            const Box2i dw = m_inputFile->header().dataWindow();
             m_info.width   = dw.max.x - dw.min.x + 1;
             m_info.height  = dw.max.y - dw.min.y + 1;
 
-            // Note that non-power-of-two EXR files often have one fewer miplevel than one would expect
-            // (they don't round up from 1+log2(max(width/height))).
-            DEMAND_ASSERT( m_inputFile->numLevels() != 0 );
-            m_info.numMipLevels = m_inputFile->numLevels();
-
-            m_tileWidth  = m_inputFile->tileXSize();
-            m_tileHeight = m_inputFile->tileYSize();
-
             // Get channel info from the header.  Missing channels will be filled with zeros
             // by the FrameBuffer/Slice logic below.
-
             const ChannelList& channels = m_inputFile->header().channels();
 
-            const Channel* R = channels.findChannel( "R" );
+            const Channel* R = channels.findChannel( m_firstChannelName );
             const Channel* G = channels.findChannel( "G" );
             const Channel* B = channels.findChannel( "B" );
             const Channel* A = channels.findChannel( "A" );
+
+            if( !R )
+            {
+                m_firstChannelName = "Y";
+                R = channels.findChannel(m_firstChannelName); // Single channel files may name it 'Y' (for luminance)
+            }
 
             DEMAND_ASSERT_MSG( R, "First channel is missing in EXR file" );
             m_pixelType   = R->type;
@@ -106,32 +124,43 @@ bool EXRReader::open( TextureInfo* info )
             // CUDA textures don't support float3, so we round up to four channels.
             m_info.numChannels = A ? 4 : ( B ? 4 : ( G ? 2 : 1 ) );
 
+            if( m_tiledInputFile && m_inputFile )
+                m_inputFile.reset();
+
             // Read the base color from the file
-            // FIXME: There should be an option to have this available in the metadata, so 
+            // FIXME: There should be an option to have this available in the metadata, so
             // we don't have to read the level.
             if( m_readBaseColor && ( m_info.numMipLevels > 1 || ( m_info.width == 1 && m_info.height == 1 ) ) )
             {
-                char buff[16] = {0};
-                readActualTile( buff, 16, m_info.numMipLevels - 1, 0, 0 );
+                char buff[16] = { 0 };
+
+                // Need to use internal read methods here, because we are already holding a lock on the mutex.
+                if( m_inputFile )
+                    readScanlineData( buff );
+                else
+                    readActualTile( buff, getBytesPerChannel( m_info.format ) * m_info.numChannels, m_info.numMipLevels - 1, 0, 0 );
+
                 if( m_info.format == CU_AD_FORMAT_HALF )
                 {
-                    half* h = reinterpret_cast<half*>( buff );
-                    m_baseColor = float4{ float(h[0]), float(h[1]), float(h[2]), float(h[3]) };
+                    half* h            = reinterpret_cast<half*>( buff );
+                    m_baseColor        = float4{ float( h[0] ), float( h[1] ), float( h[2] ), float( h[3] ) };
                     m_baseColorWasRead = true;
                 }
                 else if( m_info.format == CU_AD_FORMAT_FLOAT )
                 {
-                    float* f = reinterpret_cast<float*>( buff );
-                    m_baseColor = float4{ f[0], f[1], f[2], f[3] };
+                    float* f           = reinterpret_cast<float*>( buff );
+                    m_baseColor        = float4{ f[0], f[1], f[2], f[3] };
                     m_baseColorWasRead = true;
                 }
                 else if( m_info.format == CU_AD_FORMAT_UNSIGNED_INT32 )
                 {
-                    unsigned int* f = reinterpret_cast<unsigned int*>( buff );
-                    m_baseColor = float4{ float(f[0]), float(f[1]), float(f[2]), float(f[3]) };
+                    unsigned int* f    = reinterpret_cast<unsigned int*>( buff );
+                    m_baseColor        = float4{ float( f[0] ), float( f[1] ), float( f[2] ), float( f[3] ) };
                     m_baseColorWasRead = true;
                 }
             }
+
+            m_info.isValid = true;
         }
 
         m_totalReadTime += stopwatch.elapsed();
@@ -139,14 +168,13 @@ bool EXRReader::open( TextureInfo* info )
 
     if( info != nullptr )
         *info = m_info;
-    return true;
 }
 
 // Do the setup work for a FrameBuffer, putting in the slices as needed based on the channelDesc
 void EXRReader::setupFrameBuffer( Imf::FrameBuffer& frameBuffer, char* base, size_t xStride, size_t yStride )
 {
     const unsigned int channelSize = getBytesPerChannel( m_info.format );
-    frameBuffer.insert( "R", Slice( m_pixelType, base, xStride, yStride ) );
+    frameBuffer.insert( m_firstChannelName, Slice( m_pixelType, base, xStride, yStride ) );
     if( m_info.numChannels > 1 )
     {
         frameBuffer.insert( "G", Slice( m_pixelType, &base[1 * channelSize], xStride, yStride ) );
@@ -162,15 +190,19 @@ void EXRReader::setupFrameBuffer( Imf::FrameBuffer& frameBuffer, char* base, siz
 // Close the image.
 void EXRReader::close()
 {
-    m_inputFile.reset();
+    if( m_inputFile )
+        m_inputFile.reset();
+    
+    if( m_tiledInputFile )
+        m_tiledInputFile.reset();
 }
 
 void EXRReader::readActualTile( char* dest, unsigned int rowPitch, unsigned int mipLevel, unsigned int tileX, unsigned int tileY )
 {
-    DEMAND_ASSERT( m_inputFile );
+    DEMAND_ASSERT_MSG( isOpen(), "Attempting to read from image that isn't open." );
+    DEMAND_ASSERT( !m_inputFile );
 
-    // Get the data window for the tile, which reflects whether it's a partial tile.
-    const Box2i dw = m_inputFile->dataWindowForTile( tileX, tileY, mipLevel );
+    const Box2i dw = m_tiledInputFile->dataWindowForTile( tileX, tileY, mipLevel );
 
     // Compute base pointer and strides for frame buffer
     const unsigned int bytesPerPixel = getBytesPerChannel( m_info.format ) * m_info.numChannels;
@@ -178,23 +210,47 @@ void EXRReader::readActualTile( char* dest, unsigned int rowPitch, unsigned int 
     const size_t       yStride       = rowPitch;
     char*              base          = dest - ( ( dw.min.x + dw.min.y * rowPitch / bytesPerPixel ) * bytesPerPixel );
 
-    // Create frame buffer for the tile and read the tile data.
+    // Create frame buffer.
     FrameBuffer frameBuffer;
     setupFrameBuffer( frameBuffer, base, xStride, yStride );
-    m_inputFile->setFrameBuffer( frameBuffer );
-    m_inputFile->readTile( tileX, tileY, mipLevel );
+
+    m_tiledInputFile->setFrameBuffer( frameBuffer );
+    m_tiledInputFile->readTile( tileX, tileY, mipLevel );
 }
 
-bool EXRReader::readTile( char* dest, unsigned int mipLevel, unsigned int tileX, unsigned int tileY, unsigned int tileWidth, unsigned int tileHeight )
+void EXRReader::readScanlineData( char* dest )
+{
+    DEMAND_ASSERT_MSG( isOpen(), "Attempting to read from image that isn't open." );
+    DEMAND_ASSERT( !m_tiledInputFile );
+
+    const Box2i dw = m_inputFile->header().dataWindow();
+
+    // Compute base pointer and strides for frame buffer
+    const unsigned int bytesPerPixel = getBytesPerChannel( m_info.format ) * m_info.numChannels;
+    const size_t       xStride       = bytesPerPixel;
+    const size_t       yStride       = xStride * m_info.width;
+    char*              base          = dest - ( ( dw.min.x + dw.min.y * yStride / bytesPerPixel ) * bytesPerPixel );
+
+    // Create frame buffer.
+    FrameBuffer frameBuffer;
+    setupFrameBuffer( frameBuffer, base, xStride, yStride );
+
+    m_inputFile->setFrameBuffer( frameBuffer );
+    m_inputFile->readPixels( dw.min.y, dw.max.y );
+}
+
+void EXRReader::readTile( char* dest, unsigned int mipLevel, unsigned int tileX, unsigned int tileY, unsigned int tileWidth, unsigned int tileHeight, CUstream stream )
 {
     std::unique_lock<std::mutex> lock( m_mutex );
+    DEMAND_ASSERT_MSG( isOpen(), "Attempting to read from image that isn't open." );
+    DEMAND_ASSERT_MSG( !m_inputFile, "Attempting to read tiled data from scanline image." );
 
     // Stats tracking
     Stopwatch stopwatch;
 
     // We require that the requested tile size is an integer multiple of the EXR tile size.
-    const unsigned int actualTileWidth  = m_inputFile->tileXSize();
-    const unsigned int actualTileHeight = m_inputFile->tileYSize();
+    const unsigned int actualTileWidth  = m_tiledInputFile->tileXSize();
+    const unsigned int actualTileHeight = m_tiledInputFile->tileYSize();
     if( !( actualTileWidth <= tileWidth && tileWidth % actualTileWidth == 0 )
         || !( actualTileHeight <= tileHeight && tileHeight % actualTileHeight == 0 ) )
     {
@@ -203,7 +259,7 @@ bool EXRReader::readTile( char* dest, unsigned int mipLevel, unsigned int tileX,
             << tileWidth << "x" << tileHeight << " (or a whole fraction thereof) for this pixel format";
         throw Exception( str.str().c_str() );
     }
-
+                
     const unsigned int actualTileX    = tileX * tileWidth / actualTileWidth;
     const unsigned int actualTileY    = tileY * tileHeight / actualTileHeight;
     unsigned int       numTilesX      = tileWidth / actualTileWidth;
@@ -213,11 +269,11 @@ bool EXRReader::readTile( char* dest, unsigned int mipLevel, unsigned int tileX,
     const size_t       actualTileSize = actualTileWidth * actualTileHeight * bytesPerPixel;
 
     // Don't request non-existent tiles on the edge of the texture
-    unsigned int levelWidthInActualTiles  = ( m_inputFile->levelWidth( mipLevel ) + actualTileWidth - 1 ) / actualTileWidth;
-    unsigned int levelHeightInActualTiles = ( m_inputFile->levelHeight( mipLevel ) + actualTileHeight - 1 ) / actualTileHeight;
+    unsigned int levelWidthInActualTiles  = ( m_tiledInputFile->levelWidth( mipLevel ) + actualTileWidth - 1 ) / actualTileWidth;
+    unsigned int levelHeightInActualTiles = ( m_tiledInputFile->levelHeight( mipLevel ) + actualTileHeight - 1 ) / actualTileHeight;
     numTilesX                             = std::min( numTilesX, levelWidthInActualTiles - actualTileX );
     numTilesY                             = std::min( numTilesY, levelHeightInActualTiles - actualTileY );
-
+                
     for( unsigned int j = 0; j < numTilesY; ++j )
     {
         for( unsigned int i = 0; i < numTilesX; ++i )
@@ -233,51 +289,67 @@ bool EXRReader::readTile( char* dest, unsigned int mipLevel, unsigned int tileX,
     // Stats tracking
     m_numTilesRead += 1;
     m_totalReadTime += stopwatch.elapsed();
-
-    return true;
 }
 
-bool EXRReader::readMipLevel( char* dest, unsigned int mipLevel, unsigned int expectedWidth, unsigned int expectedHeight )
+void EXRReader::readMipLevel( char* dest, unsigned int mipLevel, unsigned int expectedWidth, unsigned int expectedHeight, CUstream stream )
 {
     std::unique_lock<std::mutex> lock( m_mutex );
-
-    DEMAND_ASSERT( m_inputFile );
+    DEMAND_ASSERT_MSG( isOpen(), "Attempting to read from image that isn't open." );
 
     // Stats tracking
     Stopwatch stopwatch;
+    const Box2i dw = m_tiledInputFile ? m_tiledInputFile->dataWindowForLevel( mipLevel, mipLevel ) : m_inputFile->header().dataWindow();
 
-    // Get miplevel data window offset and dimensions.
-    const Box2i dw    = m_inputFile->dataWindowForLevel( mipLevel, mipLevel );
-    const int   width = dw.max.x - dw.min.x + 1;
-    DEMAND_ASSERT( width == static_cast<int>( expectedWidth ) );
-    DEMAND_ASSERT( ( dw.max.y - dw.min.y + 1 ) == static_cast<int>( expectedHeight ) );
-
-    // Compute base pointer and strides for frame buffer
-    const unsigned int bytesPerPixel = getBytesPerChannel( m_info.format ) * m_info.numChannels;
-    const size_t       xStride       = bytesPerPixel;
-    const size_t       yStride       = width * xStride;
-    char*              base          = dest - ( ( dw.min.x + dw.min.y * width ) * bytesPerPixel );
-
-    // Create frame buffer and read the tiles for the specified mipLevel.
-    FrameBuffer frameBuffer;
-    setupFrameBuffer( frameBuffer, base, xStride, yStride );
-    m_inputFile->setFrameBuffer( frameBuffer );
-    m_inputFile->readTiles( 0, m_inputFile->numXTiles( mipLevel ) - 1, 0, m_inputFile->numYTiles( mipLevel ) - 1, mipLevel, mipLevel );
-
-    // Stats tracking
+    if( m_inputFile )
     {
-        const unsigned int actualTileWidth  = m_inputFile->tileXSize();
-        const unsigned int actualTileHeight = m_inputFile->tileYSize();
-        const size_t       actualTileSize   = actualTileWidth * actualTileHeight * bytesPerPixel;
-        const int          numXTiles        = m_inputFile->numXTiles( mipLevel );
-        const int          numYTiles        = m_inputFile->numYTiles( mipLevel );
+        // Get window offset and dimensions.
+        const int width  = dw.max.x - dw.min.x + 1;
+        const int height = dw.max.y - dw.min.y + 1;
+        DEMAND_ASSERT( width  == static_cast<int>( expectedWidth ) );
+        DEMAND_ASSERT( height == static_cast<int>( expectedHeight ) );
+        DEMAND_ASSERT( mipLevel == 0 );
 
-        m_numTilesRead += numXTiles * numYTiles;
-        m_numBytesRead += numXTiles * numYTiles * actualTileSize;
-        m_totalReadTime += stopwatch.elapsed();
+        readScanlineData( dest );
+                
+        // Stats tracking
+        {
+            m_numTilesRead  += 1;
+            m_numBytesRead  += width * height * getBytesPerChannel(m_info.format) * m_info.numChannels;
+            m_totalReadTime += stopwatch.elapsed();
+        }
     }
+    else
+    {
+        // Get miplevel data window offset and dimensions.
+        const int width = dw.max.x - dw.min.x + 1;
+        DEMAND_ASSERT( width == static_cast<int>( expectedWidth ) );
+        DEMAND_ASSERT( ( dw.max.y - dw.min.y + 1 ) == static_cast<int>( expectedHeight ) );
 
-    return true;
+        // Compute base pointer and strides for frame buffer
+        const unsigned int bytesPerPixel = getBytesPerChannel( m_info.format ) * m_info.numChannels;
+        const size_t       xStride       = bytesPerPixel;
+        const size_t       yStride       = width * xStride;
+        char*              base          = dest - ( ( dw.min.x + dw.min.y * width ) * bytesPerPixel );
+
+        // Create frame buffer and read the tiles for the specified mipLevel.
+        FrameBuffer frameBuffer;
+        setupFrameBuffer( frameBuffer, base, xStride, yStride );
+        m_tiledInputFile->setFrameBuffer( frameBuffer );
+        m_tiledInputFile->readTiles( 0, m_tiledInputFile->numXTiles( mipLevel ) - 1, 0, m_tiledInputFile->numYTiles( mipLevel ) - 1, mipLevel, mipLevel );
+
+        // Stats tracking
+        {
+            const unsigned int actualTileWidth  = m_tiledInputFile->tileXSize();
+            const unsigned int actualTileHeight = m_tiledInputFile->tileYSize();
+            const size_t       actualTileSize   = actualTileWidth * actualTileHeight * bytesPerPixel;
+            const int          numXTiles        = m_tiledInputFile->numXTiles( mipLevel );
+            const int          numYTiles        = m_tiledInputFile->numYTiles( mipLevel );
+
+            m_numTilesRead += numXTiles * numYTiles;
+            m_numBytesRead += numXTiles * numYTiles * actualTileSize;
+            m_totalReadTime += stopwatch.elapsed();
+        }
+    }
 }
 
 bool EXRReader::readBaseColor( float4& dest )
@@ -297,7 +369,7 @@ void EXRReader::serialize( std::ostream& stream ) const
     stream.write( reinterpret_cast<const char*>( &m_readBaseColor ), sizeof( bool ) );
 }
 
-std::shared_ptr<ImageReader> EXRReader::deserialize( std::istream& stream )
+std::shared_ptr<ImageSource> EXRReader::deserialize( std::istream& stream )
 {
     // Deserialize filename, which is preceded by its length.
     size_t length;
@@ -312,8 +384,8 @@ std::shared_ptr<ImageReader> EXRReader::deserialize( std::istream& stream )
     stream.read( reinterpret_cast<char*>( &readBaseColor ), sizeof( bool ) );
 
     // Construct the EXRReader.
-    return std::shared_ptr<ImageReader>( new EXRReader( filename.c_str(), readBaseColor ) );
+    return std::shared_ptr<ImageSource>( new EXRReader( filename.c_str(), readBaseColor ) );
 }
 
 
-}  // namespace imageReader
+}  // namespace imageSource

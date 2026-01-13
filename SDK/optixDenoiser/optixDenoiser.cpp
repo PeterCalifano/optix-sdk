@@ -56,6 +56,9 @@ void printUsageAndExit( const std::string& argv0 )
               << "         -F | --Frames <int-int> first-last frame number in sequence\n"
               << "         -e | --exposure <float> apply exposure on output images\n"
               << "         -t | --tilesize <int> <int> use tiling to save GPU memory\n"
+              << "         -alpha denoise alpha channel (treat as AOV)\n"
+              << "         -alphaFull denoise alpha channel (separate inference pass)\n"
+              << "         -up2 upscale image by factor of 2\n"
               << "         -z apply flow to input images (no denoising), write output\n"
               << "         -k use kernel prediction model even if there are no AOVs\n"
               << "in sequences, first occurrence of '+' characters substring in filenames is replaced by framenumber\n"
@@ -112,6 +115,8 @@ int32_t main( int32_t argc, char** argv )
     float                    exposure   = 0.f;
     int                      firstFrame = -1, lastFrame = -1;
     unsigned int             tileWidth = 0, tileHeight = 0;
+    bool                     upscale2x = false;
+    unsigned int             alphaMode = 0;
 
     for( int32_t i = 1; i < argc - 1; ++i )
     {
@@ -168,6 +173,18 @@ int32_t main( int32_t argc, char** argv )
         {
             applyFlow = true;
         }
+        else if( arg == "-up2" )
+        {
+            upscale2x = true;
+        }
+        else if( arg == "-alpha" )
+        {
+            alphaMode = 1;
+        }
+        else if( arg == "-alphaFull" )
+        {
+            alphaMode = 2;
+        }
         else if( arg == "-F" || arg == "--Frames" )
         {
             if( i == argc - 2 )
@@ -197,6 +214,8 @@ int32_t main( int32_t argc, char** argv )
     sutil::ImageBuffer              albedo = {};
     sutil::ImageBuffer              flow   = {};
     std::vector<sutil::ImageBuffer> aovs;
+
+    unsigned int outScale = upscale2x ? 2 : 1;
 
     try
     {
@@ -292,14 +311,14 @@ int32_t main( int32_t argc, char** argv )
 
             // allocate outputs
             for( size_t i = 0; i < 1 + aovs.size(); i++ )
-                data.outputs.push_back( new float[color.width * color.height * 4] );
+                data.outputs.push_back( new float[outScale * color.width * outScale * color.height * 4] );
 
             std::cout << "Denoising ..." << std::endl;
 
             if( frame == firstFrame )
             {
                 const double t0 = sutil::currentTime();
-                denoiser.init( data, tileWidth, tileHeight, kpMode, temporalMode, applyFlow );
+                denoiser.init( data, tileWidth, tileHeight, kpMode, temporalMode, applyFlow, upscale2x, alphaMode );
                 const double t1 = sutil::currentTime();
                 std::cout << "\tAPI Initialization        :" << std::fixed << std::setw( 8 ) << std::setprecision( 2 )
                           << ( t1 - t0 ) * 1000.0 << " ms" << std::endl;
@@ -331,8 +350,8 @@ int32_t main( int32_t argc, char** argv )
                 for( size_t i = 0; i < 1 + aovs.size(); i++ )
                 {
                     sutil::ImageBuffer output_image;
-                    output_image.width        = color.width;
-                    output_image.height       = color.height;
+                    output_image.width        = outScale * color.width;
+                    output_image.height       = outScale * color.height;
                     output_image.data         = data.outputs[i];
                     output_image.pixel_format = sutil::FLOAT4;
 
@@ -347,7 +366,7 @@ int32_t main( int32_t argc, char** argv )
                     }
                     if( exposure != 0.f )
                     {
-                        for( unsigned int p = 0; p < color.width * color.height; p++ )
+                        for( unsigned int p = 0; p < output_image.width * output_image.height; p++ )
                         {
                             float* f = &( (float*)output_image.data )[p * 4 + 0];
                             f[0] *= std::pow( 2.f, exposure );

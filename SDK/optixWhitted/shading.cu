@@ -39,37 +39,37 @@ __constant__ Params params;
 static __device__ __inline__ RadiancePRD getRadiancePRD()
 {
     RadiancePRD prd;
-    prd.result.x = int_as_float( optixGetPayload_0() );
-    prd.result.y = int_as_float( optixGetPayload_1() );
-    prd.result.z = int_as_float( optixGetPayload_2() );
-    prd.importance = int_as_float( optixGetPayload_3() );
+    prd.result.x = __uint_as_float( optixGetPayload_0() );
+    prd.result.y = __uint_as_float( optixGetPayload_1() );
+    prd.result.z = __uint_as_float( optixGetPayload_2() );
+    prd.importance = __uint_as_float( optixGetPayload_3() );
     prd.depth = optixGetPayload_4();
     return prd;
 }
 
 static __device__ __inline__ void setRadiancePRD( const RadiancePRD &prd )
 {
-    optixSetPayload_0( float_as_int(prd.result.x) );
-    optixSetPayload_1( float_as_int(prd.result.y) );
-    optixSetPayload_2( float_as_int(prd.result.z) );
-    optixSetPayload_3( float_as_int(prd.importance) );
+    optixSetPayload_0( __float_as_uint(prd.result.x) );
+    optixSetPayload_1( __float_as_uint(prd.result.y) );
+    optixSetPayload_2( __float_as_uint(prd.result.z) );
+    optixSetPayload_3( __float_as_uint(prd.importance) );
     optixSetPayload_4( prd.depth );
 }
 
 static __device__ __inline__ OcclusionPRD getOcclusionPRD()
 {
     OcclusionPRD prd;
-    prd.attenuation.x = int_as_float( optixGetPayload_0() );
-    prd.attenuation.y = int_as_float( optixGetPayload_1() );
-    prd.attenuation.z = int_as_float( optixGetPayload_2() );
+    prd.attenuation.x = __uint_as_float( optixGetPayload_0() );
+    prd.attenuation.y = __uint_as_float( optixGetPayload_1() );
+    prd.attenuation.z = __uint_as_float( optixGetPayload_2() );
     return prd;
 }
 
 static __device__ __inline__ void setOcclusionPRD( const OcclusionPRD &prd )
 {
-    optixSetPayload_0( float_as_int(prd.attenuation.x) );
-    optixSetPayload_1( float_as_int(prd.attenuation.y) );
-    optixSetPayload_2( float_as_int(prd.attenuation.z) );
+    optixSetPayload_0( __float_as_uint(prd.attenuation.x) );
+    optixSetPayload_1( __float_as_uint(prd.attenuation.y) );
+    optixSetPayload_2( __float_as_uint(prd.attenuation.z) );
 }
 
 static __device__ __inline__ float3
@@ -96,7 +96,7 @@ traceRadianceRay(
         RAY_TYPE_COUNT,
         RAY_TYPE_RADIANCE,
         float3_as_args(prd.result),
-        /* Can't use float_as_int() because it returns rvalue but payload requires a lvalue */
+        /* Can't use __float_as_uint() because it returns rvalue but payload requires a lvalue */
         reinterpret_cast<unsigned int&>(prd.importance),
         reinterpret_cast<unsigned int&>(prd.depth) );
 
@@ -212,8 +212,8 @@ extern "C" __global__ void __closesthit__checker_radiance()
     float  phong_exp;
 
     float2 texcoord = make_float2(
-        int_as_float( optixGetAttribute_3() ),
-        int_as_float( optixGetAttribute_4() ) );
+        __uint_as_float( optixGetAttribute_3() ),
+        __uint_as_float( optixGetAttribute_4() ) );
     float2 t  = texcoord * checker.inv_checker_size;
     t.x = floorf(t.x);
     t.y = floorf(t.y);
@@ -238,9 +238,9 @@ extern "C" __global__ void __closesthit__checker_radiance()
     }
 
     float3 object_normal = make_float3(
-        int_as_float( optixGetAttribute_0() ),
-        int_as_float( optixGetAttribute_1() ),
-        int_as_float( optixGetAttribute_2() ));
+        __uint_as_float( optixGetAttribute_0() ),
+        __uint_as_float( optixGetAttribute_1() ),
+        __uint_as_float( optixGetAttribute_2() ));
     float3 world_normal = normalize( optixTransformNormalFromObjectToWorldSpace(object_normal) );
     float3 ffnormal  = faceforward( world_normal, -optixGetWorldRayDirection(), world_normal );
     phongShade( Kd, Ka, Ks, Kr, phong_exp, ffnormal );
@@ -252,9 +252,9 @@ extern "C" __global__ void __closesthit__metal_radiance()
     const Phong &phong = sbt_data->shading.metal;
 
     float3 object_normal = make_float3(
-        int_as_float( optixGetAttribute_0() ),
-        int_as_float( optixGetAttribute_1() ),
-        int_as_float( optixGetAttribute_2() ));
+        __uint_as_float( optixGetAttribute_0() ),
+        __uint_as_float( optixGetAttribute_1() ),
+        __uint_as_float( optixGetAttribute_2() ));
 
     float3 world_normal = normalize( optixTransformNormalFromObjectToWorldSpace( object_normal ) );
     float3 ffnormal = faceforward( world_normal, -optixGetWorldRayDirection(), world_normal );
@@ -274,9 +274,9 @@ extern "C" __global__ void __closesthit__glass_radiance()
     RadiancePRD prd_radiance = getRadiancePRD();
 
     float3 object_normal = make_float3(
-        int_as_float( optixGetAttribute_0() ),
-        int_as_float( optixGetAttribute_1() ),
-        int_as_float( optixGetAttribute_2() ));
+        __uint_as_float( optixGetAttribute_0() ),
+        __uint_as_float( optixGetAttribute_1() ),
+        __uint_as_float( optixGetAttribute_2() ));
     object_normal = normalize( object_normal );
 
     // intersection vectors
@@ -383,9 +383,9 @@ extern "C" __global__ void __anyhit__glass_occlusion()
     const Glass &glass = sbt_data->shading.glass;
 
     float3 object_normal = make_float3(
-        int_as_float( optixGetAttribute_0() ),
-        int_as_float( optixGetAttribute_1() ),
-        int_as_float( optixGetAttribute_2() ));
+        __uint_as_float( optixGetAttribute_0() ),
+        __uint_as_float( optixGetAttribute_1() ),
+        __uint_as_float( optixGetAttribute_2() ));
 
     OcclusionPRD shadow_prd = getOcclusionPRD();
 

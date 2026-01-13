@@ -51,7 +51,8 @@ class PinnedMemoryManager
   public:
     /// Construct PinnedMemoryManager, which is sized according to Options::maxPinnedMemory.
     PinnedMemoryManager( const Options& options )
-        : m_pageMappingsContextPool( options.maxActiveStreams, options )
+        // We need two contexts per stream to push page mappings.  See PagingSystem::pushMappings.
+        : m_pageMappingsContextPool( 2 * options.maxActiveStreams, options )
         , m_requestContextPool( options.maxActiveStreams, options )
         , m_mipTailPool( maxMipTailBytes( options ) / sizeof( MipTailBuffer ) )
         , m_samplerPool( maxSamplerBytes( options ) / sizeof( TextureSampler ) )

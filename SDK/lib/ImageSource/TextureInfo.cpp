@@ -1,5 +1,6 @@
+
 //
-// Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -26,30 +27,52 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
+#include "Exception.h"
 
-#pragma once
+#include <cuda.h>
+#include <cuda_fp16.h>
 
-#include <chrono>
+#include <ImageSource/TextureInfo.h>
 
-namespace imageReader {
+namespace imageSource {
 
-class Stopwatch
+unsigned int getBytesPerChannel( const CUarray_format format )
 {
-  public:
-    Stopwatch()
-        : startTime( std::chrono::high_resolution_clock::now() )
+    switch( format )
     {
+        case CU_AD_FORMAT_SIGNED_INT8:
+        case CU_AD_FORMAT_UNSIGNED_INT8:
+            return 1;
+
+        case CU_AD_FORMAT_SIGNED_INT16:
+        case CU_AD_FORMAT_UNSIGNED_INT16:
+            return 2;
+
+        case CU_AD_FORMAT_SIGNED_INT32:
+        case CU_AD_FORMAT_UNSIGNED_INT32:
+            return 4;
+
+        case CU_AD_FORMAT_HALF:
+            return sizeof( half );
+
+        case CU_AD_FORMAT_FLOAT:
+            return sizeof( float );
+
+        default:
+            DEMAND_ASSERT_MSG( false, "Invalid CUDA array format" );
+            return 0;
     }
 
-    /// Returns the time in seconds since the Stopwatch was constructed.
-    double elapsed() const
-    {
-        using namespace std::chrono;
-        return duration_cast<duration<double>>( high_resolution_clock::now() - startTime ).count();
-    }
+    DEMAND_ASSERT_MSG( false, "Invalid CUDA array format" );
+    return 0;
+}
 
-  private:
-    std::chrono::time_point<std::chrono::high_resolution_clock> startTime;
-};
+size_t getTextureSizeInBytes( const TextureInfo& info )
+{
+    size_t texSize = static_cast<size_t>( getBytesPerChannel( info.format ) ) * info.numChannels * info.width * info.height;
+    if( info.numMipLevels > 1 )
+        texSize = texSize * 4ULL / 3ULL;
+    return texSize;
+}
 
-}  // end namespace imageReader
+}  // namespace imageSource

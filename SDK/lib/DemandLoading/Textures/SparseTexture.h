@@ -30,7 +30,7 @@
 #include "Util/Exception.h"
 
 #include <DemandLoading/TextureDescriptor.h>
-#include <ImageReader/TextureInfo.h>
+#include <ImageSource/TextureInfo.h>
 
 #include <vector_types.h>
 
@@ -44,7 +44,7 @@ public:
     SparseArray() = default;
     ~SparseArray();
 
-    void init( unsigned int deviceIndex, const imageReader::TextureInfo& info );
+    void init( unsigned int deviceIndex, const imageSource::TextureInfo& info );
 
     explicit operator CUmipmappedArray() const { return m_array; }
 
@@ -83,7 +83,7 @@ private:
 
     bool                         m_initialized{};
     unsigned int                 m_deviceIndex{};
-    imageReader::TextureInfo     m_info{};
+    imageSource::TextureInfo     m_info{};
     CUmipmappedArray             m_array{};
     CUDA_ARRAY_SPARSE_PROPERTIES m_properties{};
     std::vector<uint2>           m_mipLevelDims;
@@ -104,7 +104,7 @@ class SparseTexture
 
     /// Initialize sparse texture from the given descriptor (which specifies clamping/wrapping and
     /// filtering) and the given texture info (which describes the dimensions, format, etc.)
-    void init( const TextureDescriptor& descriptor, const imageReader::TextureInfo& info );
+    void init( const TextureDescriptor& descriptor, const imageSource::TextureInfo& info );
 
     /// Check whether the texture has been initialized.
     bool isInitialized() const { return m_isInitialized; }
@@ -137,6 +137,7 @@ class SparseTexture
                    unsigned int                 tileX,
                    unsigned int                 tileY,
                    const char*                  tileData,
+                   CUmemorytype                 tileMemoryType,
                    size_t                       tileSize,
                    CUmemGenericAllocationHandle tileHandle,
                    size_t                       tileOffset ) const;
@@ -145,20 +146,35 @@ class SparseTexture
     void unmapTile( CUstream stream, unsigned int mipLevel, unsigned int tileX, unsigned int tileY ) const;
 
     /// Map the given backing storage for mip tail into the sparse texture and fill it with the given data.
-    void fillMipTail( CUstream stream, const char* tileData, size_t tileSize, CUmemGenericAllocationHandle tileHandle, size_t tileOffset ) const;
+    void fillMipTail( CUstream                     stream,
+                      const char*                  mipTailData,
+                      CUmemorytype                 mipTailMemoryType,
+                      size_t                       mipTailSize,
+                      CUmemGenericAllocationHandle tileHandle,
+                      size_t                       tileOffset ) const;
 
     /// Unmap the backing storage for the mip tail
     void unmapMipTail( CUstream stream ) const;
 
+    /// Get total number of unmappings
+    unsigned int getNumUnmappings() const { return m_numUnmappings; }
+
+    /// Get total number of bytes filled
+    size_t getNumBytesFilled() const { return m_numBytesFilled; }
+
   private:
     bool                         m_isInitialized = false;
     unsigned int                 m_deviceIndex;
-    imageReader::TextureInfo     m_info;
+    imageSource::TextureInfo     m_info{};
     SparseArray                  m_array;
     CUtexObject                  m_texture{};
 
     // Get the dimensions of the specified tile, which might be a partial tile.
     uint2 getTileDimensions( unsigned int mipLevel, unsigned int tileX, unsigned int tileY ) const;
+
+    // Stats
+    mutable unsigned int m_numUnmappings = 0;
+    mutable size_t m_numBytesFilled = 0;
 };
 
 }  // namespace demandLoading

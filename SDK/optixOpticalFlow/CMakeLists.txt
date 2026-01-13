@@ -27,7 +27,6 @@ OPTIX_add_sample_executable( optixOpticalFlow target_name
     optixOpticalFlow.cu
     nvOpticalFlowCommon.h
     nvOpticalFlowCuda.h
-    optix_denoiser_opticalflow.cuh
     )
 
 target_link_libraries( ${target_name}

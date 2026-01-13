@@ -36,7 +36,7 @@
 #include <sstream>
 #include <stdexcept>
 
-namespace imageReader {
+namespace imageSource {
 
 class Exception : public std::runtime_error
 {
@@ -130,7 +130,7 @@ inline void checkCudaErrorNoThrow( CUresult result, const char* expr, const char
     }
 }
 
-#define DEMAND_CUDA_CHECK( call ) imageReader::checkCudaError( call, #call, __FILE__, __LINE__ )
-#define DEMAND_CUDA_CHECK_NOTHROW( call ) imageReader::checkCudaErrorNoThrow( call, #call, __FILE__, __LINE__ )
+#define DEMAND_CUDA_CHECK( call ) imageSource::checkCudaError( call, #call, __FILE__, __LINE__ )
+#define DEMAND_CUDA_CHECK_NOTHROW( call ) imageSource::checkCudaErrorNoThrow( call, #call, __FILE__, __LINE__ )
 
-}  // end namespace imageReader
+}  // end namespace imageSource

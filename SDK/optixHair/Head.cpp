@@ -195,6 +195,7 @@ Head::~Head()
 {
 
     CUDA_CHECK_NOTHROW( cudaFree( reinterpret_cast<void*>( m_buffer ) ) );
+    CUDA_CHECK_NOTHROW( cudaFree( reinterpret_cast<void*>( m_deviceBufferGAS ) ) );
 }
 
 void Head::gatherProgramGroups( HairProgramGroups* pProgramGroups ) const

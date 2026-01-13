@@ -98,15 +98,15 @@ extern "C" __global__ void __raygen__pinhole()
 // ----------------------------------------------------------------------------
 extern "C" __global__ void __miss__radiance()
 {
-    optixSetPayload_0( float_as_uint( params.miss_color.x ) );
-    optixSetPayload_1( float_as_uint( params.miss_color.y ) );
-    optixSetPayload_2( float_as_uint( params.miss_color.z ) );
-    optixSetPayload_3( float_as_uint( 1e16 ) ); // report depth (here "infinity")
+    optixSetPayload_0( __float_as_uint( params.miss_color.x ) );
+    optixSetPayload_1( __float_as_uint( params.miss_color.y ) );
+    optixSetPayload_2( __float_as_uint( params.miss_color.z ) );
+    optixSetPayload_3( __float_as_uint( 1e16 ) ); // report depth (here "infinity")
 }
 
 extern "C" __global__ void __miss__occlusion()
 {
-    optixSetPayload_0( float_as_uint( 1.0f ) ); // report transmittance
+    optixSetPayload_0( __float_as_uint( 1.0f ) ); // report transmittance
 }
 
 inline __device__ void transformNormalObjectToWorld(float3 &n)
@@ -194,15 +194,15 @@ extern "C" __global__ void __closesthit__radiance_mesh()
             }
         }
     }
-    optixSetPayload_0( float_as_int( result.x ) );
-    optixSetPayload_1( float_as_int( result.y ) );
-    optixSetPayload_2( float_as_int( result.z ) );
-    optixSetPayload_3( float_as_int( ray_tmax ) ); // report depth
+    optixSetPayload_0( __float_as_uint( result.x ) );
+    optixSetPayload_1( __float_as_uint( result.y ) );
+    optixSetPayload_2( __float_as_uint( result.z ) );
+    optixSetPayload_3( __float_as_uint( ray_tmax ) ); // report depth
 }
 
 extern "C" __global__ void __closesthit__occlusion_mesh()
 {
-    optixSetPayload_0( float_as_uint( 0.0f ) ); // report transmittance, i.e. plane is opaque
+    optixSetPayload_0( __float_as_uint( 0.0f ) ); // report transmittance, i.e. plane is opaque
 }
 
 
@@ -301,7 +301,7 @@ extern "C" __global__ void __intersection__volume()
     if( iRay.intersects( bbox, t0, t1 ) )
     {
         // report the exit point via payload
-        optixSetPayload_0( float_as_uint( t1 ) );
+        optixSetPayload_0( __float_as_uint( t1 ) );
         // report the entry-point as hit-point
         optixReportIntersection( fmaxf( t0, optixGetRayTmin() ), 0 );
     }
@@ -320,7 +320,7 @@ extern "C" __global__ void __closesthit__radiance_volume()
     const float3 ray_dir  = optixGetWorldRayDirection();
 
     const float t0 = optixGetRayTmax();
-    const float t1 = uint_as_float( optixGetPayload_0() );
+    const float t1 = __uint_as_float( optixGetPayload_0() );
 
     // trace a continuation ray
     //
@@ -357,10 +357,10 @@ extern "C" __global__ void __closesthit__radiance_volume()
 
     float3 result = payload.result * transmittance;
 
-    optixSetPayload_0( float_as_int( result.x ) );
-    optixSetPayload_1( float_as_int( result.y ) );
-    optixSetPayload_2( float_as_int( result.z ) );
-    optixSetPayload_3( float_as_int( 0.0f ) );
+    optixSetPayload_0( __float_as_uint( result.x ) );
+    optixSetPayload_1( __float_as_uint( result.y ) );
+    optixSetPayload_2( __float_as_uint( result.z ) );
+    optixSetPayload_3( __float_as_uint( 0.0f ) );
 }
 
 extern "C" __global__ void __closesthit__occlusion_volume()
@@ -374,7 +374,7 @@ extern "C" __global__ void __closesthit__occlusion_volume()
     const float3 ray_dir  = optixGetWorldRayDirection();
 
     const float t0 = optixGetRayTmax();
-    const float t1 = int_as_float( optixGetPayload_0() );
+    const float t1 = __uint_as_float( optixGetPayload_0() );
 
     float transmittance = 1.0f;
 
@@ -404,5 +404,5 @@ extern "C" __global__ void __closesthit__occlusion_volume()
         const float opacity = sbt_data->material_data.volume.opacity;
         transmittance       *= transmittanceHDDA( start, end, acc, opacity );
     }
-    optixSetPayload_0( float_as_uint( transmittance ) );
+    optixSetPayload_0( __float_as_uint( transmittance ) );
 }

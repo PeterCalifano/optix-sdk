@@ -58,11 +58,13 @@ class ProgramGroups
 class HairProgramGroups : public ProgramGroups
 {
   public:
-    HairProgramGroups( const OptixDeviceContext context, OptixPipelineCompileOptions pipeOptions );
+    HairProgramGroups( const OptixDeviceContext context, OptixPipelineCompileOptions pipeOptions,
+                       unsigned int buildFlags );
 
     OptixModule m_shadingModule;
     OptixModule m_whittedModule;
     OptixModule m_quadraticCurveModule;
     OptixModule m_cubicCurveModule;
     OptixModule m_linearCurveModule;
+    OptixModule m_catromCurveModule;
 };

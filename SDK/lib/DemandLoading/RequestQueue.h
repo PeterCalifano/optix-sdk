@@ -63,7 +63,10 @@ class RequestQueue
 {
   public:
     /// Construct request queue.
-    RequestQueue() { }
+    RequestQueue( unsigned int maxQueueSize )
+        : m_maxQueueSize( maxQueueSize )
+    {
+    }
 
     /// Pop a request, waiting if necessary until the queue is non-empty or shut down.  Returns
     /// false if the queue was shut down.
@@ -88,6 +91,7 @@ class RequestQueue
     std::deque<PageRequest> m_requests;
     std::mutex              m_mutex;
     std::condition_variable m_requestAvailable;
+    unsigned int            m_maxQueueSize;
     bool                    m_isShutDown = false;
 };
 

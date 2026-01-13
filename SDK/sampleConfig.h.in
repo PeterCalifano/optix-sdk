@@ -41,3 +41,7 @@
 
 // NVRTC compiler options
 #define CUDA_NVRTC_OPTIONS @CUDA_NVRTC_OPTIONS@
+
+// Indicate what input we are generating
+#cmakedefine01 SAMPLES_INPUT_GENERATE_OPTIXIR
+#cmakedefine01 SAMPLES_INPUT_GENERATE_PTX

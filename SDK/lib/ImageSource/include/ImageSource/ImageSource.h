@@ -28,50 +28,73 @@
 
 #pragma once
 
-/// \file ImageReader.h
+/// \file ImageSource.h
 /// Interface for a mipmapped image.
+
+#include <cuda.h>
 
 #include <cmath>
 #include <vector_types.h>
 
-namespace imageReader {
+namespace imageSource {
 
 struct TextureInfo;
 
 /// Interface for a mipmapped image.
 ///
 /// Any method may be called from multiple threads; the implementation must be threadsafe.
-class ImageReader
+class ImageSource
 {
   public:
     /// The destructor is virtual to ensure that instances of derived classes are properly destroyed.
-    virtual ~ImageReader() = default;
+    virtual ~ImageSource() = default;
 
-    /// Open the image and read header info, including dimensions and format.  Returns false on error.
-    virtual bool open( TextureInfo* info ) = 0;
+    /// Open the image and read header info, including dimensions and format.  Throws an exception on error.
+    virtual void open( TextureInfo* info ) = 0;
 
     /// Close the image.
     virtual void close() = 0;
 
+    /// Check if image is currently open.
+    virtual bool isOpen() const = 0;
+
     /// Get the image info.  Valid only after calling open().
-    virtual const TextureInfo& getInfo() = 0;
+    /// The caller should check the isValid struct member to determine
+    /// if it contains valid information or not.
+    virtual const TextureInfo& getInfo() const = 0;
+
+    /// Return the mode in which the image fills part of itself
+    virtual CUmemorytype getFillType() const = 0;
 
     /// Read the specified tile or mip level, returning the data in dest.
     /// dest must be large enough to hold the tile.  Pixels outside
     /// the bounds of the mip level will be filled in with black.
-    virtual bool readTile( char* dest, unsigned int mipLevel, unsigned int tileX, unsigned int tileY, unsigned int tileWidth, unsigned int tileHeight ) = 0;
+    /// Throws an exception on error.
+    virtual void readTile( char*        dest,
+                           unsigned int mipLevel,
+                           unsigned int tileX,
+                           unsigned int tileY,
+                           unsigned int tileWidth,
+                           unsigned int tileHeight,
+                           CUstream     stream ) = 0;
 
-    /// Read the specified mipLevel.  Returns true for success.
-    virtual bool readMipLevel( char* dest, unsigned int mipLevel, unsigned int expectedWidth, unsigned int expectedHeight ) = 0;
+    /// Read the specified mipLevel. Throws an exception on error.
+    virtual void readMipLevel( char*        dest,
+                               unsigned int mipLevel,
+                               unsigned int expectedWidth,
+                               unsigned int expectedHeight,
+                               CUstream     stream ) = 0;
 
     /// Read the mip tail into the given buffer, starting with the specified level.  An array
     /// containing the expected dimensions of all the miplevels is provided (starting from miplevel
-    /// zero), along with the pixel size.  Returns true for success.
-    virtual bool readMipTail( char*        dest,
+    /// zero), along with the pixel size.
+    /// Throws an exception on error.
+    virtual void readMipTail( char*        dest,
                               unsigned int mipTailFirstLevel,
                               unsigned int numMipLevels,
                               const uint2* mipLevelDims,
-                              unsigned int pixelSizeInBytes ) = 0;
+                              unsigned int pixelSizeInBytes, 
+                              CUstream     stream ) = 0;
 
     /// Read the base color of the image (1x1 mip level) as a float4. Returns true on success.
     virtual bool readBaseColor( float4& dest ) = 0; 
@@ -88,13 +111,18 @@ class ImageReader
     virtual double getTotalReadTime() const { return 0.0; }
 };
 
-/// Abstract base class for ImageReaders that use a common implementation of readMipTail.
-class MipTailImageReader : public ImageReader
+/// Abstract base class for ImageSources that use a common implementation of readMipTail.
+class MipTailImageSource : public ImageSource
 {
   public:
-    virtual ~MipTailImageReader() = default;
+    virtual ~MipTailImageSource() = default;
 
-    bool readMipTail( char* dest, unsigned int mipTailFirstLevel, unsigned int numMipLevels, const uint2* mipLevelDims, unsigned int pixelSizeInBytes ) override;
+    void readMipTail( char*        dest,
+                      unsigned int mipTailFirstLevel,
+                      unsigned int numMipLevels,
+                      const uint2* mipLevelDims,
+                      unsigned int pixelSizeInBytes,
+                      CUstream     stream ) override;
 };
 
 /// @private
@@ -104,4 +132,4 @@ inline unsigned int calculateNumMipLevels( unsigned int width, unsigned int heig
     return 1 + static_cast<unsigned int>( std::log2f( static_cast<float>( dim ) ) );
 }
 
-}  // namespace imageReader
+}  // namespace imageSource

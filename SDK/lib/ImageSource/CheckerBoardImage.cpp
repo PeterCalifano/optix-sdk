@@ -25,7 +25,7 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
-#include <ImageReader/CheckerBoardImage.h>
+#include <ImageSource/CheckerBoardImage.h>
 
 #include "Exception.h"
 
@@ -35,13 +35,18 @@
 
 #include <cuda_runtime.h>  // for make_float4
 
-namespace imageReader {
+namespace imageSource {
 
-CheckerBoardImage::CheckerBoardImage( unsigned int width, unsigned int height, unsigned int squaresPerSide, bool useMipmaps )
+CheckerBoardImage::CheckerBoardImage( unsigned int width, unsigned int height, unsigned int squaresPerSide, bool useMipmaps, bool tiled )
     : m_squaresPerSide( squaresPerSide )
-    , m_info{width, height, CU_AD_FORMAT_FLOAT, /*numChannels=*/4, /*numMipLevels=*/0}
 {
-    m_info.numMipLevels = useMipmaps ? imageReader::calculateNumMipLevels( width, height ) : 1;
+    m_info.width        = width;
+    m_info.height       = height;
+    m_info.format       = CU_AD_FORMAT_FLOAT;
+    m_info.numChannels  = 4;
+    m_info.numMipLevels = useMipmaps ? imageSource::calculateNumMipLevels( width, height ) : 1;
+    m_info.isValid      = true;
+    m_info.isTiled      = tiled;
 
     // Use a different color per miplevel.
     std::vector<float4> colors{
@@ -66,11 +71,10 @@ CheckerBoardImage::CheckerBoardImage( unsigned int width, unsigned int height, u
     m_mipLevelColors.swap( colors );
 }
 
-bool CheckerBoardImage::open( TextureInfo* info )
+void CheckerBoardImage::open( TextureInfo* info )
 {
     if( info != nullptr )
         *info = m_info;
-    return true;
 }
 
 inline bool CheckerBoardImage::isOddChecker( float x, float y, unsigned int squaresPerSide )
@@ -80,10 +84,15 @@ inline bool CheckerBoardImage::isOddChecker( float x, float y, unsigned int squa
     return ( ( cx + cy ) & 1 ) != 0;
 }
 
-bool CheckerBoardImage::readTile( char* dest, unsigned int mipLevel, unsigned int tileX, unsigned int tileY, unsigned int tileWidth, unsigned int tileHeight )
+void CheckerBoardImage::readTile( char*        dest,
+                                  unsigned int mipLevel,
+                                  unsigned int tileX,
+                                  unsigned int tileY,
+                                  unsigned int tileWidth,
+                                  unsigned int tileHeight,
+                                  CUstream     stream )
 {
-    if( mipLevel >= m_info.numMipLevels )
-        return false;
+    DEMAND_ASSERT_MSG( mipLevel < m_info.numMipLevels, "Attempt to read from non-existent mip-level." );
 
     const float4 black = make_float4( 0.f, 0.f, 0.f, 0.f );
     const float4 color = m_mipLevelColors[static_cast<int>( mipLevel % m_mipLevelColors.size() )];
@@ -107,13 +116,11 @@ bool CheckerBoardImage::readTile( char* dest, unsigned int mipLevel, unsigned in
             row[destX] = odd ? black : color;
         }
     }
-    return true;
 }
 
-bool CheckerBoardImage::readMipLevel( char* dest, unsigned int mipLevel, unsigned int width, unsigned int height )
+void CheckerBoardImage::readMipLevel( char* dest, unsigned int mipLevel, unsigned int width, unsigned int height, CUstream stream )
 {
-    if( mipLevel >= m_info.numMipLevels )
-        return false;
+    DEMAND_ASSERT_MSG( mipLevel < m_info.numMipLevels, "Attempt to read from non-existent mip-level." );
 
     const float4 black  = make_float4( 0.f, 0.f, 0.f, 0.f );
     const float4 color  = m_mipLevelColors[static_cast<int>( mipLevel % m_mipLevelColors.size() )];
@@ -132,7 +139,6 @@ bool CheckerBoardImage::readMipLevel( char* dest, unsigned int mipLevel, unsigne
             row[x]    = odd ? black : color;
         }
     }
-    return true;
 }
 
-}  // namespace imageReader
+}  // namespace imageSource

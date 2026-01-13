@@ -28,6 +28,8 @@
 
 #pragma once
 
+#include <cstddef>
+
 /// \file Statistics.h
 /// Demand loading statistics.
 
@@ -39,18 +41,30 @@ struct Statistics
     /// Time in seconds spent processing page requests.
     double requestProcessingTime;
 
-    /// Total number of tiles read by all ImageReaders.
+    /// Total number of tiles read by all ImageSources.
     size_t numTilesRead;
 
-    /// Number of bytes read from disk by all ImageReaders.
+    /// Number of bytes read from disk by all ImageSources.
     size_t numBytesRead;
 
-    /// Total time in seconds spent reading image data by all ImageReaders.  This is
+    /// Number of textures 
+    size_t numTextures;
+
+    /// Number of bytes in all textures, if they were all completely loaded
+    size_t virtualTextureBytes;
+
+    /// Total time in seconds spent reading image data by all ImageSources.  This is
     /// the cumulative time and does not take into account simultaneous reads, e.g. by multiple threads.
     double readTime;
 
     /// Amount of device memory allocated per device.
     size_t memoryUsedPerDevice[16];
+
+    /// Amount of texture image data transferred to each device
+    size_t bytesTransferredPerDevice[16];
+
+    /// Number of tiles evicted by demand loading system
+    unsigned int numEvictionsPerDevice[16];
 };
 
 }  // namespace demandLoading

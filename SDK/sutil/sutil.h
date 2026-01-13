@@ -93,7 +93,7 @@ SUTILAPI Texture loadTexture( const char* filename, float3 default_color, cudaTe
 SUTILAPI void        saveImage( const char* filename, const ImageBuffer& buffer, bool disable_srgb );
 SUTILAPI ImageBuffer loadImage( const char* filename, int32_t force_components = 0 );
 
-SUTILAPI void displayBufferWindow( const char* argv, const ImageBuffer& buffer );
+SUTILAPI void displayBufferWindow( const char* title, const ImageBuffer& buffer );
 
 
 SUTILAPI void        initGL();

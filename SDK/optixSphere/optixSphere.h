@@ -49,3 +49,8 @@ struct MissData
     float r, g, b;
 };
 
+
+struct HitGroupData
+{
+    // No data needed
+};

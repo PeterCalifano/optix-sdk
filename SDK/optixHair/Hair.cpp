@@ -128,6 +128,8 @@ void Hair::gatherProgramGroups( HairProgramGroups* pProgramGroups ) const
         programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_cubicCurveModule;
     else if( LINEAR_BSPLINE == m_splineMode )
         programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_linearCurveModule;
+    else if( CATROM_SPLINE == m_splineMode )
+        programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_catromCurveModule;
     programGroupDesc.hitgroup.entryFunctionNameIS = 0;  // automatically supplied for built-in moduleq
     pProgramGroups->add( programGroupDesc, programName() + "SegmentU" );
 
@@ -144,6 +146,8 @@ void Hair::gatherProgramGroups( HairProgramGroups* pProgramGroups ) const
         programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_cubicCurveModule;
     else if( LINEAR_BSPLINE == m_splineMode )
         programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_linearCurveModule;
+    else if( CATROM_SPLINE == m_splineMode )
+        programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_catromCurveModule;
     programGroupDesc.hitgroup.entryFunctionNameIS = 0;  // automatically supplied for built-in moduleq
     pProgramGroups->add( programGroupDesc, programName() + "StrandU" );
 
@@ -160,6 +164,8 @@ void Hair::gatherProgramGroups( HairProgramGroups* pProgramGroups ) const
         programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_cubicCurveModule;
     else if( LINEAR_BSPLINE == m_splineMode )
         programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_linearCurveModule;
+    else if( CATROM_SPLINE == m_splineMode )
+        programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_catromCurveModule;
     programGroupDesc.hitgroup.entryFunctionNameIS = 0;  // automatically supplied for built-in moduleq
     pProgramGroups->add( programGroupDesc, programName() + "StrandIndex" );
 
@@ -174,6 +180,8 @@ void Hair::gatherProgramGroups( HairProgramGroups* pProgramGroups ) const
         programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_cubicCurveModule;
     else if( LINEAR_BSPLINE == m_splineMode )
         programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_linearCurveModule;
+    else if( CATROM_SPLINE == m_splineMode )
+        programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_catromCurveModule;
     programGroupDesc.hitgroup.entryFunctionNameIS = 0;  // automatically supplied for built-in modul
     pProgramGroups->add( programGroupDesc, "occludeCurve" );
 }
@@ -187,11 +195,11 @@ std::string Hair::programName() const
         return "hitQuadraticCurve";
     case CUBIC_BSPLINE:
         return "hitCubicCurve";
-    default:
-        SUTIL_ASSERT_MSG( false, "Invalid b-spline mode" );
+    case CATROM_SPLINE:
+        return "hitCatromCurve";
     }
 
-    return "";
+    SUTIL_ASSERT_FAIL_MSG( "Invalid b-spline mode" );
 }
 
 std::string Hair::programSuffix() const
@@ -203,11 +211,9 @@ std::string Hair::programSuffix() const
         return "StrandU";
     case STRAND_IDX:
         return "StrandIndex";
-    default:
-        SUTIL_ASSERT_MSG( false, "Invalid hair-shading mode" );
     }
 
-    return "";
+    SUTIL_ASSERT_FAIL_MSG( "Invalid hair-shading mode" );
 }
 
 uint32_t Hair::numberOfStrands() const
@@ -415,8 +421,11 @@ std::ostream& operator<<( std::ostream& o, Hair::SplineMode splineMode )
         case Hair::CUBIC_BSPLINE:
             o <<  "CUBIC_BSPLINE";
             break;
+        case Hair::CATROM_SPLINE:
+            o <<  "CATROM_SPLINE";
+            break;
         default:
-            SUTIL_ASSERT_MSG( false, "Invalid spline mode." );
+            SUTIL_ASSERT_FAIL_MSG( "Invalid spline mode." );
     }
 
     return o;
