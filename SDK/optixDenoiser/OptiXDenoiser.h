@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -221,8 +221,9 @@ void OptiXDenoiser::init( const Data&  data,
         *****/
         {
             OptixDenoiserOptions options = {};
-            options.guideAlbedo = data.albedo ? 1 : 0;
-            options.guideNormal = data.normal ? 1 : 0;
+            options.guideAlbedo  = data.albedo ? 1 : 0;
+            options.guideNormal  = data.normal ? 1 : 0;
+            options.denoiseAlpha = (OptixDenoiserAlphaMode)alphaMode;
 
             OptixDenoiserModelKind modelKind;
             if( upscale2xMode )
@@ -372,7 +373,6 @@ void OptiXDenoiser::init( const Data&  data,
                     ) );
 
 
-        m_params.denoiseAlpha    = (OptixDenoiserAlphaMode)alphaMode;
         m_params.hdrIntensity    = m_intensity;
         m_params.hdrAverageColor = m_avgColor;
         m_params.blendFactor     = 0.0f;

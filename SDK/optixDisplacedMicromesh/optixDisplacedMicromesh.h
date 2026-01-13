@@ -29,8 +29,6 @@
 #pragma once
 
 #include <optix.h>
-#include <sutil/CuBuffer.h>
-#include <sutil/Aabb.h>
 
 struct Globals
 {

@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -807,6 +807,10 @@ void Scene::createContext()
     OptixDeviceContextOptions options = {};
     options.logCallbackFunction       = &context_log_cb;
     options.logCallbackLevel          = 4;
+#ifndef NDEBUG
+    // This may incur significant performance cost and should only be done during development.
+    options.validationMode = OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_ALL;
+#endif
     OPTIX_CHECK( optixDeviceContextCreate( cuCtx, &options, &m_context ) );
 }
 

@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2019, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -535,6 +535,10 @@ void createContext( MotionGeometryState& state )
     OptixDeviceContextOptions options = {};
     options.logCallbackFunction = &context_log_cb;
     options.logCallbackLevel = 4;
+#ifdef DEBUG
+    // This may incur significant performance cost and should only be done during development.
+    options.validationMode = OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_ALL;
+#endif
     OPTIX_CHECK( optixDeviceContextCreate( cu_ctx, &options, &context ) );
 
     state.context = context;
@@ -1302,11 +1306,7 @@ void createModule( MotionGeometryState& state )
     state.pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_ANY;
     state.pipeline_compile_options.numPayloadValues = 5;
     state.pipeline_compile_options.numAttributeValues = 2;
-#ifdef DEBUG // Enables debug exceptions during optix launches. This may incur significant performance cost and should only be done during development.
-    state.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_DEBUG | OPTIX_EXCEPTION_FLAG_TRACE_DEPTH | OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
-#else
     state.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
-#endif
     state.pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
     state.pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_TRIANGLE;
 

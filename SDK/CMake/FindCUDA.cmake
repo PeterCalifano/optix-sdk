@@ -352,7 +352,7 @@
 #   James Bigler, NVIDIA Corp (nvidia.com - jbigler)
 #   Abe Stephens, SCI Institute -- http://www.sci.utah.edu/~abe/FindCuda.html
 #
-#   Copyright (c) 2008 - 2021 NVIDIA Corporation.  All rights reserved.
+#   Copyright (c) 2008 - 2023 NVIDIA Corporation.  All rights reserved.
 #
 #   Copyright (c) 2007-2009
 #   Scientific Computing and Imaging Institute, University of Utah
@@ -525,7 +525,7 @@ option(CUDA_HOST_COMPILATION_CPP "Generated file extension" ON)
 set(CUDA_NVCC_FLAGS "" CACHE STRING "Semi-colon delimit multiple arguments.")
 
 if(CMAKE_GENERATOR MATCHES "Visual Studio")
-  set(_CUDA_MSVC_HOST_COMPILER "$(VCInstallDir)Tools/MSVC/$(VCToolsVersion)/bin/Host$(Platform)/$(PlatformTarget)")
+  set(_CUDA_MSVC_HOST_COMPILER "$(VCInstallDir)Tools/MSVC/$(VCToolsVersion)/bin/Host$(PreferredToolArchitecture)/$(PlatformTarget)")
   if(MSVC_VERSION LESS 1910)
    set(_CUDA_MSVC_HOST_COMPILER "$(VCInstallDir)bin")
   endif()
@@ -2216,7 +2216,7 @@ function(CUDA_BATCH_BUILD_END target)
     list(REMOVE_DUPLICATES cuda_depends)
     add_custom_target( ${cuda_batch_build_target}
       COMMENT "CUDA batch build ${cuda_batch_build_target}..."
-      COMMAND "${PYTHON_EXECUTABLE}" "${BATCH_CMAKE_SCRIPT}" -t ${cuda_batch_build_target} -c ${CUDA_BATCH_BUILD_LOG} -s "\"%24(VCInstallDir)=$(VCInstallDir)\\\"" -s "%24(ConfigurationName)=$(ConfigurationName)" -s "%24(Configuration)=$(Configuration)" -s "%24(VCToolsVersion)=$(VCToolsVersion)" -s "%24(Platform)=$(Platform)" -s "%24(PlatformTarget)=$(PlatformTarget)"   # %24 is the '$' character - needed to escape '$' in VS rule
+      COMMAND "${PYTHON_EXECUTABLE}" "${BATCH_CMAKE_SCRIPT}" -t ${cuda_batch_build_target} -c ${CUDA_BATCH_BUILD_LOG} -s "\"%24(VCInstallDir)=$(VCInstallDir)\\\"" -s "%24(ConfigurationName)=$(ConfigurationName)" -s "%24(Configuration)=$(Configuration)" -s "%24(VCToolsVersion)=$(VCToolsVersion)" -s "%24(PreferredToolArchitecture)=$(PreferredToolArchitecture)" -s "%24(PlatformTarget)=$(PlatformTarget)"   # %24 is the '$' character - needed to escape '$' in VS rule
       DEPENDS ${cuda_depends}
       )    
     add_dependencies( ${target} ${cuda_batch_build_target} )

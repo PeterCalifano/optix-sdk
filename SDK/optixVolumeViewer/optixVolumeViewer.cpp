@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -1196,15 +1196,17 @@ void buildIAS( IAS& ias, int rayTypeCount,
 
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_temp_buffer ) ) );
 
-    // make update temp buffer for ias
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &ias.d_update_buffer ),
-        ias.buffer_sizes.tempUpdateSizeInBytes ) );
 }
 
 
 void updateIAS( IAS& ias, const OptixDeviceContext& context )
 {
     // Rebuild the IAS after scene elements were moved.
+    if( !ias.d_update_buffer )
+    {
+        // make update temp buffer for ias
+        CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &ias.d_update_buffer ), ias.buffer_sizes.tempUpdateSizeInBytes ) );
+    }
 
     OptixAccelBuildOptions accel_options = {};
     accel_options.buildFlags                  = OPTIX_BUILD_FLAG_ALLOW_UPDATE;

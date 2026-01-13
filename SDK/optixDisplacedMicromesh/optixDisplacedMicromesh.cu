@@ -28,7 +28,6 @@
 
 #include <optix.h>
 #include <optix_micromap.h>
-#include <cuda_fp16.h>
 
 #include "optixDisplacedMicromesh.h"
 #include "random.h"

@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -37,11 +37,9 @@ extern "C" {
 __constant__ Params params;
 }
 
-
-
 //------------------------------------------------------------------------------
 //
-//
+// Orthonormal basis helper
 //
 //------------------------------------------------------------------------------
 
@@ -82,7 +80,7 @@ struct Onb
 
 //------------------------------------------------------------------------------
 //
-//
+// Utility functions 
 //
 //------------------------------------------------------------------------------
 
@@ -148,12 +146,6 @@ static __forceinline__ __device__ void storeMissRadiancePRD( RadiancePRD prd )
 }
 
 
-static __forceinline__ __device__ void storeOcclusionPRD( bool occluded )
-{
-    optixSetPayload_0( static_cast<unsigned int>( occluded ) );
-}
-
-
 static __forceinline__ __device__ void cosine_sample_hemisphere(const float u1, const float u2, float3& p)
 {
   // Uniformly sample disk.
@@ -184,20 +176,31 @@ static __forceinline__ __device__ void traceRadiance(
     u3 = prd.seed;
     u4 = prd.depth;
 
-    optixTrace(
-            PAYLOAD_TYPE_RADIANCE,
-            handle,
-            ray_origin,
-            ray_direction,
-            tmin,
-            tmax,
-            0.0f,                // rayTime
-            OptixVisibilityMask( 1 ),
-            OPTIX_RAY_FLAG_NONE,
-            RAY_TYPE_RADIANCE,        // SBT offset
-            RAY_TYPE_COUNT,           // SBT stride
-            RAY_TYPE_RADIANCE,        // missSBTIndex
-            u0, u1, u2, u3, u4, u5, u6, u7, u8, u9, u10, u11, u12, u13, u14, u15, u16, u17 );
+    // Note:
+    // This demonstrates the usage of the OptiX shader execution reordering 
+    // (SER) API.  In the case of this computationally simple shading code, 
+    // there is no real performance benefit.  However, with more complex shaders
+    // the potential performance gains offered by reordering are significant.
+    optixTraverse(
+        PAYLOAD_TYPE_RADIANCE,
+        handle,
+        ray_origin,
+        ray_direction,
+        tmin,
+        tmax,
+        0.0f,                     // rayTime
+        OptixVisibilityMask( 1 ),
+        OPTIX_RAY_FLAG_NONE,
+        0,                        // SBT offset
+        RAY_TYPE_COUNT,           // SBT stride
+        0,                        // missSBTIndex
+        u0, u1, u2, u3, u4, u5, u6, u7, u8, u9, u10, u11, u12, u13, u14, u15, u16, u17 );
+    optixReorder(
+        // Application specific coherence hints could be passed in here
+        );
+
+    optixInvoke( PAYLOAD_TYPE_RADIANCE,
+        u0, u1, u2, u3, u4, u5, u6, u7, u8, u9, u10, u11, u12, u13, u14, u15, u16, u17 );
 
     prd.attenuation = make_float3( __uint_as_float( u0 ), __uint_as_float( u1 ), __uint_as_float( u2 ) );
     prd.seed  = u3;
@@ -211,6 +214,7 @@ static __forceinline__ __device__ void traceRadiance(
 }
 
 
+// Returns true if ray is occluded, else false
 static __forceinline__ __device__ bool traceOcclusion(
         OptixTraversableHandle handle,
         float3                 ray_origin,
@@ -219,28 +223,26 @@ static __forceinline__ __device__ bool traceOcclusion(
         float                  tmax
         )
 {
-    unsigned int occluded = 0u;
-    optixTrace(
-            PAYLOAD_TYPE_OCCLUSION,
-            handle,
-            ray_origin,
-            ray_direction,
-            tmin,
-            tmax,
-            0.0f,                    // rayTime
-            OptixVisibilityMask( 1 ),
-            OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT,
-            RAY_TYPE_OCCLUSION,      // SBT offset
-            RAY_TYPE_COUNT,          // SBT stride
-            RAY_TYPE_OCCLUSION,      // missSBTIndex
-            occluded );
-    return occluded;
+    // We are only casting probe rays so no shader invocation is needed
+    optixTraverse(
+        handle,
+        ray_origin,
+        ray_direction,
+        tmin,
+        tmax, 0.0f,                // rayTime
+        OptixVisibilityMask( 1 ),
+        OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT | OPTIX_RAY_FLAG_DISABLE_ANYHIT,
+        0,                         // SBT offset
+        RAY_TYPE_COUNT,            // SBT stride
+        0                          // missSBTIndex
+        );
+    return optixHitObjectIsHit();
 }
 
 
 //------------------------------------------------------------------------------
 //
-//
+// Programs
 //
 //------------------------------------------------------------------------------
 
@@ -274,23 +276,26 @@ extern "C" __global__ void __raygen__rg()
         RadiancePRD prd;
         prd.attenuation  = make_float3(1.f);
         prd.seed         = seed;
-        prd.depth        = 0;        
+        prd.depth        = 0;
 
         for( ;; )
         {
             traceRadiance(
-                    params.handle,
-                    ray_origin,
-                    ray_direction,
-                    0.01f,  // tmin       // TODO: smarter offset
-                    1e16f,  // tmax
-                    prd );
+                params.handle,
+                ray_origin,
+                ray_direction,
+                0.01f,  // tmin       // TODO: smarter offset
+                1e16f,  // tmax
+                prd );
 
             result += prd.emitted;
             result += prd.radiance * prd.attenuation;
 
-            if( prd.done  || prd.depth >= 3 ) // TODO RR, variable for depth
+            const float p = dot( prd.attenuation, make_float3( 0.30f, 0.59f, 0.11f ) );
+            const bool done = prd.done  || rnd( prd.seed ) > p;
+            if( done )
                 break;
+            prd.attenuation /= p;
 
             ray_origin    = prd.origin;
             ray_direction = prd.direction;
@@ -315,14 +320,6 @@ extern "C" __global__ void __raygen__rg()
 }
 
 
-extern "C" __global__ void __miss__occlusion()
-{
-    optixSetPayloadTypes( PAYLOAD_TYPE_OCCLUSION );
-
-    storeOcclusionPRD( false );
-}
-
-
 extern "C" __global__ void __miss__radiance()
 {
     optixSetPayloadTypes( PAYLOAD_TYPE_RADIANCE );
@@ -335,14 +332,6 @@ extern "C" __global__ void __miss__radiance()
     prd.done      = true;
 
     storeMissRadiancePRD( prd );
-}
-
-
-extern "C" __global__ void __closesthit__occlusion()
-{
-    optixSetPayloadTypes( PAYLOAD_TYPE_OCCLUSION );
-
-    storeOcclusionPRD( true );
 }
 
 
@@ -371,9 +360,7 @@ extern "C" __global__ void __closesthit__radiance()
     else
         prd.emitted = make_float3( 0.0f );
 
-
     unsigned int seed = prd.seed;
-
     {
         const float z1 = rnd(seed);
         const float z2 = rnd(seed);
@@ -404,13 +391,13 @@ extern "C" __global__ void __closesthit__radiance()
     float weight = 0.0f;
     if( nDl > 0.0f && LnDl > 0.0f )
     {
-        const bool occluded = traceOcclusion(
+        const bool occluded =
+            traceOcclusion(
             params.handle,
             P,
             L,
-            0.01f,         // tmin
-            Ldist - 0.01f  // tmax
-            );
+            0.01f,           // tmin
+            Ldist - 0.01f);  // tmax
 
         if( !occluded )
         {

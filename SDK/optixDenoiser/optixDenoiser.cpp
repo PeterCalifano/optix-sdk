@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -59,7 +59,7 @@ void printUsageAndExit( const std::string& argv0 )
               << "         -F | --Frames <int-int> first-last frame number in sequence\n"
               << "         -e | --exposure <float> apply exposure on output images\n"
               << "         -t | --tilesize <int> <int> use tiling to save GPU memory\n"
-              << "         -alpha 0 ( AOV ) | 1 ( separate inference pass )\n"
+              << "         -alpha denoise alpha channel\n"
               << "         -up2 upscale image by factor of 2\n"
               << "         -z apply flow to input images (no denoising), write output\n"
               << "         -k use kernel prediction model even if there are no AOVs\n"
@@ -196,9 +196,7 @@ int32_t main( int32_t argc, char** argv )
         }
         else if( arg == "-alpha" )
         {
-            if( i == argc - 2 )
-                printUsageAndExit( argv[0] );
-            alphaMode = std::atoi( argv[++i] );
+            alphaMode = 1;
         }
         else if( arg == "-F" || arg == "--Frames" )
         {
@@ -223,6 +221,12 @@ int32_t main( int32_t argc, char** argv )
     }
 
     bool temporalMode = bool( firstFrame != -1 );
+
+    if( temporalMode && flow_filename.empty() )
+    {
+        std::cout << "temporal mode enabled, flow filename not specified" << std::endl;
+        exit( 0 );
+    }
 
     sutil::ImageBuffer              color     = {};
     sutil::ImageBuffer              normal    = {};

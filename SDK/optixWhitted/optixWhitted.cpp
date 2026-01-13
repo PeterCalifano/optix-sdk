@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -244,10 +244,13 @@ void printUsageAndExit( const char* argv0 )
 
 void initLaunchParams( WhittedState& state )
 {
+    const size_t accum_buffer_size = state.params.width * state.params.height * sizeof(float4);
     CUDA_CHECK( cudaMalloc(
         reinterpret_cast<void**>( &state.params.accum_buffer ),
-        state.params.width*state.params.height*sizeof(float4)
+        accum_buffer_size
     ) );
+    CUDA_CHECK( cudaMemset( reinterpret_cast<void*>( state.params.accum_buffer ), 0, accum_buffer_size ));
+
     state.params.frame_buffer = nullptr; // Will be set when output buffer is mapped
 
     state.params.subframe_index = 0u;

@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -77,16 +77,16 @@
 # https://devtalk.nvidia.com/default/board/90/
 
 
-# This sets up the name of our project.  For our purposes the main thing this controls is
-# the name of the VS solution file.
-project(OptiX-Samples)
-
 # This enforces a particular version of CMake that we require to process the script files
 # properly.  We rely on VERSION_GREATER_EQUAL which requires CMake v. 3.7.
 cmake_minimum_required(VERSION 3.7 FATAL_ERROR)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# This sets up the name of our project.  For our purposes the main thing this controls is
+# the name of the VS solution file.
+project(OptiX-Samples)
 
 # As of CMake 2.6 policies were introduced in order to provide a mechanism for
 # adding backwards compatibility one feature at a time.  We will just specify

@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -106,11 +106,7 @@ void createModule( RaycastingState& state )
     state.pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING;
     state.pipeline_compile_options.numPayloadValues      = 4;
     state.pipeline_compile_options.numAttributeValues    = 2;
-#if !defined( NDEBUG )  // Enables debug exceptions during optix launches. This may incur significant performance cost and should only be done during development.
-    state.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_DEBUG | OPTIX_EXCEPTION_FLAG_TRACE_DEPTH | OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
-#else
-    state.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
-#endif
+    state.pipeline_compile_options.exceptionFlags        = OPTIX_EXCEPTION_FLAG_NONE;
     state.pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
     size_t      inputSize = 0;

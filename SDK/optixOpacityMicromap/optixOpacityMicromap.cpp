@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -175,7 +175,10 @@ int main( int argc, char* argv[] )
             OptixDeviceContextOptions options = {};
             options.logCallbackFunction       = &context_log_cb;
             options.logCallbackLevel          = 4;
-
+#ifdef DEBUG
+            // This may incur significant performance cost and should only be done during development.
+            options.validationMode = OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_ALL;
+#endif
             // Associate a CUDA context (and therefore a specific GPU) with this
             // device context
             CUcontext cuCtx = 0;  // zero means take the current context
@@ -463,16 +466,7 @@ int main( int argc, char* argv[] )
             pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
             pipeline_compile_options.numPayloadValues      = 4;
             pipeline_compile_options.numAttributeValues    = 2;
-#if !defined( NDEBUG ) 
-            // Enables debug exceptions during optix launches.  This may incur
-            // significant performance cost and should only be done during
-            // development.
-            pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_DEBUG         | 
-                                                      OPTIX_EXCEPTION_FLAG_TRACE_DEPTH   | 
-                                                      OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
-#else
-            pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
-#endif
+            pipeline_compile_options.exceptionFlags        = OPTIX_EXCEPTION_FLAG_NONE;
             pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
             pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_TRIANGLE;
             pipeline_compile_options.allowOpacityMicromaps = true;

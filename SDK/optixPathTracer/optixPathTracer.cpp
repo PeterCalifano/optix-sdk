@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -125,9 +125,7 @@ struct PathTracerState
 
     OptixProgramGroup              raygen_prog_group        = 0;
     OptixProgramGroup              radiance_miss_group      = 0;
-    OptixProgramGroup              occlusion_miss_group     = 0;
     OptixProgramGroup              radiance_hit_group       = 0;
-    OptixProgramGroup              occlusion_hit_group      = 0;
 
     CUstream                       stream                   = 0;
     Params                         params;
@@ -565,6 +563,10 @@ void createContext( PathTracerState& state )
     OptixDeviceContextOptions options = {};
     options.logCallbackFunction       = &context_log_cb;
     options.logCallbackLevel          = 4;
+#ifdef DEBUG
+    // This may incur significant performance cost and should only be done during development.
+    options.validationMode = OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_ALL;
+#endif
     OPTIX_CHECK( optixDeviceContextCreate( cu_ctx, &options, &context ) );
 
     state.context = context;
@@ -683,31 +685,24 @@ void buildMeshAccel( PathTracerState& state )
 
 void createModule( PathTracerState& state )
 {
-    OptixPayloadType payloadTypes[2] = {};
+    OptixPayloadType payloadType = {};
     // radiance prd
-    payloadTypes[0].numPayloadValues = sizeof( radiancePayloadSemantics ) / sizeof( radiancePayloadSemantics[0] );
-    payloadTypes[0].payloadSemantics = radiancePayloadSemantics;
-    // occlusion prd
-    payloadTypes[1].numPayloadValues = sizeof( occlusionPayloadSemantics ) / sizeof( occlusionPayloadSemantics[0] );
-    payloadTypes[1].payloadSemantics = occlusionPayloadSemantics;
+    payloadType.numPayloadValues = sizeof( radiancePayloadSemantics ) / sizeof( radiancePayloadSemantics[0] );
+    payloadType.payloadSemantics = radiancePayloadSemantics;
 
     OptixModuleCompileOptions module_compile_options = {};
 #if !defined( NDEBUG )
     module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
     module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 #endif
-    module_compile_options.numPayloadTypes = 2;
-    module_compile_options.payloadTypes    = payloadTypes;
+    module_compile_options.numPayloadTypes = 1;
+    module_compile_options.payloadTypes    = &payloadType;
 
     state.pipeline_compile_options.usesMotionBlur        = false;
     state.pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
     state.pipeline_compile_options.numPayloadValues      = 0;
     state.pipeline_compile_options.numAttributeValues    = 2;
-#ifdef DEBUG // Enables debug exceptions during optix launches. This may incur significant performance cost and should only be done during development.
-    state.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_DEBUG | OPTIX_EXCEPTION_FLAG_TRACE_DEPTH | OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
-#else
-    state.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
-#endif
+    state.pipeline_compile_options.exceptionFlags        = OPTIX_EXCEPTION_FLAG_NONE;
     state.pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
     size_t      inputSize = 0;
@@ -756,18 +751,6 @@ void createProgramGroups( PathTracerState& state )
                     LOG, &LOG_SIZE,
                     &state.radiance_miss_group
                     ) );
-
-        memset( &miss_prog_group_desc, 0, sizeof( OptixProgramGroupDesc ) );
-        miss_prog_group_desc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
-        miss_prog_group_desc.miss.module            = state.ptx_module;
-        miss_prog_group_desc.miss.entryFunctionName = "__miss__occlusion";
-        OPTIX_CHECK_LOG( optixProgramGroupCreate(
-                    state.context, &miss_prog_group_desc,
-                    1,  // num program groups
-                    &program_group_options,
-                    LOG, &LOG_SIZE,
-                    &state.occlusion_miss_group
-                    ) );
     }
 
     {
@@ -783,19 +766,6 @@ void createProgramGroups( PathTracerState& state )
                     LOG, &LOG_SIZE,
                     &state.radiance_hit_group
                     ) );
-
-        memset( &hit_prog_group_desc, 0, sizeof( OptixProgramGroupDesc ) );
-        hit_prog_group_desc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-        hit_prog_group_desc.hitgroup.moduleCH            = state.ptx_module;
-        hit_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__occlusion";
-        OPTIX_CHECK_LOG( optixProgramGroupCreate(
-                    state.context,
-                    &hit_prog_group_desc,
-                    1,  // num program groups
-                    &program_group_options,
-                    LOG, &LOG_SIZE,
-                    &state.occlusion_hit_group
-                    ) );
     }
 }
 
@@ -806,9 +776,7 @@ void createPipeline( PathTracerState& state )
     {
         state.raygen_prog_group,
         state.radiance_miss_group,
-        state.occlusion_miss_group,
         state.radiance_hit_group,
-        state.occlusion_hit_group
     };
 
     OptixPipelineLinkOptions pipeline_link_options = {};
@@ -829,9 +797,7 @@ void createPipeline( PathTracerState& state )
     OptixStackSizes stack_sizes = {};
     OPTIX_CHECK( optixUtilAccumulateStackSizes( state.raygen_prog_group,    &stack_sizes, state.pipeline ) );
     OPTIX_CHECK( optixUtilAccumulateStackSizes( state.radiance_miss_group,  &stack_sizes, state.pipeline ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.occlusion_miss_group, &stack_sizes, state.pipeline ) );
     OPTIX_CHECK( optixUtilAccumulateStackSizes( state.radiance_hit_group,   &stack_sizes, state.pipeline ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.occlusion_hit_group,  &stack_sizes, state.pipeline ) );
 
     uint32_t max_trace_depth = 2;
     uint32_t max_cc_depth = 0;
@@ -881,11 +847,9 @@ void createSBT( PathTracerState& state )
     const size_t miss_record_size = sizeof( MissRecord );
     CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_miss_records ), miss_record_size * RAY_TYPE_COUNT ) );
 
-    MissRecord ms_sbt[2];
+    MissRecord ms_sbt[1];
     OPTIX_CHECK( optixSbtRecordPackHeader( state.radiance_miss_group,  &ms_sbt[0] ) );
     ms_sbt[0].data.bg_color = make_float4( 0.0f );
-    OPTIX_CHECK( optixSbtRecordPackHeader( state.occlusion_miss_group, &ms_sbt[1] ) );
-    ms_sbt[1].data.bg_color = make_float4( 0.0f );
 
     CUDA_CHECK( cudaMemcpy(
                 reinterpret_cast<void*>( d_miss_records ),
@@ -913,12 +877,8 @@ void createSBT( PathTracerState& state )
             hitgroup_records[sbt_idx].data.vertices       = reinterpret_cast<float4*>( state.d_vertices );
         }
 
-        {
-            const int sbt_idx = i * RAY_TYPE_COUNT + 1;  // SBT for occlusion ray-type for ith material
-            memset( &hitgroup_records[sbt_idx], 0, hitgroup_record_size );
-
-            OPTIX_CHECK( optixSbtRecordPackHeader( state.occlusion_hit_group, &hitgroup_records[sbt_idx] ) );
-        }
+        // Note that we do not need to use any program groups for occlusion
+        // rays as they are traced as 'probe rays' with no shading.
     }
 
     CUDA_CHECK( cudaMemcpy(
@@ -944,8 +904,6 @@ void cleanupState( PathTracerState& state )
     OPTIX_CHECK( optixProgramGroupDestroy( state.raygen_prog_group ) );
     OPTIX_CHECK( optixProgramGroupDestroy( state.radiance_miss_group ) );
     OPTIX_CHECK( optixProgramGroupDestroy( state.radiance_hit_group ) );
-    OPTIX_CHECK( optixProgramGroupDestroy( state.occlusion_hit_group ) );
-    OPTIX_CHECK( optixProgramGroupDestroy( state.occlusion_miss_group ) );
     OPTIX_CHECK( optixModuleDestroy( state.ptx_module ) );
     OPTIX_CHECK( optixDeviceContextDestroy( state.context ) );
 

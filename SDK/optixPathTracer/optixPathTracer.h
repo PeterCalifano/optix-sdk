@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -26,17 +26,11 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-enum RayType
-{
-    RAY_TYPE_RADIANCE  = 0,
-    RAY_TYPE_OCCLUSION = 1,
-    RAY_TYPE_COUNT
-};
+#include <optix.h>
 
+constexpr unsigned int RAY_TYPE_COUNT = 1;
 
-#define PAYLOAD_TYPE_RADIANCE  OPTIX_PAYLOAD_TYPE_ID_0
-#define PAYLOAD_TYPE_OCCLUSION OPTIX_PAYLOAD_TYPE_ID_1
-
+constexpr OptixPayloadTypeID PAYLOAD_TYPE_RADIANCE  = OPTIX_PAYLOAD_TYPE_ID_0;
 
 struct RadiancePRD
 {
@@ -81,13 +75,6 @@ const unsigned int radiancePayloadSemantics[18] =
     OPTIX_PAYLOAD_SEMANTICS_TRACE_CALLER_READ | OPTIX_PAYLOAD_SEMANTICS_CH_WRITE,
     OPTIX_PAYLOAD_SEMANTICS_TRACE_CALLER_READ | OPTIX_PAYLOAD_SEMANTICS_CH_WRITE,
     // RadiancePRD::done
-    OPTIX_PAYLOAD_SEMANTICS_TRACE_CALLER_READ | OPTIX_PAYLOAD_SEMANTICS_CH_WRITE | OPTIX_PAYLOAD_SEMANTICS_MS_WRITE
-};
-
-
-const unsigned int occlusionPayloadSemantics[1]
-{
-    // occlduded
     OPTIX_PAYLOAD_SEMANTICS_TRACE_CALLER_READ | OPTIX_PAYLOAD_SEMANTICS_CH_WRITE | OPTIX_PAYLOAD_SEMANTICS_MS_WRITE
 };
 

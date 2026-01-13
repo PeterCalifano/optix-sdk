@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -228,6 +228,36 @@ struct CubicInterpolator
         cr[1] = ( p[0] * 6.f/6.f )                                                               ;
         cr[2] = ( p[0] * 6.f/6.f ) + ( p[1] * 1.f/6.f ) + ( p[2] * 2.f/6.f ) + ( p[3] * 1.f/6.f );
         cr[3] = ( p[0] * 6.f/6.f )                                           + ( p[3] * 6.f/6.f );
+    }
+
+    __device__ __forceinline__ void initializeFromBezier(const float4* q)
+    {
+        // Bezier-to-Poly = Matrix([[-1,  3, -3, 1],
+        //                          [ 3, -6,  3, 0],
+        //                          [-3,  3,  0, 0],
+        //                          [ 1,  0,  0, 0]])
+        p[0] = q[0] * ( -1.0f ) + q[1] * (  3.0f ) + q[2] * ( -3.0f ) + q[3];
+        p[1] = q[0] * (  3.0f ) + q[1] * ( -6.0f ) + q[2] * (  3.0f );
+        p[2] = q[0] * ( -3.0f ) + q[1] * (  3.0f );
+        p[3] = q[0];
+    }
+
+    __device__ __forceinline__ void export2Bezier(float4 bz[4]) const
+    {
+        // inverse of initializeFromBezier
+        // Bezier-to-Poly = Matrix([[-1,  3, -3, 1],
+        //                          [ 3, -6,  3, 0],
+        //                          [-3,  3,  0, 0],
+        //                          [ 1,  0,  0, 0]])
+        // invert to get:
+        // Poly-to-Bezier = Matrix([[0,   0,   0, 1],
+        //                          [0,   0, 1/3, 1],
+        //                          [0, 1/3, 2/3, 1],
+        //                          [1,   1,   1, 1]])
+        bz[0] =                                              p[3];
+        bz[1] =                           p[2] * (1.f/3.f) + p[3];
+        bz[2] =        p[1] * (1.f/3.f) + p[2] * (2.f/3.f) + p[3];
+        bz[3] = p[0] + p[1]             + p[2]             + p[3];
     }
 
     __device__ __forceinline__ float4 position4( float u ) const

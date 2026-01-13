@@ -26,6 +26,8 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
+#ifndef __CUDACC__
+
 #include <vector>
 
 const unsigned int num_vertices = 470;
@@ -310,6 +312,7 @@ std::vector<unsigned int> indices = {
     463, 464, 465, 466, 467
 };
 
+#endif // ifndef __CUDACC__
 
 struct Params
 {
