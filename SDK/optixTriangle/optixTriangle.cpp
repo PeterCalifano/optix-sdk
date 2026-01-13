@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2019, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -256,15 +256,16 @@ int main( int argc, char* argv[] )
             pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
             pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_TRIANGLE;
 
-            const std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixTriangle.cu" );
+            size_t      inputSize  = 0;
+            const char* input      = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixTriangle.cu", inputSize );
             size_t sizeof_log = sizeof( log );
 
             OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
                         context,
                         &module_compile_options,
                         &pipeline_compile_options,
-                        ptx.c_str(),
-                        ptx.size(),
+                        input,
+                        inputSize,
                         log,
                         &sizeof_log,
                         &module

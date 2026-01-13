@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2019, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -705,7 +705,8 @@ void createModule( DynamicGeometryState& state )
     state.pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
     state.pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_TRIANGLE;
 
-    const std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixDynamicGeometry.cu" );
+    size_t      inputSize = 0;
+    const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixDynamicGeometry.cu", inputSize );
 
     char   log[2048];
     size_t sizeof_log = sizeof( log );
@@ -713,8 +714,8 @@ void createModule( DynamicGeometryState& state )
         state.context,
         &module_compile_options,
         &state.pipeline_compile_options,
-        ptx.c_str(),
-        ptx.size(),
+        input,
+        inputSize,
         log,
         &sizeof_log,
         &state.ptx_module

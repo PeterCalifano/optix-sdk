@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2019, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -28,9 +28,10 @@
 #pragma once
 
 #include <optix.h>
-#include <optixPaging/optixPaging.h>
 
-#include <DemandLoading/DemandTextureContext.h>
+#include <DemandLoading/DeviceContext.h>
+
+#include <cuda_runtime.h>
 
 enum RayType
 {
@@ -60,15 +61,20 @@ struct Params
     float3 V;
     float3 W;
 
+    // Bucket parameters (for tiled rendering)
+    unsigned int bucket_index;
+    unsigned int bucket_width;
+    unsigned int bucket_height;
+
     // Texture data
-    float                               mipLevelBias;
-    demandLoading::DemandTextureContext demandTextureContext;
-    cudaMipmappedArray_t                nonDemandTextureArray;
-    cudaTextureObject_t                 nonDemandTexture;
+    float                        mipLevelBias;
+    demandLoading::DeviceContext demandTextureContext;
+    cudaMipmappedArray_t         nonDemandTextureArray;
+    cudaTextureObject_t          nonDemandTexture;
 
     // Render mode
-    float      diffScale;
-    int        numTextureTaps;
+    float diffScale;
+    int   numTextureTaps;
 };
 
 

@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -38,7 +38,7 @@ namespace demandLoading {
 
 /// If OpenEXR is not available, this test image is used.  It generates a
 /// procedural pattern, rather than loading image data from disk.
-class CheckerBoardImage : public ImageReader
+class CheckerBoardImage : public MipTailImageReader
 {
   public:
     /// Create a test image with the specified dimensions.
@@ -64,6 +64,8 @@ class CheckerBoardImage : public ImageReader
     bool readMipLevel( char* dest, unsigned int mipLevel, unsigned int width, unsigned int height ) override;
 
   private:
+    bool isOddChecker( float x, float y, unsigned int squaresPerSide );
+
     unsigned int        m_squaresPerSide;
     TextureInfo         m_info;
     std::vector<float4> m_mipLevelColors;

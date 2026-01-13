@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -210,7 +210,7 @@ int main( int argc, char* argv[] )
             // Use default options for simplicity.  In a real use case we would want to
             // enable compaction, etc
             OptixAccelBuildOptions accel_options  = {};
-            accel_options.buildFlags              = OPTIX_BUILD_FLAG_NONE;
+            accel_options.buildFlags              = OPTIX_BUILD_FLAG_ALLOW_RANDOM_VERTEX_ACCESS;
             accel_options.operation               = OPTIX_BUILD_OPERATION_BUILD;
             if( motion_blur) {
                 accel_options.motionOptions.numKeys   = NUM_KEYS;
@@ -369,10 +369,11 @@ int main( int argc, char* argv[] )
                     pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CUBIC_BSPLINE;
                     break;
             }
-            const std::string ptx        = sutil::getPtxString( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixCurves.cu" );
-            size_t            sizeof_log = sizeof( log );
+            size_t      inputSize  = 0;
+            const char* input      = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixCurves.cu", inputSize );
+            size_t      sizeof_log = sizeof( log );
             OPTIX_CHECK_LOG( optixModuleCreateFromPTX( context, &module_compile_options, &pipeline_compile_options,
-                                                       ptx.c_str(), ptx.size(), log, &sizeof_log, &shading_module ) );
+                                                       input, inputSize, log, &sizeof_log, &shading_module ) );
 
             OptixBuiltinISOptions builtinISOptions = {};
             switch( degree )

@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2019, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -133,7 +133,7 @@ SUTIL_HOSTDEVICE LocalGeometry getLocalGeometry( const GeometryData& geometry_da
             lgeom.dpdu = ( dv2 * dp1 - dv1 * dp2) * invdet;
             lgeom.dpdv = (-du2 * dp1 + du1 * dp2) * invdet;
             lgeom.dndu = ( dv2 * dn1 - dv1 * dn2) * invdet;
-            lgeom.dndu = (-du2 * dn1 + du1 * dn2) * invdet;
+            lgeom.dndv = (-du2 * dn1 + du1 * dn2) * invdet;
 
 
             break;

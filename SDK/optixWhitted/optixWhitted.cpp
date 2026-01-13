@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2019, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -464,52 +464,56 @@ void createModules( WhittedState &state )
     size_t sizeof_log = sizeof(log);
 
     {
-        const std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "geometry.cu" );
+        size_t      inputSize = 0;
+        const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "geometry.cu", inputSize );
         OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
             state.context,
             &module_compile_options,
             &state.pipeline_compile_options,
-            ptx.c_str(),
-            ptx.size(),
+            input,
+            inputSize,
             log,
             &sizeof_log,
             &state.geometry_module ) );
     }
 
     {
-        const std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "camera.cu" );
+        size_t      inputSize = 0;
+        const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "camera.cu", inputSize );
         OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
             state.context,
             &module_compile_options,
             &state.pipeline_compile_options,
-            ptx.c_str(),
-            ptx.size(),
+            input,
+            inputSize,
             log,
             &sizeof_log,
             &state.camera_module ) );
     }
 
     {
-        const std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "shading.cu" );
+        size_t      inputSize = 0;
+        const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "shading.cu", inputSize );
         OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
             state.context,
             &module_compile_options,
             &state.pipeline_compile_options,
-            ptx.c_str(),
-            ptx.size(),
+            input,
+            inputSize,
             log,
             &sizeof_log,
             &state.shading_module ) );
     }
 
     {
-        const std::string ptx = sutil::getPtxString( nullptr, nullptr, "sphere.cu" );
+        size_t      inputSize = 0;
+        const char* input     = sutil::getInputData( nullptr, nullptr, "sphere.cu", inputSize );
         OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
             state.context,
             &module_compile_options,
             &state.pipeline_compile_options,
-            ptx.c_str(),
-            ptx.size(),
+            input,
+            inputSize,
             log,
             &sizeof_log,
             &state.sphere_module ) );

@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -34,10 +34,20 @@ namespace demandLoading {
 /// TextureDescriptor specifies the address mode (e.g. wrap vs. clamp), filter mode (point vs. linear), etc.
 struct TextureDescriptor
 {
-    CUaddress_mode addressMode[2];
-    CUfilter_mode  filterMode;
-    CUfilter_mode  mipmapFilterMode;
-    unsigned int   maxAnisotropy;
+    /// Address mode (e.g. wrap)
+    CUaddress_mode addressMode[2] = {CU_TR_ADDRESS_MODE_WRAP, CU_TR_ADDRESS_MODE_WRAP};
+
+    /// Filter mode (e.g. linear vs. point)
+    CUfilter_mode filterMode = CU_TR_FILTER_MODE_LINEAR;
+
+    /// Filter mode between miplevels (e.g. linear vs. point)
+    CUfilter_mode mipmapFilterMode = CU_TR_FILTER_MODE_LINEAR;
+
+    /// Maximum anisotropy.   A value of 1 disables anisotropic filtering.
+    unsigned int maxAnisotropy = 16;
+
+    /// CUDA texture flags.  Use 0 to enable trilinear optimization (off by default).
+    unsigned int flags = CU_TRSF_DISABLE_TRILINEAR_OPTIMIZATION;
 };
 
 }  // namespace demandLoading

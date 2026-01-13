@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2019, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -252,6 +252,10 @@ Texture loadTexture( const char* fname, float3 default_color, cudaTextureDesc* t
 ImageBuffer loadImage( const char* fname, int32_t force_components )
 {
     const std::string filename( fname );
+
+    if( !fileExists( fname ) )
+        throw Exception( ( std::string{ "sutil::loadImage(): File does not exist: " } + filename ).c_str() );
+
     if( filename.length() < 5 )
         throw Exception( "sutil::loadImage(): Failed to determine filename extension" );
 
@@ -811,13 +815,12 @@ double currentTime()
 static bool readSourceFile( std::string& str, const std::string& filename )
 {
     // Try to open file
-    std::ifstream file( filename.c_str() );
+    std::ifstream file( filename.c_str(), std::ios::binary );
     if( file.good() )
     {
         // Found usable source file
-        std::stringstream source_buffer;
-        source_buffer << file.rdbuf();
-        str = source_buffer.str();
+        std::vector<unsigned char> buffer = std::vector<unsigned char>( std::istreambuf_iterator<char>( file ), {} );
+        str.assign(buffer.begin(), buffer.end());
         return true;
     }
     return false;
@@ -921,7 +924,7 @@ static void getPtxFromCuString( std::string& ptx, const char* sample_name, const
 
 #else  // CUDA_NVRTC_ENABLED
 
-static std::string samplePTXFilePath( const char* sampleName, const char* fileName )
+static std::string sampleInputFilePath( const char* sampleName, const char* fileName )
 {
     // Allow for overrides.
     static const char* directories[] =
@@ -933,6 +936,15 @@ static std::string samplePTXFilePath( const char* sampleName, const char* fileNa
         "."
     };
 
+    // Allow overriding the file extension
+    std::string extension = ".ptx";
+    if( const char* ext = getenv("OPTIX_SAMPLES_INPUT_EXTENSION") )
+    {
+        extension = ext;
+        if( extension.size() && extension[0] != '.' )
+            extension = "." + extension;
+    }
+    
     if( !sampleName )
         sampleName = "cuda_compile_ptx";
     for( const char* directory : directories )
@@ -944,7 +956,7 @@ static std::string samplePTXFilePath( const char* sampleName, const char* fileNa
             path += sampleName;
             path += "_generated_";
             path += fileName;
-            path += ".ptx";
+            path += extension;
             if( fileExists( path ) )
                 return path;
         }
@@ -957,9 +969,9 @@ static std::string samplePTXFilePath( const char* sampleName, const char* fileNa
     throw Exception( error.c_str() );
 }
 
-static void getPtxStringFromFile( std::string& ptx, const char* sample_name, const char* filename )
+static void getInputDataFromFile( std::string& ptx, const char* sample_name, const char* filename )
 {
-    const std::string sourceFilePath = samplePTXFilePath( sample_name, filename );
+    const std::string sourceFilePath = sampleInputFilePath( sample_name, filename );
 
     // Try to open source PTX file
     if( !readSourceFile( ptx, sourceFilePath ) )
@@ -982,7 +994,7 @@ struct PtxSourceCache
 };
 static PtxSourceCache g_ptxSourceCache;
 
-const char* getPtxString( const char* sample, const char* sampleDir, const char* filename, const char** log )
+const char* getInputData( const char* sample, const char* sampleDir, const char* filename, size_t& dataSize, const char** log )
 {
     if( log )
         *log = NULL;
@@ -999,7 +1011,7 @@ const char* getPtxString( const char* sample, const char* sampleDir, const char*
         getCuStringFromFile( cu, location, sampleDir, filename );
         getPtxFromCuString( *ptx, sample, cu.c_str(), location.c_str(), log );
 #else
-        getPtxStringFromFile( *ptx, sample, filename );
+        getInputDataFromFile( *ptx, sample, filename );
 #endif
         g_ptxSourceCache.map[key] = ptx;
     }
@@ -1007,7 +1019,7 @@ const char* getPtxString( const char* sample, const char* sampleDir, const char*
     {
         ptx = elem->second;
     }
-
+    dataSize = ptx->size();
     return ptx->c_str();
 }
 

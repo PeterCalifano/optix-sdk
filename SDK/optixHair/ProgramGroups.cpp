@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -89,21 +89,22 @@ HairProgramGroups::HairProgramGroups( const OptixDeviceContext context, OptixPip
     //
     const OptixModuleCompileOptions defaultOptions = {};
 
-    std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixHair.cu" );
+    size_t      inputSize = 0;
+    const char* input = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixHair.cu", inputSize );
     OPTIX_CHECK_LOG2( optixModuleCreateFromPTX( context,
                                                 &defaultOptions,
                                                 &pipeOptions,
-                                                ptx.c_str(),
-                                                ptx.size(),
+                                                input,
+                                                inputSize,
                                                 LOG, &LOG_SIZE,
                                                 &m_shadingModule ) );
 
-    ptx = sutil::getPtxString( nullptr, nullptr, "whitted.cu" );
+    input = sutil::getInputData( nullptr, nullptr, "whitted.cu", inputSize );
     OPTIX_CHECK_LOG2( optixModuleCreateFromPTX( context,
                                                 &defaultOptions,
                                                 &pipeOptions,
-                                                ptx.c_str(),
-                                                ptx.size(),
+                                                input,
+                                                inputSize,
                                                 LOG, &LOG_SIZE,
                                                 &m_whittedModule ) );
 

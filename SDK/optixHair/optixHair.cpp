@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -60,7 +60,7 @@ void makeHairGAS( HairState* pState )
     // Use default options for simplicity.  In a real use case we would want to
     // enable compaction, etc
     OptixAccelBuildOptions accelBuildOptions = {};
-    accelBuildOptions.buildFlags             = OPTIX_BUILD_FLAG_NONE;
+    accelBuildOptions.buildFlags             = OPTIX_BUILD_FLAG_ALLOW_COMPACTION | OPTIX_BUILD_FLAG_ALLOW_RANDOM_VERTEX_ACCESS;
     accelBuildOptions.operation              = OPTIX_BUILD_OPERATION_BUILD;
     CUdeviceptr devicePoints                 = 0;
     CUdeviceptr deviceWidths                 = 0;
@@ -117,6 +117,13 @@ void makeHairGAS( HairState* pState )
     CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &pState->deviceBufferHairGAS ),
                             bufferSizesGAS.outputSizeInBytes ) );
 
+    CUdeviceptr deviceCompactedSize;
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &deviceCompactedSize ),
+                            sizeof(size_t) ) );
+    OptixAccelEmitDesc emitDesc = {};
+    emitDesc.type   = OPTIX_PROPERTY_TYPE_COMPACTED_SIZE;
+    emitDesc.result = deviceCompactedSize;
+
     OPTIX_CHECK( optixAccelBuild( pState->context,
                                   0,  // CUDA stream
                                   &accelBuildOptions,
@@ -127,8 +134,31 @@ void makeHairGAS( HairState* pState )
                                   pState->deviceBufferHairGAS,
                                   bufferSizesGAS.outputSizeInBytes,
                                   &pState->hHairGAS,
-                                  nullptr,  // emitted property list
-                                  0 ) );    // num emitted properties
+                                  &emitDesc,  // emitted property list
+                                  1 ) );    // num emitted properties
+
+    size_t compactedSize;
+    CUDA_CHECK( cudaMemcpy(&compactedSize, (void*)deviceCompactedSize, sizeof(size_t), cudaMemcpyDeviceToHost) );
+
+    printf("bufferSizesGAS.outputSizeInBytes: %zd  compacted size: %zd\n", 
+        bufferSizesGAS.outputSizeInBytes, compactedSize);
+
+    CUdeviceptr deviceCompactedGAS;
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &deviceCompactedGAS), compactedSize ) );
+
+    OPTIX_CHECK( optixAccelCompact( pState->context, 
+                                    0, 
+                                    pState->hHairGAS, 
+                                    deviceCompactedGAS, 
+                                    compactedSize, 
+                                    &pState->hHairGAS ) );
+
+    CUDA_CHECK( cudaFree( (void*)pState->deviceBufferHairGAS ) );
+    CUDA_CHECK( cudaFree( (void*)deviceCompactedSize ) );
+
+    pState->deviceBufferHairGAS = deviceCompactedGAS;
+
+
 
     // We can now free the scratch space buffers used during build.
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( deviceTempBufferGAS ) ) );
@@ -253,13 +283,13 @@ OptixPipelineCompileOptions defaultPipelineCompileOptions( HairState* pState )
 {
     OptixPipelineCompileOptions pipeOptions = {};
     pipeOptions.usesMotionBlur              = false;
-    pipeOptions.traversableGraphFlags       = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_ANY;
+    pipeOptions.traversableGraphFlags       = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING;
     pipeOptions.numPayloadValues            = 4;
     pipeOptions.numAttributeValues          = 1;
 #ifdef DEBUG  // Enables debug exceptions during optix launches. This may incur significant performance cost and should only be done during development.
     pipeOptions.exceptionFlags = OPTIX_EXCEPTION_FLAG_DEBUG | OPTIX_EXCEPTION_FLAG_TRACE_DEPTH | OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
 #else
-    pipeOptions.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
+    pipeOptions.exceptionFlags =  OPTIX_EXCEPTION_FLAG_NONE;
 #endif
     pipeOptions.pipelineLaunchParamsVariableName = "params";
 
@@ -450,7 +480,7 @@ void makePipeline( HairState* pState )
                                              &direct_callable_stack_size_from_state, &continuation_stack_size ) );
     OPTIX_CHECK( optixPipelineSetStackSize( pState->pipeline, direct_callable_stack_size_from_traversal,
                                             direct_callable_stack_size_from_state, continuation_stack_size,
-                                            1  // maxTraversableDepth
+                                            2  // maxTraversableDepth
                                             ) );
 }
 

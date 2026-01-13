@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2019, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -1163,7 +1163,8 @@ void Scene::createPTXModule()
     m_pipeline_compile_options.exceptionFlags            = OPTIX_EXCEPTION_FLAG_NONE; // should be OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
     m_pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
-    const std::string ptx = getPtxString( nullptr, nullptr, "whitted.cu" );
+    size_t      inputSize = 0;
+    const char* input     = sutil::getInputData( nullptr, nullptr, "whitted.cu", inputSize );
 
     m_ptx_module  = {};
     char log[2048];
@@ -1172,8 +1173,8 @@ void Scene::createPTXModule()
                 m_context,
                 &module_compile_options,
                 &m_pipeline_compile_options,
-                ptx.c_str(),
-                ptx.size(),
+                input,
+                inputSize,
                 log,
                 &sizeof_log,
                 &m_ptx_module

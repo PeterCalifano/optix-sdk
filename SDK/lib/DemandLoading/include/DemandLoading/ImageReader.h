@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -28,13 +28,16 @@
 
 #pragma once
 
+#include <cmath>
 #include <vector_types.h>
 
 namespace demandLoading {
 
 struct TextureInfo;
 
-/// Abstract base class for a mipmapped image.
+/// Interface for a mipmapped image.
+///
+/// Any method may be called from multiple threads; the implementation must be threadsafe.
 class ImageReader
 {
   public:
@@ -61,7 +64,37 @@ class ImageReader
     /// Read the mip tail into the given buffer, starting with the specified level.  An array
     /// containing the expected dimensions of all the miplevels is provided (starting from miplevel
     /// zero), along with the pixel size.  Returns true for success.
-    virtual bool readMipTail( char* dest, unsigned int mipTailFirstLevel, unsigned int numMipLevels, const uint2* mipLevelDims, unsigned int pixelSizeInBytes );
+    virtual bool readMipTail( char*        dest,
+                              unsigned int mipTailFirstLevel,
+                              unsigned int numMipLevels,
+                              const uint2* mipLevelDims,
+                              unsigned int pixelSizeInBytes ) = 0;
+
+    /// Returns the number of tiles that have been read.
+    virtual unsigned long long getNumTilesRead() const { return 0u; }
+
+    /// Returns the number of bytes that have been read.  This number may be zero if the reader does
+    /// not load tiles from disk, e.g. for procedural textures.
+    virtual unsigned long long getNumBytesRead() const { return 0u; }
+
+    /// Returns the time in seconds spent reading image data (tiles or mip levels).  This number may
+    /// be zero if the reader does not load tiles from disk, e.g. for procedural textures.
+    virtual double getTotalReadTime() const { return 0.0; }
 };
+
+/// Abstract base class for ImageReaders that use a common implementation of readMipTail.
+class MipTailImageReader : public ImageReader
+{
+  public:
+    virtual ~MipTailImageReader() = default;
+
+    bool readMipTail( char* dest, unsigned int mipTailFirstLevel, unsigned int numMipLevels, const uint2* mipLevelDims, unsigned int pixelSizeInBytes ) override;
+};
+
+inline unsigned int calculateNumMipLevels( unsigned int width, unsigned int height )
+{
+    unsigned int dim = ( width > height ) ? width : height;
+    return 1 + static_cast<unsigned int>( std::log2f( static_cast<float>( dim ) ) );
+}
 
 }  // namespace demandLoading

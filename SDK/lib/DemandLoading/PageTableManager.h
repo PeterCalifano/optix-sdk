@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -28,17 +28,21 @@
 
 #pragma once
 
-#include "Exception.h"
+#include "RequestHandler.h"
+#include "Util/Exception.h"
 
 #include <algorithm>
 #include <limits>
+#include <mutex>
 #include <vector>
 
 namespace demandLoading {
 
+class RequestHandler;
+
 /// The PageTableManager is used to reserve a contiguous range of page table entries.  It keeps a
-/// mapping that allows the resource corresponding to a page table entry to be determined in log(N)
-/// time.
+/// mapping that allows the request handler corresponding to a page table entry to be determined in
+/// log(N) time.
 class PageTableManager
 {
   public:
@@ -47,43 +51,53 @@ class PageTableManager
     {
     }
 
-    unsigned int getAvailablePages() { return m_totalPages - m_nextPage; }
+    unsigned int getAvailablePages() const { return m_totalPages - m_nextPage; }
 
-    unsigned int getHighestUsedPage() { return m_nextPage - 1; }
+    unsigned int getHighestUsedPage() const { return m_nextPage - 1; }
 
     /// Reserve the specified number of contiguous page table entries, associating them with the
-    /// specified resource id.  Returns the first page reserved.
-    unsigned int reserve( unsigned int numPages, unsigned int resourceId )
+    /// specified request handler.  Returns the first page reserved.
+    unsigned int reserve( unsigned int numPages, RequestHandler* handler )
     {
-        DEMAND_ASSERT_MSG( getAvailablePages() >= numPages, "Insufficient pages in optix page table" );
-        PageMapping mapping{m_nextPage, m_nextPage + numPages - 1, resourceId};
+        std::unique_lock<std::mutex> lock( m_mutex );
+        DEMAND_ASSERT_MSG( getAvailablePages() >= numPages, "Insufficient pages in demand loading page table" );
+
+        unsigned int firstPage = m_nextPage;
+        handler->setPageRange( firstPage, numPages );
+
+        unsigned int lastPage =  m_nextPage + numPages - 1;
+        const PageMapping mapping{firstPage, lastPage, handler};
         m_mappings.push_back( mapping );
+
         m_nextPage += numPages;
-        return mapping.firstPage;
+        return firstPage;
     }
 
-    /// Find the resource associated with the specified page.  Returns UINT_MAX if not found.
-    unsigned int getResource( unsigned int pageId )
+    /// Find the request handler associated with the specified page.  Returns nullptr if not found.
+    RequestHandler* getRequestHandler( unsigned int pageId ) const
     {
+        std::unique_lock<std::mutex> lock( m_mutex );
+
         // Pages are allocated in increasing order, so the array of mappings is sorted, allowing us
         // to use binary search to find the the given page id.
-        auto least =
+        const auto least =
             std::lower_bound( m_mappings.cbegin(), m_mappings.cend(), pageId,
-                              []( const PageMapping& entry, unsigned int pageId ) { return pageId > entry.lastPage; } );
-        return ( least != m_mappings.cend() ) ? least->resourceId : std::numeric_limits<unsigned int>::max();
+                              []( const PageMapping& entry, unsigned int id ) { return id > entry.lastPage; } );
+        return ( least != m_mappings.cend() ) ? least->handler : nullptr;
     }
 
   private:
     struct PageMapping
     {
-        unsigned int firstPage;
-        unsigned int lastPage;
-        unsigned int resourceId;
+        unsigned int    firstPage;
+        unsigned int    lastPage;
+        RequestHandler* handler;
     };
 
     unsigned int             m_totalPages;
-    unsigned int             m_nextPage = 0;
+    unsigned int             m_nextPage{};
     std::vector<PageMapping> m_mappings;
+    mutable std::mutex       m_mutex;
 };
 
 }  // namespace demandLoading

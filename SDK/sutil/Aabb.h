@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2019, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -53,14 +53,6 @@ namespace sutil
   * may also be useful in other computation and can be used in both host
   * and device code.
   *
-  * <B>History</B>
-  *
-  * @ref Aabb was introduced in OptiX 1.0.
-  *
-  * <B>See also</B>
-  * @ref SUTIL_PROGRAM,
-  * @ref rtGeometrySetBoundingBoxProgram
-  *
   */
   class Aabb
   {
@@ -83,6 +75,9 @@ namespace sutil
 
     /** Const array access */
     SUTIL_HOSTDEVICE const float3& operator[]( int i ) const;
+
+    /** Direct access */
+    SUTIL_HOSTDEVICE float* data();
 
     /** Set using two vectors */
     SUTIL_HOSTDEVICE void set( const float3& min, const float3& max );
@@ -208,6 +203,11 @@ namespace sutil
   {
     SUTIL_AABB_ASSERT( i>=0 && i<=1 );
     return (&m_min)[i];
+  }
+
+  SUTIL_INLINE SUTIL_HOSTDEVICE float* Aabb::data()
+  {
+      return &m_min.x;
   }
 
   SUTIL_INLINE SUTIL_HOSTDEVICE void Aabb::set( const float3& min, const float3& max )

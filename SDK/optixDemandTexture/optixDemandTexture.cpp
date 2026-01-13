@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2019, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -29,8 +29,8 @@
 #include "optixDemandTexture.h"
 
 #include <DemandLoading/CheckerBoardImage.h>
+#include <DemandLoading/DemandLoader.h>
 #include <DemandLoading/DemandTexture.h>
-#include <DemandLoading/DemandTextureManager.h>
 #ifdef OPTIX_SAMPLE_USE_OPEN_EXR
 #include <DemandLoading/EXRReader.h>
 #endif
@@ -49,6 +49,7 @@
 #include <sutil/Camera.h>
 #include <sutil/sutil.h>
 
+#include <cassert>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -56,23 +57,15 @@
 
 using namespace demandLoading;
 
-int    g_numTextureTaps   = 1;
-int    g_totalLaunches    = 0;
-double g_totalLaunchTime  = 0.0;
-int    g_totalRequests    = 0;
-double g_totalRequestTime = 0.0;
-double g_idleRequestTime  = 0.0;
+int          g_numThreads       = 0;
+int          g_totalLaunches    = 0;
+double       g_totalLaunchTime  = 0.0;
+unsigned int g_totalRequests    = 0;
+float        g_mipLevelBias     = 0.0f;
 
-CUaddress_mode g_uWrapMode     = CU_TR_ADDRESS_MODE_BORDER;
-CUaddress_mode g_vWrapMode     = CU_TR_ADDRESS_MODE_BORDER;
-CUfilter_mode  g_filterMode    = CU_TR_FILTER_MODE_LINEAR;
-CUfilter_mode  g_mipFilterMode = CU_TR_FILTER_MODE_LINEAR;
-float          g_mipLevelBias  = 0.0f;
-
-float g_diffScale = 1.0f;
-
-int32_t g_width  = 768;
-int32_t g_height = 768;
+int32_t g_width      = 768;
+int32_t g_height     = 768;
+int32_t g_bucketSize = 256;
 
 int g_textureWidth  = 2048;
 int g_textureHeight = 2048;
@@ -95,6 +88,9 @@ struct PerDeviceSampleState
     Params                      params                   = {};
     Params*                     d_params                 = nullptr;
     CUstream                    stream                   = 0;
+
+    // Only valid on the host
+    std::shared_ptr<demandLoading::Ticket> ticket;
 };
 
 
@@ -112,59 +108,23 @@ typedef SbtRecord<HitGroupData> HitGroupSbtRecord;
 
 void printUsageAndExit( const char* argv0 )
 {
-    std::cerr << "\nUsage  : " << argv0 << " [options]\n";
-    std::cerr << "Options: --help | -h                         Print this usage message\n";
-    std::cerr << "         --file | -f <filename>              Specify file for image output\n";
-    std::cerr << "         --dim=<width>x<height>              Set image dimensions\n";
+    // clang-format off
+    std::cerr
+        << "\nUsage  : " << argv0 << " [options]\n"
+        << "Options: --help | -h                         Print this usage message\n"
+        << "         --file | -f <filename>              Specify file for image output\n"
+        << "         --dim=<width>x<height>              Set image dimensions\n"
 #ifdef OPTIX_SAMPLE_USE_OPEN_EXR
-    std::cerr << "         --texture | -t <filename>           Texture to render (path relative to data folder). Use "
-                 "checkerboard for procedural texture.\n";
+        << "         --texture | -t <filename>           Texture to render (path relative to data folder). Use checkerboard for procedural texture.\n"
 #endif
-    std::cerr
-        << "         --textureDim=<width>x<height>       Set dimensions of procedural texture (default 2048x2048).\n";
-    std::cerr << "         --squaresPerSide <n>                Number of squares per side for a procedural texture "
-                 "(default 32).\n";
-    std::cerr << "         --useMipmaps <true|false>           Whether to use mipmaps for a procedural texture "
-                 "(default true).\n";
-    std::cerr << "         --bias | -b <bias>                  Mip level bias (default 0.0)\n";
-    std::cerr << "         --textureScale <s>                  Texture scale (how many times to wrap the texture "
-                 "around the sphere) (default 1.0f)\n";
-    std::cerr << "         --tileWidth <power of 2 or -1>      Texture tile width (default 128). -1 indicates to use "
-                 "image tile width.\n";
-    std::cerr << "         --filterMode <0|1|point|linear>     Texture filter mode (default linear).\n";
-    std::cerr << "         --mipFilterMode <0|1|point|linear>  Texture mipmap filter mode (default linear).\n";
-    std::cerr << "         --wrapModeU <0-3|wrap|clamp|mirror|border>  Texture wrap (address) mode in the U direction "
-                 "(default wrap).\n";
-    std::cerr << "         --wrapModeV <0-3|wrap|clamp|mirror|border>  Texture wrap (address) mode in the V direction "
-                 "(default wrap).\n";
-    std::cerr << "         --diffScale <n>                     How to scale the texture difference when diff render "
-                 "mode is used (default 1.0).\n";
-    std::cerr << "         --profileIterations <n>             Set minimum iterations to perform for profiling "
-                 "(default 1).\n";
-    std::cerr
-        << "         --textureTaps <n>                   The number of texture taps to take per sample (default 1).\n";
-    std::cerr << "\n";
+        << "         --textureDim=<width>x<height>       Set dimensions of procedural texture (default 2048x2048).\n"
+        << "         --bias | -b <bias>                  Mip level bias (default 0.0)\n"
+        << "         --textureScale <s>                  Texture scale (how many times to wrap the texture around the sphere) (default 1.0f)\n"
+        << "         --bucketSize <dim>                  The size of the screen-space tiles used for rendering (default 256).\n"
+        << "         --numThreads <n>                    The number of threads to use for processing requests; 0 is automatic (default 0).\n"
+        << "\n";
+    // clang-format on
     exit( 1 );
-}
-
-static CUaddress_mode getWrapMode( std::string m )
-{
-    if( m == "0" || m == "wrap" )
-        return CU_TR_ADDRESS_MODE_WRAP;
-    else if( m == "1" || m == "clamp" )
-        return CU_TR_ADDRESS_MODE_CLAMP;
-    else if( m == "2" || m == "mirror" )
-        return CU_TR_ADDRESS_MODE_MIRROR;
-    else  // "3" || "border"
-        return CU_TR_ADDRESS_MODE_BORDER;
-}
-
-static CUfilter_mode getFilterMode( std::string m )
-{
-    if( m == "0" || m == "point" )
-        return CU_TR_FILTER_MODE_POINT;
-    else  // "1" || "linear"
-        return CU_TR_FILTER_MODE_LINEAR;
 }
 
 static void context_log_cb( unsigned int level, const char* tag, const char* message, void* /*cbdata */ )
@@ -194,8 +154,8 @@ void getDevices( std::vector<unsigned int>& devices )
     {
         cudaDeviceProp prop;
         CUDA_CHECK( cudaGetDeviceProperties( &prop, deviceIndex ) );
-        std::cout << "\t[" << devices[deviceIndex] << "]: " << prop.name << std::endl;
         devices[deviceIndex] = deviceIndex;
+        std::cout << "\t[" << devices[deviceIndex] << "]: " << prop.name << std::endl;
     }
 }
 
@@ -214,6 +174,7 @@ void createContext( PerDeviceSampleState& state )
 
     state.context = context;
 
+    CUDA_CHECK( cudaSetDevice( state.device_idx ) );
     CUDA_CHECK( cudaStreamCreate( &state.stream ) );
 }
 
@@ -316,12 +277,13 @@ void createModule( PerDeviceSampleState& state )
     state.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;  // TODO: should be OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
     state.pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
-    const std::string ptx = sutil::getPtxString( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixDemandTexture.cu" );
-    char              log[2048];
-    size_t            sizeof_log = sizeof( log );
+    size_t      inputSize = 0;
+    const char* input = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixDemandTexture.cu", inputSize );
+    char        log[2048];
+    size_t      sizeof_log = sizeof( log );
 
     OPTIX_CHECK_LOG( optixModuleCreateFromPTX( state.context, &module_compile_options, &state.pipeline_compile_options,
-                                               ptx.c_str(), ptx.size(), log, &sizeof_log, &state.ptx_module ) );
+                                               input, inputSize, log, &sizeof_log, &state.ptx_module ) );
 }
 
 
@@ -442,6 +404,9 @@ void cleanupState( PerDeviceSampleState& state )
     OPTIX_CHECK( optixModuleDestroy( state.ptx_module ) );
     OPTIX_CHECK( optixDeviceContextDestroy( state.context ) );
 
+    CUDA_CHECK( cudaSetDevice( state.device_idx ) );
+    CUDA_CHECK( cudaStreamDestroy( state.stream ) );
+
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( state.sbt.raygenRecord ) ) );
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( state.sbt.missRecordBase ) ) );
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( state.sbt.hitgroupRecordBase ) ) );
@@ -458,10 +423,10 @@ void cleanupState( PerDeviceSampleState& state )
 TextureDescriptor makeTextureDescription()
 {
     TextureDescriptor texDesc{};
-    texDesc.addressMode[0]   = g_uWrapMode;
-    texDesc.addressMode[1]   = g_vWrapMode;
-    texDesc.filterMode       = g_filterMode;
-    texDesc.mipmapFilterMode = g_mipFilterMode;
+    texDesc.addressMode[0]   = CU_TR_ADDRESS_MODE_WRAP;
+    texDesc.addressMode[1]   = CU_TR_ADDRESS_MODE_WRAP;
+    texDesc.filterMode       = CU_TR_FILTER_MODE_LINEAR;
+    texDesc.mipmapFilterMode = CU_TR_FILTER_MODE_LINEAR;
     texDesc.maxAnisotropy    = 16;
 
     return texDesc;
@@ -478,8 +443,6 @@ void initLaunchParams( PerDeviceSampleState& state, unsigned int numDevices )
     state.params.device_idx     = state.device_idx;
     state.params.num_devices    = numDevices;
     state.params.mipLevelBias   = g_mipLevelBias;
-    state.params.diffScale      = g_diffScale;
-    state.params.numTextureTaps = g_numTextureTaps;
 
     // state.params.nonDemandTextureArray and state.params.nonDemandTexture set in makeStaticTexture
 
@@ -491,89 +454,84 @@ void initLaunchParams( PerDeviceSampleState& state, unsigned int numDevices )
 }
 
 
-void performLaunches( sutil::CUDAOutputBuffer<uchar4>& output_buffer, std::vector<PerDeviceSampleState>& states, DemandTextureManager& textureManager )
+// Returns number of requests processed (over all streams and devices).
+unsigned int performLaunches( sutil::CUDAOutputBuffer<uchar4>& output_buffer, std::vector<PerDeviceSampleState>& states, DemandLoader& demandLoader )
 {
     auto startTime = std::chrono::steady_clock::now();
 
+    const uint32_t bucketCountX = ( g_width  + g_bucketSize - 1 ) / g_bucketSize;
+    const uint32_t bucketCountY = ( g_height + g_bucketSize - 1 ) / g_bucketSize;
+    const uint32_t numBuckets   = bucketCountX * bucketCountY;
+
+    uchar4* outputPtr = output_buffer.map();
     for( auto& state : states )
+        state.params.result_buffer = outputPtr;
+
+    uint32_t numRequestsProcessed = 0;
+    uint32_t bucketIdx            = 0;
+
+    while( bucketIdx < numBuckets )
     {
-        CUDA_CHECK( cudaSetDevice( state.device_idx ) );
+        for( auto& state : states )
+        {
+            uint32_t cur_index = bucketIdx++;
+            if( cur_index >= numBuckets )
+                continue;
 
-        // Synchronize any new texture samplers and texture info to device memory, and map output buffer.
-        textureManager.launchPrepare( state.device_idx, state.params.demandTextureContext );
-        state.params.result_buffer = output_buffer.map();
+            state.params.bucket_index  = cur_index;
+            state.params.bucket_width  = g_bucketSize;
+            state.params.bucket_height = g_bucketSize;
 
-        // Update launch parameters
-        initLaunchParams( state, static_cast<unsigned int>( states.size() ) );
-        CUDA_CHECK( cudaMemcpyAsync( reinterpret_cast<void*>( state.d_params ), &state.params, sizeof( Params ),
-                                     cudaMemcpyHostToDevice, state.stream ) );
+            demandLoader.launchPrepare( state.device_idx,
+                                        state.stream,
+                                        state.params.demandTextureContext );
 
-        // Peform the launch
-        OPTIX_CHECK( optixLaunch( state.pipeline, state.stream, reinterpret_cast<CUdeviceptr>( state.d_params ),
-                                  sizeof( Params ), &state.sbt,
-                                  state.params.image_height / static_cast<unsigned int>( states.size() ),  // launch height (launch is split across GPUs)
-                                  state.params.image_width,  // launch width
-                                  1                          // launch depth
-                                  ) );
+            initLaunchParams( state, static_cast<unsigned int>( states.size() ) );
 
-        output_buffer.unmap();
+            // Perform the rendering launches
+            CUDA_CHECK( cudaSetDevice( state.device_idx ) );
+            CUDA_CHECK( cudaMemcpyAsync( reinterpret_cast<void*>( state.d_params ), &state.params, sizeof( Params ),
+                                         cudaMemcpyHostToDevice, state.stream ) );
+            OPTIX_CHECK( optixLaunch( state.pipeline,
+                                      state.stream,
+                                      reinterpret_cast<CUdeviceptr>( state.d_params ),
+                                      sizeof( Params ),
+                                      &state.sbt,
+                                      state.params.bucket_width,   // launch width
+                                      state.params.bucket_height,  // launch height
+                                      1                            // launch depth
+                                      ) );
+
+            // Initiate asynchronous request processing for the previous launch
+            state.ticket = demandLoader.processRequests(
+                state.device_idx, state.stream, state.params.demandTextureContext );
+        }
+
+        // Wait for any outstanding requests
+        for( auto& state : states )
+        {
+            if( state.ticket.get() )
+            {
+                state.ticket->wait();
+                assert( state.ticket->numTasksTotal() >= 0 );
+                numRequestsProcessed += static_cast<unsigned int>( state.ticket->numTasksTotal() );
+                state.ticket.reset();
+            }
+        }
     }
-    for( auto& state : states )
-    {
-        CUDA_CHECK( cudaSetDevice( state.device_idx ) );
-        CUDA_SYNC_CHECK();
-    }
 
-    g_totalLaunches++;
+    output_buffer.unmap();
+
+    ++g_totalLaunches;
     g_totalLaunchTime += std::chrono::duration<double>( std::chrono::steady_clock::now() - startTime ).count();
-}
 
-int processTextureRequests( DemandTextureManager& textureManager )
-{
-    auto startTime = std::chrono::steady_clock::now();
-
-    int numRequests = textureManager.processRequests();
-
-    if( numRequests > 0 )
-    {
-        g_totalRequests += numRequests;
-        g_totalRequestTime += std::chrono::duration<double>( std::chrono::steady_clock::now() - startTime ).count();
-    }
-    else
-    {
-        g_idleRequestTime += std::chrono::duration<double>( std::chrono::steady_clock::now() - startTime ).count();
-    }
-    return numRequests;
-}
-
-void printTimingStats()
-{
-    std::cout << "Launches: " << g_totalLaunches << "\n";
-    std::cout << "Texture taps per launch: " << g_numTextureTaps << "\n";
-    if( g_totalLaunches > 0 )
-    {
-        std::cout << "Avg. launch time: " << ( 1000.0 * g_totalLaunchTime / g_totalLaunches ) << " ms.\n";
-        std::cout << "Avg. time processing empty requests: " << ( 1000.0 * g_idleRequestTime / g_totalLaunches )
-                  << " ms / launch.\n";
-    }
-    if( g_totalRequests > 0 )
-    {
-        std::cout << "Texture tile requests: " << g_totalRequests << "\n";
-        std::cout << "Avg. tile request time: " << ( 1000.0 * g_totalRequestTime / g_totalRequests ) << " ms.\n";
-    }
-    std::cout << "\n";
+    return numRequestsProcessed;
 }
 
 int main( int argc, char* argv[] )
 {
-    float textureScale      = 1.0f;
-    int   squaresPerSide    = 32;
-    int   tileWidth         = 128;
-    int   tileHeight        = 128;
-    bool  useMipmaps        = true;
-    int   profileIterations = 0;
-
     std::string outfile;
+    float textureScale = 4.0f;
 
     // Image credit: CC0Textures.com (https://cc0textures.com/view.php?tex=Bricks12)
     // Licensed under the Creative Commons CC0 License.
@@ -596,65 +554,34 @@ int main( int argc, char* argv[] )
         {
             sutil::parseDimensions( arg.substr( 6 ).c_str(), g_width, g_height );
         }
-        else if( ( arg == "--bias" || arg == "-b" ) && !lastArg )
-        {
-            g_mipLevelBias = static_cast<float>( atof( argv[++i] ) );
-        }
         else if( ( arg == "--texture" || arg == "-t" ) && !lastArg )
         {
             textureFile = argv[++i];
-        }
-        else if( arg == "--textureScale" && !lastArg )
-        {
-            textureScale = static_cast<float>( atof( argv[++i] ) );
-        }
-        else if( arg == "--squaresPerSide" && !lastArg )
-        {
-            squaresPerSide = atoi( argv[++i] );
-        }
-        else if( arg == "--useMipmaps" && !lastArg )
-        {
-            useMipmaps = std::string( argv[++i] ) != "false";
-        }
-        else if( arg.substr( 0, 10 ) == "--tileDim=" )
-        {
-            sutil::parseDimensions( arg.substr( 10 ).c_str(), tileWidth, tileHeight );
-        }
-        else if( arg == "--tileWidth" && !lastArg )
-        {
-            tileWidth = atoi( argv[++i] );
-        }
-        else if( arg == "--wrapModeU" && !lastArg )
-        {
-            g_uWrapMode = getWrapMode( argv[++i] );
-        }
-        else if( arg == "--wrapModeV" && !lastArg )
-        {
-            g_vWrapMode = getWrapMode( argv[++i] );
-        }
-        else if( arg == "--filterMode" && !lastArg )
-        {
-            g_filterMode = getFilterMode( argv[++i] );
-        }
-        else if( arg == "--mipFilterMode" && !lastArg )
-        {
-            g_mipFilterMode = getFilterMode( argv[++i] );
-        }
-        else if( arg == "--profileIterations" && !lastArg )
-        {
-            profileIterations = atoi( argv[++i] );
-        }
-        else if( arg == "--diffScale" && !lastArg )
-        {
-            g_diffScale = static_cast<float>( atof( argv[++i] ) );
         }
         else if( arg.substr( 0, 13 ) == "--textureDim=" )
         {
             sutil::parseDimensions( arg.substr( 13 ).c_str(), g_textureWidth, g_textureHeight );
         }
-        else if( arg == "--textureTaps" && !lastArg )
+        else if( ( arg == "--bias" || arg == "-b" ) && !lastArg )
         {
-            g_numTextureTaps = atoi( argv[++i] );
+            g_mipLevelBias = static_cast<float>( atof( argv[++i] ) );
+        }
+        else if( arg == "--textureScale" && !lastArg )
+        {
+            textureScale = static_cast<float>( atof( argv[++i] ) );
+        }
+        else if( arg == "--bucketSize" && !lastArg )
+        {
+            g_bucketSize = atoi( argv[++i] );
+            if( g_bucketSize <= 0 )
+            {
+                std::cerr << "Warning: Bucket size must be greater than 0. Setting bucket size to 256" << std::endl;
+                g_bucketSize = 256;
+            }
+        }
+        else if( arg == "--numThreads" && !lastArg )
+        {
+            g_numThreads = atoi( argv[++i] );
         }
         else
         {
@@ -673,22 +600,14 @@ int main( int argc, char* argv[] )
         std::vector<PerDeviceSampleState> states;
         createContexts( availableDevices, states );
 
-        // Initialize DemandTextureManager and create a demand-loaded texture.
+        // Initialize DemandLoader and create a demand-loaded texture.
         // The texture id is passed to the closest hit shader via a hit group record in the SBT.
         // The texture sampler array (indexed by texture id) is passed as a launch parameter.
-        DemandTextureManagerConfig config{};
-        config.numPages            = 1024 * 1024;  // max virtual pages
-        config.maxRequestedPages   = 1024;         // max requests to pull from device when calling pullRequests
-        config.maxFilledPages      = 2048;         // number of slots to push mappings back to device
-        config.maxStalePages       = 2048;         // max stale pages to pull from the device when calling pullRequests
-        config.maxInvalidatedPages = 2048;         // max slots to push invalidated pages back to device
-        std::shared_ptr<DemandTextureManager> textureManager( createDemandTextureManager( availableDevices, config ), destroyDemandTextureManager );
+        demandLoading::Options options{};
+        options.maxThreads = g_numThreads;  // maximum threads to use when processing page requests
+        std::shared_ptr<DemandLoader> demandLoader( createDemandLoader( availableDevices, options ), destroyDemandLoader );
 
         std::unique_ptr<ImageReader> imageReader;
-
-        // If "useMipmaps" is disabled, use the checkboard image (otherwise the number of miplevels is determined by the EXR file.)
-        if (!useMipmaps)
-            textureFile = "checkerboard";
 
 // Make an exr reader or a procedural texture reader based on the textureFile name
 #ifdef OPTIX_SAMPLE_USE_OPEN_EXR
@@ -700,16 +619,18 @@ int main( int argc, char* argv[] )
 #endif
         if( imageReader == nullptr )
         {
+            const int  squaresPerSide = 32;
+            const bool useMipmaps     = true;
             imageReader = std::unique_ptr<ImageReader>(
                 new CheckerBoardImage( g_textureWidth, g_textureHeight, squaresPerSide, useMipmaps ) );
         }
 
         // Create a demand-loaded texture
         TextureDescriptor    texDesc = makeTextureDescription();
-        const DemandTexture& texture = textureManager->createTexture( std::move( imageReader ), texDesc );
+        const DemandTexture& texture = demandLoader->createTexture( std::move( imageReader ), texDesc );
 
         // Set up OptiX per-device states
-        for( auto& state : states )
+        for( PerDeviceSampleState& state : states )
         {
             CUDA_CHECK( cudaSetDevice( state.device_idx ) );
             buildAccel( state );
@@ -722,15 +643,20 @@ int main( int argc, char* argv[] )
         // Create the output buffer to hold the rendered image
         sutil::CUDAOutputBuffer<uchar4> outputBuffer( sutil::CUDAOutputBufferType::ZERO_COPY, g_width, g_height );
 
-        // Perform launches (launch until there are no more requests to fill)
-        int numFilled = 0;
+        unsigned int numFilled   = 0;
+        const int    maxLaunches = 1024;
+
+        // Perform launches (launch until there are no more requests to fill), up to
+        // the maximum number of launches.
         do
         {
-            performLaunches( outputBuffer, states, *textureManager );
-            numFilled = processTextureRequests( *textureManager );
-        } while( numFilled > 0 || g_totalLaunches < profileIterations );
+            numFilled = performLaunches( outputBuffer, states, *demandLoader );
+            g_totalRequests += numFilled;
+        } while( numFilled > 0 && g_totalLaunches < maxLaunches );
 
-        printTimingStats();
+        std::cout << "Launches:              " << g_totalLaunches << "\n";
+        std::cout << "Avg. launch time:      " << ( 1000.0 * g_totalLaunchTime / g_totalLaunches ) << " ms\n";
+        std::cout << "Texture tile requests: " << g_totalRequests << "\n";
 
         // Display result image
         {
@@ -746,7 +672,7 @@ int main( int argc, char* argv[] )
         }
 
         // Clean up the states, deleting their resources
-        for( auto& state : states )
+        for( PerDeviceSampleState& state : states )
             cleanupState( state );
     }
     catch( std::exception& e )

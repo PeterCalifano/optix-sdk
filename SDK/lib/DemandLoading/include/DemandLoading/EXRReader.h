@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -35,13 +35,14 @@
 #include <ImfTiledInputFile.h>
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
 namespace demandLoading {
 
 /// OpenEXR image reader.
-class EXRReader : public ImageReader
+class EXRReader : public MipTailImageReader
 {
   public:
     /// The constructor copies the given filename.  The file is not opened until open() is called.
@@ -75,6 +76,27 @@ class EXRReader : public ImageReader
     /// Get tile height (used only for testing).
     unsigned int getTileHeight() const { return m_tileHeight; }
 
+    /// Returns the number of tiles that have been read.
+    unsigned long long getNumTilesRead() const override
+    {
+        std::unique_lock<std::mutex> lock( m_mutex );
+        return m_numTilesRead;
+    };
+
+    /// Returns the number of bytes that have been read.
+    unsigned long long getNumBytesRead() const override
+    {
+        std::unique_lock<std::mutex> lock( m_mutex );
+        return m_numBytesRead;
+    };
+
+    /// Returns the time in seconds spent reading image tiles.
+    double getTotalReadTime() const override
+    {
+        std::unique_lock<std::mutex> lock( m_mutex );
+        return m_totalReadTime;
+    }
+
   private:
     std::string                          m_filename;
     std::unique_ptr<Imf::TiledInputFile> m_inputFile;
@@ -82,6 +104,10 @@ class EXRReader : public ImageReader
     Imf::PixelType                       m_pixelType = Imf::NUM_PIXELTYPES;
     unsigned int                         m_tileWidth{};
     unsigned int                         m_tileHeight{};
+    mutable std::mutex                   m_mutex;
+    unsigned long long                   m_numTilesRead  = 0;
+    unsigned long long                   m_numBytesRead  = 0;
+    double                               m_totalReadTime = 0.0;
 
     void setupFrameBuffer( Imf::FrameBuffer& frameBuffer, char* base, size_t xStride, size_t yStride );
     void readActualTile( char* dest, unsigned int rowPitch, unsigned int mipLevel, unsigned int tileX, unsigned int tileY );

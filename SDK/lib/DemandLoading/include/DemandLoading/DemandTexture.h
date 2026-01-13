@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -34,11 +34,8 @@
 
 namespace demandLoading {
 
-struct DemandTextureInfo;
-struct TextureDescriptor;
-struct TextureInfo;
-
-/// Demand-loaded textures are created and owned by the DemandTextureManager.
+/// Demand-loaded textures are created and owned by the DemandLoader.
+/// The methods may be called from multiple threads; the implementation must be threadsafe.
 class DemandTexture
 {
   public:
@@ -47,55 +44,6 @@ class DemandTexture
 
     /// Get the texture id, which is used as an index into the device-side sampler array.
     virtual unsigned int getId() const = 0;
-
-    /// Check whether the texture has been initialized on the specified device.
-    virtual bool isInitialized( unsigned int deviceIndex ) const = 0;
-
-    /// Initialize the texture on the specified device.  When first called, this method opens the
-    /// image reader that was provided to the constructor.  Returns false on error.
-    virtual bool init( unsigned int deviceIndex ) = 0;
-
-    /// Get the image info.  Valid only after the image has been initialized (e.g. opened).
-    virtual const TextureInfo& getInfo() const = 0;
-
-    /// Get device texture info.  The startPage is always valid, but the other fields are invalid
-    /// the texture is initialized.
-    virtual const DemandTextureInfo& getDeviceInfo() const = 0;
-
-    /// Get the texture descriptor
-    virtual const TextureDescriptor& getDescriptor() const = 0;
-
-    /// Get the dimensions of the specified miplevel.
-    virtual uint2 getMipLevelDims( unsigned int mipLevel ) const = 0;
-
-    /// Get tile width.
-    virtual unsigned int getTileWidth() const = 0;
-
-    /// Get tile height.
-    virtual unsigned int getTileHeight() const = 0;
-
-    /// Get the first miplevel in the mip tail.
-    virtual unsigned int getMipTailFirstLevel() const = 0;
-
-    /// Get the CUDA texture object for the specified device.
-    virtual CUtexObject getTextureObject( unsigned int deviceIndex ) const = 0;
-
-    /// Read the specified tile into the given buffer, resizing it if necessary.
-    virtual bool readTile( unsigned int mipLevel, unsigned int tileX, unsigned int tileY, std::vector<char>* buffer ) const = 0;
-
-    /// Map the given tile backing storage and fill it with the given data.
-    virtual void fillTile( unsigned int deviceIndex,
-                           unsigned int mipLevel,
-                           unsigned int tileX,
-                           unsigned int tileY,
-                           const char*  tileData,
-                           size_t       tileSize ) const = 0;
-
-    /// Read all the levels in the mip tail into the given buffer, resizing it if necessary.
-    virtual bool readMipTail( std::vector<char>* buffer ) const = 0;
-
-    /// Map the given backing storage for the mip tail and fill it with the given data.
-    virtual void fillMipTail( unsigned int deviceIndex, const char* mipTailData, size_t mipTailSize ) const = 0;
 };
 
 }  // namespace demandLoading

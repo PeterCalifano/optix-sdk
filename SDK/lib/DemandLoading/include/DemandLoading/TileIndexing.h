@@ -1,5 +1,5 @@
 //
-//  Copyright (c) 2020 NVIDIA Corporation.  All rights reserved.
+//  Copyright (c) 2021 NVIDIA Corporation.  All rights reserved.
 //
 //  NVIDIA Corporation and its licensors retain all intellectual property and proprietary
 //  rights in and to this software, related documentation and any modifications thereto.
@@ -20,10 +20,19 @@
 
 #pragma once
 
-#include <DemandLoading/DemandTextureInfo.h>
+#include <DemandLoading/TextureSampler.h>
 
-#include <cuda_runtime.h>
+#ifndef __CUDACC_RTC__
+#include <cuda.h>
 #include <texture_types.h>
+#else
+enum CUaddress_mode {
+    CU_TR_ADDRESS_MODE_WRAP   = 0,
+    CU_TR_ADDRESS_MODE_CLAMP  = 1,
+    CU_TR_ADDRESS_MODE_MIRROR = 2,
+    CU_TR_ADDRESS_MODE_BORDER = 3 
+};
+#endif
 
 #ifndef __CUDACC__
 #include <algorithm>
@@ -32,192 +41,91 @@
 
 namespace demandLoading {
 
-#ifdef __CUDACC__
-#define HOSTDEVICE __device__
-#else
-#define HOSTDEVICE __host__
-#endif
+const unsigned int DEMAND_TEXTURE_VIRTUAL_PAGE_ALIGNMENT = 32;
 
 // clang-format off
 #ifdef __CUDACC__
-HOSTDEVICE inline int ifloor( float x ) { return static_cast<int>( ::floorf( x ) ); }
-HOSTDEVICE inline float floorf( float x ) { return ::floorf( x ); }
-HOSTDEVICE inline float ceilf( float x ) { return ::ceilf( x ); }
-HOSTDEVICE inline float maxf( float x, float y ) { return ::fmaxf( x, y ); }
-HOSTDEVICE inline float minf( float x, float y ) { return ::fminf( x, y ); }
-HOSTDEVICE inline unsigned int uimax( unsigned int a, unsigned int b ) { return ( a > b ) ? a : b; }
+__host__ __device__ static __forceinline__ float maxf( float x, float y ) { return ::fmaxf( x, y ); }
+__host__ __device__ static __forceinline__ float minf( float x, float y ) { return ::fminf( x, y ); }
+__host__ __device__ static __forceinline__ unsigned int uimax( unsigned int a, unsigned int b ) { return ( a > b ) ? a : b; }
 #else
-HOSTDEVICE inline int ifloor( float x ) { return static_cast<int>( std::floor( x ) ); }
-HOSTDEVICE inline float floorf( float x ) { return std::floor( x ); }
-HOSTDEVICE inline float ceilf( float x ) { return std::ceil( x ); }
-HOSTDEVICE inline float maxf( float x, float y ) { return std::max( x, y ); }
-HOSTDEVICE inline float minf( float x, float y ) { return std::min( x, y ); }
-HOSTDEVICE inline unsigned int uimax( unsigned int a, unsigned int b ) { return std::max( a, b ); }
+__host__ __device__ static __forceinline__ float maxf( float x, float y ) { return std::max( x, y ); }
+__host__ __device__ static __forceinline__ float minf( float x, float y ) { return std::min( x, y ); }
+__host__ __device__ static __forceinline__ unsigned int uimax( unsigned int a, unsigned int b ) { return std::max( a, b ); }
 #endif
-HOSTDEVICE inline float clampf( float f, float a, float b ) { return maxf( a, minf( f, b ) ); }
+__host__ __device__ static __forceinline__ float clampf( float f, float a, float b ) { return maxf( a, minf( f, b ) ); }
 // clang-format on
 
-HOSTDEVICE inline unsigned int ceilMult( unsigned int num, unsigned int den, float invDen )
-{
-    // This should work as long as (num + dem - 1) < 16M
-    return static_cast<unsigned int>( static_cast<float>( num + den - 1 ) * invDen );
-}
-
-HOSTDEVICE inline unsigned int calculateLevelDim( unsigned int mipLevel, unsigned int textureDim )
+__host__ __device__ static __forceinline__ unsigned int calculateLevelDim( unsigned int mipLevel, unsigned int textureDim )
 {
     return uimax( textureDim >> mipLevel, 1U );
 }
 
-HOSTDEVICE inline unsigned int wrapPixelCoord( cudaTextureAddressMode addressMode, int coord, int max )
+__host__ __device__ static __forceinline__ unsigned int getLevelDimInTiles( unsigned int textureDim, unsigned int mipLevel, unsigned int tileDim )
 {
-    if( addressMode == cudaAddressModeClamp || addressMode == cudaAddressModeBorder )
-        return coord < 0 ? 0 : ( coord >= max ? max - 1 : coord );
-
-    // wrap and mirror modes
-    // Compute (floored) quotient and remainder
-    const int q = ifloor( static_cast<float>( coord ) / static_cast<float>( max ) );
-    const int r = coord - q * max;
-    // In mirror mode, flip the coordinate (r) if the q is odd
-    return ( addressMode == cudaAddressModeMirror && ( q & 1 ) ) ? ( max - 1 - r ) : r;
+    return ( calculateLevelDim( mipLevel, textureDim ) + tileDim - 1 ) / tileDim;
 }
 
-HOSTDEVICE inline float wrapNormCoord( cudaTextureAddressMode addressMode, float x )
+__host__ __device__ static __forceinline__ unsigned int calculateNumTilesInLevel( unsigned int levelWidthInTiles,
+                                                                                  unsigned int levelHeightInTiles )
+{
+    // Round up width and height to multiples of 8 to be consistent with hardware footprint alignment.
+    levelWidthInTiles  = ( levelWidthInTiles + 7 ) & 0xfffffff8;
+    levelHeightInTiles = ( levelHeightInTiles + 7 ) & 0xfffffff8;
+    return levelWidthInTiles * levelHeightInTiles;
+}
+
+__host__ __device__ static __forceinline__ void getTileCoordsFromPageOffset( int           pageOffsetInLevel,
+                                                                             int           levelWidthInTiles,
+                                                                             unsigned int& tileX,
+                                                                             unsigned int& tileY )
+{
+    int levelWidthInBlocks = ( levelWidthInTiles + 7 ) / 8;
+
+    int blockNum = pageOffsetInLevel / 64;
+    int xblock   = blockNum % levelWidthInBlocks;
+    int yblock   = blockNum / levelWidthInBlocks;
+
+    int blockOffset = pageOffsetInLevel % 64;
+    int xoffset     = blockOffset % 8;
+    int yoffset     = blockOffset / 8;
+
+    tileX = xblock * 8 + xoffset;
+    tileY = yblock * 8 + yoffset;
+}
+
+__host__ __device__ static __forceinline__ float wrapTexCoord( float x, CUaddress_mode addressMode )
 {
     const float firstFloatLessThanOne = 0.999999940395355224609375f;
-
-    if( addressMode == cudaAddressModeClamp || addressMode == cudaAddressModeBorder )
-        return clampf( x, 0.0f, firstFloatLessThanOne );  // result must be < 1
-
-    // Wrap and mirror modes
-    const int xfloor = ifloor( x );
-    if( addressMode != cudaAddressModeMirror || ( xfloor & 0x1 ) == 0 )
-        return x - static_cast<float>( xfloor );
-
-    // Flip coordinate for odd xfloor
-    const float y = ceilf( x ) - x;
-    // When the coordinate is an odd integer, ceil(x) - x returns 0, but should return near 1
-    return ( y <= 0.0f ) ? firstFloatLessThanOne : y;
+    return ( addressMode == CU_TR_ADDRESS_MODE_WRAP ) ? x - floorf( x ) : clampf( x, 0.0f, firstFloatLessThanOne );
 }
 
-HOSTDEVICE inline unsigned int calculateWrappedTileCoord( cudaTextureAddressMode wrapMode, int coord, unsigned int levelSize, float invTileSize )
+__host__ __device__ static __forceinline__ int getPageOffsetFromTileCoords( int x, int y, int levelWidthInTiles )
 {
-    return static_cast<unsigned int>( static_cast<float>( wrapPixelCoord( wrapMode, coord, levelSize ) ) * invTileSize );
-}
-
-HOSTDEVICE inline unsigned int calculateTileIndexFromTileCoords( const DemandTextureInfo& dti,
-                                                                 unsigned int             mipLevel,
-                                                                 unsigned int             tileX,
-                                                                 unsigned int             tileY,
-                                                                 unsigned int             levelWidth )
-{
-    const unsigned int widthInTiles     = ceilMult( levelWidth, dti.tileWidth, dti.invTileWidth );
-    const unsigned int indexWithinLevel = tileY * widthInTiles + tileX;
-    return indexWithinLevel + dti.numTilesBeforeLevel[mipLevel];
-}
-
-HOSTDEVICE inline unsigned int calculateTileIndex( const DemandTextureInfo& dti,
-                                                   unsigned int             mipLevel,
-                                                   int                      pixelX,
-                                                   int                      pixelY,
-                                                   unsigned int             levelWidth,
-                                                   unsigned int             levelHeight )
-{
-    const unsigned int tileX =
-        calculateWrappedTileCoord( (cudaTextureAddressMode)dti.wrapMode0, pixelX, levelWidth, dti.invTileWidth );
-    const unsigned int tileY =
-        calculateWrappedTileCoord( (cudaTextureAddressMode)dti.wrapMode1, pixelY, levelHeight, dti.invTileHeight );
-    return calculateTileIndexFromTileCoords( dti, mipLevel, tileX, tileY, levelWidth );
-}
-
-HOSTDEVICE inline unsigned int calculateTileIndex( const DemandTextureInfo& dti, unsigned int mipLevel, float x, float y )
-{
-    const unsigned int levelWidth  = calculateLevelDim( mipLevel, dti.width );
-    const unsigned int levelHeight = calculateLevelDim( mipLevel, dti.height );
-
-    // We need to floor these so they don't round up when their result is between -1 and 0.
-    const int pixelX = static_cast<int>( floorf( x * static_cast<float>( levelWidth ) ) );
-    const int pixelY = static_cast<int>( floorf( y * static_cast<float>( levelHeight ) ) );
-
-    return calculateTileIndex( dti, mipLevel, pixelX, pixelY, levelWidth, levelHeight );
-}
-
-/// The caller of calculateTileRequests must provide an output array with this capacity.
-HOSTDEVICE constexpr inline unsigned int getCalculateTileRequestsMaxTiles()
-{
-    return 4;
-}
-
-HOSTDEVICE inline void calculateTileRequests( const DemandTextureInfo& dti,
-                                              unsigned int             mipLevel,
-                                              float                    normX,
-                                              float                    normY,
-                                              // The output array must have a capacity of at least MAX_TILES_CALCULATED.
-                                              unsigned int* outTilesToRequest,
-                                              unsigned int& outNumTilesToRequest )
-{
-    outNumTilesToRequest = 0;
-
-    // If the requested miplevel is in the mip tail, return a request for tile index zero.
-    if( mipLevel >= dti.mipTailFirstLevel )
-    {
-        outTilesToRequest[outNumTilesToRequest] = 0;
-        ++outNumTilesToRequest;
-        return;
-    }
-
-    const unsigned int levelWidth  = calculateLevelDim( mipLevel, dti.width );
-    const unsigned int levelHeight = calculateLevelDim( mipLevel, dti.height );
-
-    const int pixelX         = static_cast<int>( normX * levelWidth );
-    const int pixelY         = static_cast<int>( normY * levelHeight );
-    const int halfAnisotropy = dti.anisotropy >> 1;
-
-    // Compute the x and y tile coordinates for left, right, top, bottom
-    unsigned int xTileCoords[2];
-    unsigned int yTileCoords[2];
-
-    const cudaTextureAddressMode wrapMode0 = static_cast<cudaTextureAddressMode>( dti.wrapMode0 );
-    const cudaTextureAddressMode wrapMode1 = static_cast<cudaTextureAddressMode>( dti.wrapMode0 );
-
-    xTileCoords[0] = calculateWrappedTileCoord( wrapMode0, pixelX - halfAnisotropy, levelWidth, dti.invTileWidth );
-    xTileCoords[1] = calculateWrappedTileCoord( wrapMode0, pixelX + halfAnisotropy, levelWidth, dti.invTileWidth );
-    yTileCoords[0] = calculateWrappedTileCoord( wrapMode1, pixelY - halfAnisotropy, levelHeight, dti.invTileHeight );
-    yTileCoords[1] = calculateWrappedTileCoord( wrapMode1, pixelY + halfAnisotropy, levelHeight, dti.invTileHeight );
-
-    // Set the loop bounds to avoid duplicate values
-    const int xmax = ( xTileCoords[0] == xTileCoords[1] ) ? 1 : 2;
-    const int ymax = ( yTileCoords[0] == yTileCoords[1] ) ? 1 : 2;
-
-    // Add each unique tileIndex to the request array
-    for( int j = 0; j < ymax; ++j )
-    {
-        for( int i = 0; i < xmax; ++i )
-        {
-            outTilesToRequest[outNumTilesToRequest] =
-                calculateTileIndexFromTileCoords( dti, mipLevel, xTileCoords[i], yTileCoords[j], levelWidth );
-            ++outNumTilesToRequest;
-        }
-    }
+    // Tiles are layed out in 8x8 blocks to match the output of the texture footprint instruction
+    int levelWidthInBlocks = ( levelWidthInTiles + 7 ) / 8;
+    return 64 * ( levelWidthInBlocks * ( y / 8 ) ) +  // Offset for full rows of blocks
+           64 * ( x / 8 ) +                           // Offset for full blocks on last row
+           8 * ( y % 8 ) + ( x % 8 );                 // Partial offset in last block
 }
 
 // Return the mip level and pixel coordinates of the corner of the tile associated with tileIndex
-HOSTDEVICE inline void unpackTileIndex( const DemandTextureInfo& dti,
-                                        unsigned int             tileIndex,
-                                        unsigned int&            outMipLevel,
-                                        unsigned int&            outTileX,
-                                        unsigned int&            outTileY )
+__host__ __device__ static __forceinline__ void unpackTileIndex( const TextureSampler& sampler,
+                                                                 unsigned int             tileIndex,
+                                                                 unsigned int&            outMipLevel,
+                                                                 unsigned int&            outTileX,
+                                                                 unsigned int&            outTileY )
 {
-    for( int mipLevel = dti.mipTailFirstLevel; mipLevel >= 0; --mipLevel )
+    const demandLoading::TextureSampler::MipLevelSizes* mls = sampler.mipLevelSizes;
+    for( int mipLevel = sampler.mipTailFirstLevel; mipLevel >= 0; --mipLevel )
     {
-        if( ( mipLevel == 0 && dti.numPages > tileIndex ) || dti.numTilesBeforeLevel[mipLevel - 1] > tileIndex )
+        unsigned int nextMipLevelStart = ( mipLevel > 0 ) ? mls[mipLevel - 1].mipLevelStart : sampler.numPages;
+        if( tileIndex < nextMipLevelStart )
         {
-            const unsigned int levelWidth   = calculateLevelDim( mipLevel, dti.width );
-            const unsigned int widthInTiles = ceilMult( levelWidth, dti.tileWidth, dti.invTileWidth );
-
-            const unsigned int indexInLevel = tileIndex - dti.numTilesBeforeLevel[mipLevel];
-            outTileY                        = indexInLevel / widthInTiles;
-            outTileX                        = indexInLevel % widthInTiles;
-            outMipLevel                     = mipLevel;
+            const unsigned int levelWidthInTiles = sampler.mipLevelSizes[mipLevel].levelWidthInTiles;
+            const unsigned int indexInLevel      = tileIndex - sampler.mipLevelSizes[mipLevel].mipLevelStart;
+            outMipLevel                          = mipLevel;
+            getTileCoordsFromPageOffset( indexInLevel, levelWidthInTiles, outTileX, outTileY );
             return;
         }
     }
@@ -226,10 +134,32 @@ HOSTDEVICE inline void unpackTileIndex( const DemandTextureInfo& dti,
     outTileY    = 0;
 }
 
-HOSTDEVICE inline bool isMipTailIndex( unsigned int pageIndex )
+__host__ __device__ static __forceinline__ bool isMipTailIndex( unsigned int pageIndex )
 {
     // Page 0 always contains the mip tail.
     return pageIndex == 0;
+}
+
+// Wrap the tile coordinate x based on the toroidal addressing scheme of the footprint instruction
+__host__ __device__ static __forceinline__ int wrapFootprintTileCoord( int x, unsigned int dx, unsigned int tileX, unsigned int levelWidthInTiles )
+{
+    // Toroidal rotation
+    if( x + dx >= 8 )
+        x -= 8;
+
+    // Fix spillover that happens on small levels sometimes
+    if( x > (int)levelWidthInTiles )
+        x = 0;
+
+    // Add base tile contribution
+    x += 8 * tileX;
+
+    // Wrap the tile coord
+    if( x < 0 )
+        x += levelWidthInTiles;
+    if( x >= static_cast<int>( levelWidthInTiles ) )
+        x -= levelWidthInTiles;
+    return x;
 }
 
 }  // namespace demandLoading

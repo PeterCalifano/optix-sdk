@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2019, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -30,13 +30,10 @@ if( CUDA_VERSION VERSION_LESS "11.1" )
   return()
 endif()
 
-set( LIB_DIR "../lib" )
+string( REPLACE "${CUDA_MIN_SM_TARGET}" "sm_60" SAMPLES_NVCC_FLAGS "${SAMPLES_NVCC_FLAGS}" )
 
 # CUDA code includes from lib/DemandLoading, but the library target doesn't set the CUDA include path.
-include_directories( 
-  ${LIB_DIR}/optixPaging/include
-  ${LIB_DIR}/DemandLoading/include
-  )
+include_directories( ../lib/DemandLoading/include )
 
 OPTIX_add_sample_executable( optixDemandTexture target_name
   ${SAMPLES_CUDA_DIR}/helpers.h
@@ -46,6 +43,5 @@ OPTIX_add_sample_executable( optixDemandTexture target_name
   )
 
 target_link_libraries( ${target_name} 
-  optixPaging 
-  DemandLoading_exp 
+  DemandLoading
   )

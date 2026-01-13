@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2019, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -90,13 +90,6 @@ namespace sutil
   * matrices, such as transformation matrices.  @ref Matrix may also be useful
   * in other computation and can be used in both host and device code.
   * Typedefs are provided for 2x2 through 4x4 matrices.
-  *
-  * <B>History</B>
-  *
-  * @ref Matrix was introduced in OptiX 1.0.
-  *
-  * <B>See also</B>
-  * \a rtVariableSetMatrix*
   *
   */
   template <unsigned int M, unsigned int N>

@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2019, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -28,10 +28,8 @@
 
 #include "optixDemandTexture.h"
 
-#include <DemandLoading/DemandTextureContext.h>
-#include <DemandLoading/Tex2D.h>
-
-#include <optixPaging/optixPaging.h>
+#include <DemandLoading/DeviceContext.h>
+#include <DemandLoading/Texture2D.h>
 
 #include <sutil/vec_math.h>
 
@@ -70,7 +68,7 @@ struct RayPayload
 static __forceinline__ __device__ void* unpackPointer( unsigned int i0, unsigned int i1 )
 {
     const unsigned long long uptr = static_cast<unsigned long long>( i0 ) << 32 | i1;
-    void*          ptr  = reinterpret_cast<void*>( uptr );
+    void*                    ptr  = reinterpret_cast<void*>( uptr );
     return ptr;
 }
 
@@ -78,8 +76,8 @@ static __forceinline__ __device__ void* unpackPointer( unsigned int i0, unsigned
 static __forceinline__ __device__ void packPointer( void* ptr, unsigned int& i0, unsigned int& i1 )
 {
     const unsigned long long uptr = reinterpret_cast<unsigned long long>( ptr );
-    i0                  = uptr >> 32;
-    i1                  = uptr & 0x00000000ffffffff;
+    i0                            = uptr >> 32;
+    i1                            = uptr & 0x00000000ffffffff;
 }
 
 
@@ -89,40 +87,6 @@ static __forceinline__ __device__ RayPayload* getPRD()
     const unsigned int u1 = optixGetPayload_1();
     return reinterpret_cast<RayPayload*>( unpackPointer( u0, u1 ) );
 }
-
-
-//------------------------------------------------------------------------------
-//
-// Determine the image pixel to render based on the sample index for multi-gpu
-//
-//------------------------------------------------------------------------------
-
-static const int TILE_WIDTH  = 8;
-static const int TILE_HEIGHT = 4;
-
-static __forceinline__ __device__ uint2 getWorkIndex( int gpu_idx, int sample_idx, int width, int height, int num_gpus )
-{
-    const int tile_strip_width    = TILE_WIDTH * num_gpus;
-    const int tile_strip_height   = TILE_HEIGHT;
-    const int num_tile_strip_cols = width / tile_strip_width + ( width % tile_strip_width == 0 ? 0 : 1 );
-
-    const int tile_strip_idx     = sample_idx / ( TILE_WIDTH * TILE_HEIGHT );
-    const int tile_strip_y       = tile_strip_idx / num_tile_strip_cols;
-    const int tile_strip_x       = tile_strip_idx - tile_strip_y * num_tile_strip_cols;
-    const int tile_strip_x_start = tile_strip_x * tile_strip_width;
-    const int tile_strip_y_start = tile_strip_y * tile_strip_height;
-
-    const int tile_pixel_idx = sample_idx - ( tile_strip_idx * TILE_WIDTH * TILE_HEIGHT );
-    const int tile_pixel_y   = tile_pixel_idx / TILE_WIDTH;
-    const int tile_pixel_x   = tile_pixel_idx - tile_pixel_y * TILE_WIDTH;
-
-    const int tile_offset_x = ( gpu_idx + tile_strip_y % num_gpus ) % num_gpus * TILE_WIDTH;
-
-    const int pixel_y = tile_strip_y_start + tile_pixel_y;
-    const int pixel_x = tile_strip_x_start + tile_pixel_x + tile_offset_x;
-    return make_uint2( pixel_x, pixel_y );
-}
-
 
 //------------------------------------------------------------------------------
 //
@@ -205,7 +169,7 @@ inline __device__ void computeTextureDerivatives( float2&       dpdx,  // textur
     rdy -= ty * rayDir;
 
     // Compute the texture derivatives in texture space. These are calculated as the
-    // dot products of the projected ray differentials with the texture derivatives. 
+    // dot products of the projected ray differentials with the texture derivatives.
     dpdx = make_float2( dot( dPds, rdx ), dot( dPdt, rdx ) );
     dpdy = make_float2( dot( dPds, rdy ), dot( dPdt, rdy ) );
 }
@@ -220,18 +184,34 @@ inline __device__ void computeTextureDerivatives( float2&       dpdx,  // textur
 extern "C" __global__ void __raygen__rg()
 {
     // Determine which pixel to render from the launch index
-    const int imageWidth  = params.image_width;
-    const int imageHeight = params.image_height;
-    const uint3 launch_idx = optixGetLaunchIndex();
-    unsigned int pixelIdx = launch_idx.x * imageWidth + launch_idx.y;
-    const uint2 idx = getWorkIndex( params.device_idx, pixelIdx, imageWidth, imageHeight, params.num_devices );
+    const int    imageWidth  = params.image_width;
+    const int    imageHeight = params.image_height;
+    const uint3  launchIdx  = optixGetLaunchIndex();
+
+    // Remap the launch index to the pixel index based on the bucket dimensions
+    uint3 pixelIdx = make_uint3( 0, 0, 0 );
+    {
+        const unsigned int bucket_index   = params.bucket_index;
+        const unsigned int bucket_width   = params.bucket_width;
+        const unsigned int bucket_height  = params.bucket_height;
+        const unsigned int bucket_count_x = ( imageWidth + bucket_width - 1 ) / bucket_width;
+        const unsigned int bucket_x       = bucket_index % bucket_count_x;
+        const unsigned int bucket_y       = bucket_index / bucket_count_x;
+
+        pixelIdx = make_uint3( launchIdx.x + bucket_width  * bucket_x,
+                               launchIdx.y + bucket_height * bucket_y,
+                               0 );
+    }
+
+    if( pixelIdx.x >= imageWidth || pixelIdx.y >= imageHeight )
+        return;
 
     // Get the camera parameters
     const float3 U = params.U;
     const float3 V = params.V;
     const float3 W = params.W;
     const float2 d =
-        2.0f * make_float2( static_cast<float>( idx.x ) / imageWidth, static_cast<float>( idx.y ) / imageHeight ) - 1.0f;
+        2.0f * make_float2( static_cast<float>( pixelIdx.x ) / imageWidth, static_cast<float>( pixelIdx.y ) / imageHeight ) - 1.0f;
 
     // Construct the ray
     const float3 origin    = params.eye;
@@ -252,7 +232,7 @@ extern "C" __global__ void __raygen__rg()
            1e16f,  // tmax
            &prd );
 
-    params.result_buffer[idx.y * params.image_width + idx.x] = make_color( prd.rgb );
+    params.result_buffer[pixelIdx.y * params.image_width + pixelIdx.x] = make_color( prd.rgb );
 }
 
 
@@ -332,8 +312,8 @@ extern "C" __global__ void __closesthit__ch()
     dPdt /= dot( dPdt, dPdt );
 
     // Compute final texture coordinates
-    float s = texcoord.x * textureScale - 0.5f * (textureScale - 1.0f);
-    float t = ( 1.0f - texcoord.y ) * textureScale - 0.5f * (textureScale - 1.0f);
+    float s = texcoord.x * textureScale - 0.5f * ( textureScale - 1.0f );
+    float t = ( 1.0f - texcoord.y ) * textureScale - 0.5f * ( textureScale - 1.0f );
 
     // Get the ray direction and hit distance
     RayPayload*  prd    = getPRD();
@@ -348,24 +328,18 @@ extern "C" __global__ void __closesthit__ch()
     float2 ddx, ddy;
     computeTextureDerivatives( ddx, ddy, dPds, dPdt, rdx, rdy, N, rayDir );
 
-    // Scale the texture derivatives based on the texture scale (how many times the 
+    // Scale the texture derivatives based on the texture scale (how many times the
     // texture wraps around the sphere) and the mip bias
     float biasScale = exp2f( params.mipLevelBias );
     ddx *= textureScale * biasScale;
     ddy *= textureScale * biasScale;
 
-    // Compute the color based on the render mode
-    bool   isResident = true;
-    float4 color      = make_float4( 0.0f );
+    // Sample the texture
+    const bool requestIfResident = true;
+    bool       isResident        = true;
 
-    // Sample the texture a number of times
-    const int        numTextureTaps = params.numTextureTaps;
-    for( int i = 0; i < numTextureTaps; ++i )
-    {
-        color += tex2DGrad<float4>( params.demandTextureContext, textureId, s, t, ddx, ddy, &isResident );
-        s += 0.0001f;
-    }
-    float invNumTextureTaps = (numTextureTaps != 0) ? numTextureTaps : 1;
-    color *= invNumTextureTaps;
+    float4 color = tex2DGrad<float4>(
+        params.demandTextureContext, textureId, s, t, ddx, ddy, &isResident, requestIfResident );
+
     prd->rgb = make_float3( color );
 }

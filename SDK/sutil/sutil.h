@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2019, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -143,12 +143,13 @@ SUTILAPI void calculateCameraVariables(
 // Get current time in seconds for benchmarking/timing purposes.
 double SUTILAPI currentTime();
 
-// Get PTX, either pre-compiled with NVCC or JIT compiled by NVRTC.
-SUTILAPI const char* getPtxString(
-        const char* sampleName,             // Name of the sample, used to locate the input file. NULL = only search the common /cuda dir
-        const char* sampleDir,              // Directory name for the sample (typically the same as the sample name).
-        const char* filename,               // Cuda C input file name
-        const char** log = NULL );          // (Optional) pointer to compiler log string. If *log == NULL there is no output. Only valid until the next getPtxString call
+// Get input data, either pre-compiled with NVCC or JIT compiled by NVRTC.
+SUTILAPI const char* getInputData( const char* sampleName,  // Name of the sample, used to locate the input file. NULL = only search the common /cuda dir
+                                   const char* sampleDir,  // Directory name for the sample (typically the same as the sample name).
+                                   const char* filename,      // Cuda C input file name
+                                   size_t&     dataSize, 
+                                   const char** log = NULL );  // (Optional) pointer to compiler log string. If *log == NULL there is no output. Only valid until the next getInputData call
+
 
 // Ensures that width and height have the minimum size to prevent launch errors.
 SUTILAPI void ensureMinimumSize(

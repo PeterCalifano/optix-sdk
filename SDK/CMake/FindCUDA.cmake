@@ -352,7 +352,7 @@
 #   James Bigler, NVIDIA Corp (nvidia.com - jbigler)
 #   Abe Stephens, SCI Institute -- http://www.sci.utah.edu/~abe/FindCuda.html
 #
-#   Copyright (c) 2008 - 2009 NVIDIA Corporation.  All rights reserved.
+#   Copyright (c) 2008 - 2021 NVIDIA Corporation.  All rights reserved.
 #
 #   Copyright (c) 2007-2009
 #   Scientific Computing and Imaging Institute, University of Utah
@@ -559,19 +559,42 @@ else()
   endif()
 endif()
 
-# Set up CUDA_VS_DIR
-if (MSVC)
+# Set up CUDA_VC_VARS_ALL_BAT if it hasn't been specified.
+# set CUDA_VC_VARS_ALL_BAT explicitly to avoid any attempts to locate it via this algorithm.
+if(MSVC AND NOT CUDA_VC_VARS_ALL_BAT AND CUDA_ENABLE_BATCHING)
+  get_filename_component(_cuda_dependency_ccbin_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+  #message(STATUS "_cuda_dependency_ccbin_dir = ${_cuda_dependency_ccbin_dir}")
   # In VS 6-12 (1200-1800) the versions were 6 off.  Starting in VS 14 (1900) it's only 5.
   if(MSVC_VERSION VERSION_LESS 1900)
-    math(EXPR vs_version "${MSVC_VERSION} / 100 - 6")
+    math(EXPR vs_major_version "${MSVC_VERSION} / 100 - 6")
+    find_file( CUDA_VC_VARS_ALL_BAT vcvarsall.bat PATHS "${_cuda_dependency_ccbin_dir}/../.." NO_DEFAULT_PATH )
+  elseif(MSVC_VERSION VERSION_EQUAL 1900)
+    # Visual Studio 2015
+    set(vs_major_version "15")
+    find_file( CUDA_VC_VARS_ALL_BAT vcvarsall.bat PATHS "${_cuda_dependency_ccbin_dir}/../.." NO_DEFAULT_PATH )
+  elseif(MSVC_VERSION VERSION_LESS 1920)
+    # Visual Studio 2017
+    set(vs_major_version "15")
+    find_file( CUDA_VC_VARS_ALL_BAT vcvarsall.bat PATHS "${_cuda_dependency_ccbin_dir}/../../../../../../Auxiliary/Build" NO_DEFAULT_PATH )
   else()
-    math(EXPR vs_version "${MSVC_VERSION} / 100 - 5")
+    # Visual Studio 2019
+    set(vs_major_version "16")
+    find_file( CUDA_VC_VARS_ALL_BAT vcvarsall.bat PATHS "${_cuda_dependency_ccbin_dir}/../../../../../../Auxiliary/Build" NO_DEFAULT_PATH )
   endif()
-  get_filename_component(CUDA_VS_DIR "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\VisualStudio\\${vs_version}.0\\Setup\\VS;ProductDir]" REALPATH CACHE)
-  if(DEFINED CUDA_VS_DIR)
-    mark_as_advanced(CUDA_VS_DIR)
+  if( NOT CUDA_VC_VARS_ALL_BAT )
+    # See if we can get VS install location from the registry.  Registry searches can only
+    # be accomplished via a CACHE variable, unfortunately.
+    get_filename_component(_cuda_vs_dir_tmp "[HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\VisualStudio\\${vs_major_version}.0\\Setup\\VS;ProductDir]" REALPATH CACHE)
+    if( _cuda_vs_dir_tmp )
+        set( CUDA_VS_DIR ${_cuda_vs_dir_tmp} )
+        unset( _cuda_vs_dir_tmp CACHE )
+    endif()
+    find_file( CUDA_VC_VARS_ALL_BAT vcvarsall.bat PATHS ${CUDA_VS_DIR}/VC/bin ${CUDA_VS_DIR}/VC/Auxiliary/Build NO_DEFAULT_PATH )
   endif()
-  #message("CUDA_VS_DIR = ${CUDA_VS_DIR}")
+  if( NOT CUDA_VC_VARS_ALL_BAT )
+    message(FATAL_ERROR "Cannot find path to vcvarsall.bat. Looked in ${CUDA_VS_DIR}/VC/bin ${CUDA_VS_DIR}/VC/Auxiliary/Build")
+  endif()
+  #message("CUDA_VS_DIR = ${CUDA_VS_DIR}, CUDA_VC_VARS_ALL_BAT = ${CUDA_VC_VARS_ALL_BAT}")
 endif()
 
 # Propagate the host flags to the host compiler via -Xcompiler
@@ -1561,13 +1584,21 @@ macro(CUDA_WRAP_SRCS cuda_target format generated_files)
       else()
         set( cuda_compile_to_external_module ON )
         if( ${_cuda_source_format} MATCHES "PTX" )
+          set( cuda_compile_to_external_module_flag "-ptx")
           set( cuda_compile_to_external_module_type "ptx" )
         elseif( ${_cuda_source_format} MATCHES "CUBIN")
+          set( cuda_compile_to_external_module_flag "-cubin" )
           set( cuda_compile_to_external_module_type "cubin" )
         elseif( ${_cuda_source_format} MATCHES "FATBIN")
+          set( cuda_compile_to_external_module_flag "-fatbin" )
           set( cuda_compile_to_external_module_type "fatbin" )
         else()
-          message( FATAL_ERROR "Invalid format flag passed to CUDA_WRAP_SRCS or set with CUDA_SOURCE_PROPERTY_FORMAT file property for file '${file}': '${_cuda_source_format}'.  Use OBJ, PTX, CUBIN or FATBIN.")
+          if(DEFINED CUDA_CUSTOM_SOURCE_FORMAT_FLAG_${_cuda_source_format} AND DEFINED CUDA_CUSTOM_SOURCE_FORMAT_TYPE_${_cuda_source_format})
+            set( cuda_compile_to_external_module_flag "${CUDA_CUSTOM_SOURCE_FORMAT_FLAG_${_cuda_source_format}}" )
+            set( cuda_compile_to_external_module_type "${CUDA_CUSTOM_SOURCE_FORMAT_TYPE_${_cuda_source_format}}" )
+          else()
+            message( FATAL_ERROR "Invalid format flag passed to CUDA_WRAP_SRCS or set with CUDA_SOURCE_PROPERTY_FORMAT file property for file '${file}': '${_cuda_source_format}'.  Use OBJ, PTX, CUBIN or FATBIN.")
+          endif()
         endif()
       endif()
 
@@ -1599,7 +1630,7 @@ macro(CUDA_WRAP_SRCS cuda_target format generated_files)
       if( cuda_compile_to_external_module )
         set(generated_file_path "${cuda_compile_output_dir}")
         set(generated_file_basename "${cuda_target}_generated_${basename}.${cuda_compile_to_external_module_type}")
-        set(format_flag "-${cuda_compile_to_external_module_type}")
+        set(format_flag "${cuda_compile_to_external_module_flag}")
         file(MAKE_DIRECTORY "${cuda_compile_output_dir}")
       else()
         set(generated_file_path "${cuda_compile_output_dir}/${CMAKE_CFG_INTDIR}")
@@ -1718,8 +1749,14 @@ macro(CUDA_WRAP_SRCS cuda_target format generated_files)
         set(_cuda_dependency_ccbin)
         # message("CUDA_HOST_COMPILER = ${CUDA_HOST_COMPILER}")
         if(ccbin_flags MATCHES "\\$\\(VCInstallDir\\)")
-          if (CUDA_VS_DIR)
-            set(_cuda_dependency_ccbin -D "CCBIN:PATH=${CUDA_VS_DIR}/VC/bin")
+          set(_cuda_dependency_ccbin_dir)
+          if (CUDA_VS_DIR AND EXISTS "${CUDA_VS_DIR}/VC/bin")
+            set(_cuda_dependency_ccbin_dir "${CUDA_VS_DIR}/VC/bin")
+          elseif( EXISTS "${CMAKE_CXX_COMPILER}" )
+            get_filename_component(_cuda_dependency_ccbin_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+          endif()
+          if( _cuda_dependency_ccbin_dir )
+            set(_cuda_dependency_ccbin -D "CCBIN:PATH=${_cuda_dependency_ccbin_dir}")
           endif()
         elseif(ccbin_flags)
           # The CUDA_HOST_COMPILER is set to something interesting, so use the
@@ -2164,7 +2201,7 @@ function(CUDA_BATCH_BUILD_END target)
     list(REMOVE_DUPLICATES cuda_depends)
     add_custom_target( ${cuda_batch_build_target}
       COMMENT "CUDA batch build ${cuda_batch_build_target}..."
-      COMMAND "${PYTHON_EXECUTABLE}" "${BATCH_CMAKE_SCRIPT}" -t ${cuda_batch_build_target} -c ${CUDA_BATCH_BUILD_LOG} -s "\"%24(VCInstallDir)=$(VCInstallDir)\\\"" -s "%24(ConfigurationName)=$(ConfigurationName)" -s "%24(Configuration)=$(Configuration)"   # %24 is the '$' character - needed to escape '$' in VS rule
+      COMMAND "${PYTHON_EXECUTABLE}" "${BATCH_CMAKE_SCRIPT}" -t ${cuda_batch_build_target} -c ${CUDA_BATCH_BUILD_LOG} -s "\"%24(VCInstallDir)=$(VCInstallDir)\\\"" -s "%24(ConfigurationName)=$(ConfigurationName)" -s "%24(Configuration)=$(Configuration)" -s "%24(VCToolsVersion)=$(VCToolsVersion)" -s "%24(Platform)=$(Platform)" -s "%24(PlatformTarget)=$(PlatformTarget)"   # %24 is the '$' character - needed to escape '$' in VS rule
       DEPENDS ${cuda_depends}
       )    
     add_dependencies( ${target} ${cuda_batch_build_target} )
@@ -2189,10 +2226,7 @@ function(CUDA_BATCH_DEPENDS_BEGIN)
     # Create batch file to setup VS environment, since CUDA 8 broke running nvcc outside
     # of VS environment.  You could get around this with the following command with newer
     # versions of cmake (3.5.2 worked for me, but 3.2.1 didn't like the && ):
-    # execute_process( COMMAND ${CUDA_VS_DIR}/VC/vcvarsall.bat && ${PYTHON_EXECUTABLE} ... )
-    if(NOT CUDA_VS_DIR)
-      message(FATAL_ERROR "CUDA_VS_DIR wasn't set")
-    endif()
+    # execute_process( COMMAND ${CUDA_VC_VARS_ALL_BAT} && ${PYTHON_EXECUTABLE} ... )
     if(CMAKE_SIZEOF_VOID_P EQUAL 8)
       set(BUILD_BITS amd64)
     else()
@@ -2201,7 +2235,7 @@ function(CUDA_BATCH_DEPENDS_BEGIN)
     file(WRITE ${CUDA_BATCH_DEPENDS_LOG}.vsconfigure.bat
       "@echo OFF\n"
       "REM Created by FindCUDA.cmake\n"
-      "@call \"${CUDA_VS_DIR}/VC/vcvarsall.bat\" ${BUILD_BITS}\n"
+      "@call \"${CUDA_VC_VARS_ALL_BAT}\" ${BUILD_BITS}\n"
       "\"${PYTHON_EXECUTABLE}\" \"${BATCH_CMAKE_SCRIPT}\" -e \"${CUDA_BATCH_DEPENDS_LOG}\" -t \"CUDA batch dependencies\""
       )
   endif()

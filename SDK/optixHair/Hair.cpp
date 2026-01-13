@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -93,9 +93,6 @@ Hair::Hair( const OptixDeviceContext context, const std::string& fileName )
     {
         std::fill( m_thickness.begin(), m_thickness.end(), defaultThickness() );
     }
-
-    SUTIL_ASSERT_MSG( !hasAlpha(), "Not implemented: Alpha data." );
-    SUTIL_ASSERT_MSG( !hasColor(), "Not implemented: Color data." );
 
     //
     // Compute the axis-aligned bounding box for this hair geometry.
