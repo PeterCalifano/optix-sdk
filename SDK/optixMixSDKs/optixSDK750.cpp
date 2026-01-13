@@ -2,7 +2,7 @@
 
  * SPDX-FileCopyrightText: Copyright (c) 2023 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
  *
@@ -155,7 +155,7 @@ void runSDK750()
 
     triangleInput.triangleArray.indexFormat = OPTIX_INDICES_FORMAT_UNSIGNED_INT3;
     triangleInput.triangleArray.indexStrideInBytes = sizeof( IndexedTriangle );
-    ;
+
     triangleInput.triangleArray.numIndexTriplets = ( unsigned int )g_indexedTriangleMesh.size();
     triangleInput.triangleArray.indexBuffer = d_indices;
 
@@ -231,4 +231,16 @@ void runSDK750()
     CUDA_CHECK( cudaMalloc( ( void** )&d_instanceTraversableHandles, sizeof( OptixTraversableHandle ) ) );
     CUDA_CHECK( cudaMemcpy( ( void* )d_instanceTraversableHandles, &gasHandle, sizeof( OptixTraversableHandle ), cudaMemcpyHostToDevice ) );
     OPTIX_CHECK( optixAccelRelocate( context, 0, &iasRelocationInfo, d_instanceTraversableHandles, 1, d_iasRelocateBuffer, iasBufferSizes.outputSizeInBytes, &iasHandle ) );
+
+    OPTIX_CHECK( optixDeviceContextDestroy( context ) );
+
+    CUDA_CHECK( cudaFree( (void*)d_vertices ) );
+    CUDA_CHECK( cudaFree( (void*)d_indices ) );
+    CUDA_CHECK( cudaFree( (void*)d_instances ) );
+    CUDA_CHECK( cudaFree( (void*)d_tempBuffer ) );
+    CUDA_CHECK( cudaFree( (void*)d_gasOutputBuffer ) );
+    CUDA_CHECK( cudaFree( (void*)d_iasOutputBuffer ) );
+    CUDA_CHECK( cudaFree( (void*)d_gasRelocateBuffer ) );
+    CUDA_CHECK( cudaFree( (void*)d_iasRelocateBuffer ) );
+    CUDA_CHECK( cudaFree( (void*)d_instanceTraversableHandles ) );
 }

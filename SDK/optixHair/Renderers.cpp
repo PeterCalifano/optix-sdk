@@ -98,7 +98,83 @@ WindowRenderer::~WindowRenderer()
     sutil::cleanupUI( m_window );
 }
 
-void WindowRenderer::run() const
+void WindowRenderer::displayHairStats( std::chrono::duration<double>& state_update_time,
+                                       std::chrono::duration<double>& render_time,
+                                       std::chrono::duration<double>& display_time,
+                                       const Hair::SplineMode         splineMode )
+{
+        constexpr std::chrono::duration<double> display_update_min_interval_time( 0.5 );
+        static int32_t                          total_subframe_count = 0;
+        static int32_t                          last_update_frames   = 0;
+        static auto                             last_update_time     = std::chrono::steady_clock::now();
+        static char                             display_text[256];
+
+        const auto cur_time = std::chrono::steady_clock::now();
+
+        sutil::beginFrameImGui();
+        last_update_frames++;
+
+        typedef std::chrono::duration<double, std::milli> durationMs;
+
+        const char* spline_text = "";
+        switch( splineMode )
+        {
+            case Hair::LINEAR_BSPLINE :
+            {
+                spline_text = "linear";
+            }
+            break;
+            case Hair::QUADRATIC_BSPLINE :
+            case Hair::QUADRATIC_BSPLINE_ROCAPS:
+            {
+                spline_text = "quadratic";
+            }
+            break;
+            case Hair::CUBIC_BSPLINE :
+            case Hair::CUBIC_BSPLINE_ROCAPS:
+            {
+                spline_text = "cubic";
+            }
+            break;
+            case Hair::CATROM_SPLINE :
+            case Hair::CATROM_SPLINE_ROCAPS:
+            {
+                spline_text = "CatmullRom";
+            }
+            break;
+        }
+        const char* rocaps = "";
+        if( splineMode == Hair::QUADRATIC_BSPLINE_ROCAPS || splineMode == Hair::CUBIC_BSPLINE_ROCAPS || splineMode == Hair::CATROM_SPLINE_ROCAPS )
+            rocaps = "rocaps";
+
+        if( cur_time - last_update_time > display_update_min_interval_time || total_subframe_count == 0 )
+        {
+
+            sprintf( display_text,
+                     "%5.1f fps\n\n"
+                     "state update: %8.1f ms\n"
+                     "render      : %8.1f ms\n"
+                     "display     : %8.1f ms\n"
+                     " \n"
+                     "spline mode : %s\n"
+                     "              %s\n",
+                     last_update_frames / std::chrono::duration<double>( cur_time - last_update_time ).count(),
+                     ( durationMs( state_update_time ) / last_update_frames ).count(),
+                     ( durationMs( render_time ) / last_update_frames ).count(),
+                     ( durationMs( display_time ) / last_update_frames ).count(),
+                     spline_text, rocaps );
+
+            last_update_time   = cur_time;
+            last_update_frames = 0;
+            state_update_time = render_time = display_time = std::chrono::duration<double>::zero();
+        }
+        sutil::displayText( display_text, 10.0f, 10.0f );
+        sutil::endFrameImGui();
+
+        ++total_subframe_count;
+}
+
+void WindowRenderer::run()
 {
     sutil::GLDisplay gl_display;
 
@@ -130,7 +206,7 @@ void WindowRenderer::run() const
         t1 = std::chrono::steady_clock::now();
         display_time += t1 - t0;
 
-        sutil::displayStats( state_update_time, render_time, display_time );
+        displayHairStats( state_update_time, render_time, display_time, m_pState->pHair->splineMode() );
 
         glfwSwapBuffers( m_window );
     } while( !glfwWindowShouldClose( m_window ) );
@@ -280,6 +356,46 @@ void WindowRenderer::keyCallback( GLFWwindow* window, int32_t key, int32_t /*sca
                 makeSBT( pState );
                 pState->params.subframe_index = 0u;
                 std::cout << "Switched to Catmull-Rom geometry." << std::endl;
+            }
+            break;
+            case GLFW_KEY_5:
+            {
+                pState->pHair->setSplineMode( Hair::QUADRATIC_BSPLINE_ROCAPS );
+                makeHairGAS( pState );
+                makeInstanceAccelerationStructure( pState );
+                pState->params.handle = pState->hIAS;
+                makeProgramGroups( pState );
+                makePipeline( pState );
+                makeSBT( pState );
+                pState->params.subframe_index = 0u;
+
+                std::cout << "Switched to quadratic b-spline rocaps geometry." << std::endl;
+            }
+            break;
+            case GLFW_KEY_6:
+            {
+                pState->pHair->setSplineMode( Hair::CUBIC_BSPLINE_ROCAPS );
+                makeHairGAS( pState );
+                makeInstanceAccelerationStructure( pState );
+                pState->params.handle = pState->hIAS;
+                makeProgramGroups( pState );
+                makePipeline( pState );
+                makeSBT( pState );
+                pState->params.subframe_index = 0u;
+                std::cout << "Switched to cubic b-spline rocaps geometry." << std::endl;
+            }
+            break;
+            case GLFW_KEY_7:
+            {
+                pState->pHair->setSplineMode( Hair::CATROM_SPLINE_ROCAPS );
+                makeHairGAS( pState );
+                makeInstanceAccelerationStructure( pState );
+                pState->params.handle = pState->hIAS;
+                makeProgramGroups( pState );
+                makePipeline( pState );
+                makeSBT( pState );
+                pState->params.subframe_index = 0u;
+                std::cout << "Switched to Catmull-Rom rocaps geometry." << std::endl;
             }
             break;
             case GLFW_KEY_S:

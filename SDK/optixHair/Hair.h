@@ -55,7 +55,10 @@ class Hair
         LINEAR_BSPLINE,
         QUADRATIC_BSPLINE,
         CUBIC_BSPLINE,
-        CATROM_SPLINE
+        CATROM_SPLINE,
+        QUADRATIC_BSPLINE_ROCAPS,
+        CUBIC_BSPLINE_ROCAPS,
+        CATROM_SPLINE_ROCAPS
     };
     enum Shade
     {
@@ -116,10 +119,16 @@ class Hair
             return OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_LINEAR;
         case QUADRATIC_BSPLINE:
             return OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_QUADRATIC_BSPLINE;
+        case QUADRATIC_BSPLINE_ROCAPS:
+            return OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_QUADRATIC_BSPLINE_ROCAPS;
         case CUBIC_BSPLINE:
             return OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CUBIC_BSPLINE;
+        case CUBIC_BSPLINE_ROCAPS:
+            return OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CUBIC_BSPLINE_ROCAPS;
         case CATROM_SPLINE:
             return OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CATMULLROM;
+        case CATROM_SPLINE_ROCAPS:
+            return OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CATMULLROM_ROCAPS;
         }
         SUTIL_ASSERT_FAIL_MSG( "Invalid b-spline mode." );
     }
@@ -192,9 +201,12 @@ class Hair
         case LINEAR_BSPLINE:
             return 1;
         case QUADRATIC_BSPLINE:
+        case QUADRATIC_BSPLINE_ROCAPS:
             return 2;
         case CUBIC_BSPLINE:
+        case CUBIC_BSPLINE_ROCAPS:
         case CATROM_SPLINE:
+        case CATROM_SPLINE_ROCAPS:
             return 3;
         }
         SUTIL_ASSERT_FAIL_MSG( "Invalid spline mode." );

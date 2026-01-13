@@ -48,7 +48,7 @@ static __forceinline__ __device__ float3 getHitPoint()
     return rayOrigin + t * rayDirection;
 }
 
-// Compute surface normal of quadratic pimitive in world space.
+// Compute surface normal of quadratic primitive in world space.
 static __forceinline__ __device__ float3 normalLinear( const int primitiveIndex )
 {
     const OptixTraversableHandle gas = optixGetGASTraversableHandle();
@@ -67,7 +67,7 @@ static __forceinline__ __device__ float3 normalLinear( const int primitiveIndex 
     return optixTransformNormalFromObjectToWorldSpace( normal );
 }
 
-// Compute surface normal of quadratic pimitive in world space.
+// Compute surface normal of quadratic primitive in world space.
 static __forceinline__ __device__ float3 normalQuadratic( const int primitiveIndex )
 {
     const OptixTraversableHandle gas         = optixGetGASTraversableHandle();
@@ -86,7 +86,29 @@ static __forceinline__ __device__ float3 normalQuadratic( const int primitiveInd
     return optixTransformNormalFromObjectToWorldSpace( normal );
 }
 
-// Compute surface normal of cubic b-spline pimitive in world space.
+// Compute surface normal of quadratic rocaps primitive in world space.
+static __forceinline__ __device__ float3 normalQuadraticRocaps( const int primitiveIndex )
+{
+    const OptixTraversableHandle gas         = optixGetGASTraversableHandle();
+    const unsigned int           gasSbtIndex = optixGetSbtGASIndex();
+    float4                       controlPoints[3];
+
+    optixGetQuadraticBSplineRocapsVertexDataFromHandle( gas, primitiveIndex, gasSbtIndex, 0.0f, controlPoints );
+
+    QuadraticInterpolator interpolator;
+    interpolator.initializeFromBSpline( controlPoints );
+
+    float  u         = optixGetCurveParameter();
+    float3 curve_pos = interpolator.position3( u );
+
+    float3 hitPoint = getHitPoint();
+    // interpolators work in object space
+    hitPoint            = optixTransformPointFromWorldToObjectSpace( hitPoint );
+    const float3 normal = normalize( hitPoint - curve_pos );
+    return optixTransformNormalFromObjectToWorldSpace( normal );
+}
+
+// Compute surface normal of cubic b-spline primitive in world space.
 static __forceinline__ __device__ float3 normalCubic( const int primitiveIndex )
 {
     const OptixTraversableHandle gas         = optixGetGASTraversableHandle();
@@ -105,7 +127,29 @@ static __forceinline__ __device__ float3 normalCubic( const int primitiveIndex )
     return optixTransformNormalFromObjectToWorldSpace( normal );
 }
 
-// Compute surface normal of Catmull-Rom pimitive in world space.
+// Compute surface normal of cubic rocaps b-spline primitive in world space.
+static __forceinline__ __device__ float3 normalCubicRocaps( const int primitiveIndex )
+{
+    const OptixTraversableHandle gas         = optixGetGASTraversableHandle();
+    const unsigned int           gasSbtIndex = optixGetSbtGASIndex();
+    float4                       controlPoints[4];
+
+    optixGetCubicBSplineRocapsVertexDataFromHandle( gas, primitiveIndex, gasSbtIndex, 0.0f, controlPoints );
+
+    CubicInterpolator interpolator;
+    interpolator.initializeFromBSpline( controlPoints );
+
+    float  u         = optixGetCurveParameter();
+    float3 curve_pos = interpolator.position3( u );
+
+    float3 hitPoint = getHitPoint();
+    // interpolators work in object space
+    hitPoint            = optixTransformPointFromWorldToObjectSpace( hitPoint );
+    const float3 normal = normalize( hitPoint - curve_pos );
+    return optixTransformNormalFromObjectToWorldSpace( normal );
+}
+
+// Compute surface normal of Catmull-Rom primitive in world space.
 static __forceinline__ __device__ float3 normalCatrom( const int primitiveIndex )
 {
     const OptixTraversableHandle gas         = optixGetGASTraversableHandle();
@@ -121,6 +165,28 @@ static __forceinline__ __device__ float3 normalCatrom( const int primitiveIndex 
     // interpolators work in object space
     hitPoint            = optixTransformPointFromWorldToObjectSpace( hitPoint );
     const float3 normal = surfaceNormal( interpolator, optixGetCurveParameter(), hitPoint );
+    return optixTransformNormalFromObjectToWorldSpace( normal );
+}
+
+// Compute surface normal of Catmull-Rom rocaps primitive in world space.
+static __forceinline__ __device__ float3 normalCatromRocaps( const int primitiveIndex )
+{
+    const OptixTraversableHandle gas         = optixGetGASTraversableHandle();
+    const unsigned int           gasSbtIndex = optixGetSbtGASIndex();
+    float4                       controlPoints[4];
+
+    optixGetCatmullRomRocapsVertexDataFromHandle( gas, primitiveIndex, gasSbtIndex, 0.0f, controlPoints );
+
+    CubicInterpolator interpolator;
+    interpolator.initializeFromCatrom( controlPoints );
+
+    float  u         = optixGetCurveParameter();
+    float3 curve_pos = interpolator.position3( u );
+
+    float3 hitPoint = getHitPoint();
+    // interpolators work in object space
+    hitPoint            = optixTransformPointFromWorldToObjectSpace( hitPoint );
+    const float3 normal = normalize( hitPoint - curve_pos );
     return optixTransformNormalFromObjectToWorldSpace( normal );
 }
 
@@ -208,6 +274,12 @@ static __forceinline__ __device__ float3 computeNormal( OptixPrimitiveType type,
       return  normalCubic( primitiveIndex );
   case OPTIX_PRIMITIVE_TYPE_ROUND_CATMULLROM:
       return  normalCatrom( primitiveIndex );
+  case OPTIX_PRIMITIVE_TYPE_ROUND_QUADRATIC_BSPLINE_ROCAPS:
+      return normalQuadraticRocaps( primitiveIndex );
+  case OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BSPLINE_ROCAPS:
+      return normalCubicRocaps( primitiveIndex );
+  case OPTIX_PRIMITIVE_TYPE_ROUND_CATMULLROM_ROCAPS:
+      return normalCatromRocaps( primitiveIndex );
   }
   return make_float3(0.0f);
 }
@@ -232,16 +304,20 @@ extern "C" __global__ void __closesthit__curve_strand_u()
 
 extern "C" __global__ void __closesthit__curve_segment_u()
 {
-    const unsigned int primitiveIndex = optixGetPrimitiveIndex();
+    const unsigned int       primitiveIndex = optixGetPrimitiveIndex();
+    const OptixPrimitiveType primitiveType  = optixGetPrimitiveType();
+
+    const bool rocaps = ( primitiveType == OPTIX_PRIMITIVE_TYPE_ROUND_QUADRATIC_BSPLINE || OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BSPLINE
+                          || primitiveType == OPTIX_PRIMITIVE_TYPE_ROUND_CATMULLROM_ROCAPS );
 
     const whitted::HitGroupData* hitGroupData = reinterpret_cast<whitted::HitGroupData*>( optixGetSbtDataPointer() );
 
-    const float3 normal     = computeNormal( optixGetPrimitiveType(), primitiveIndex );
+    const float3 normal     = computeNormal( primitiveType, primitiveIndex );
     const float3 colors[3]  = {make_float3( 1, 0, 0 ), make_float3( 0, 1, 0 ),
                                make_float3( 0, 0, 1 ) };
     const float  u          = optixGetCurveParameter();
     float3 base_color;
-    if( u == 0.0f || u == 1.0f )  // on end-cap
+    if( (u == 0.0f || u == 1.0f) && !rocaps )  // on end-cap
         base_color = colors[2];
     else
         base_color = colors[0] * u + colors[1] * ( 1 - u );

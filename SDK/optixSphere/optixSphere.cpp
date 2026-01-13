@@ -141,7 +141,7 @@ int main( int argc, char* argv[] )
             CUcontext cuCtx = 0;  // zero means take the current context
             OPTIX_CHECK( optixInit() );
             OptixDeviceContextOptions options = {};
-#ifndef NDEBUG
+#if OPTIX_DEBUG_DEVICE_CODE
             options.validationMode = OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_ALL;
 #endif
             options.logCallbackFunction       = &context_log_cb;
@@ -242,7 +242,7 @@ int main( int argc, char* argv[] )
         OptixPipelineCompileOptions pipeline_compile_options = {};
         {
             OptixModuleCompileOptions module_compile_options = {};
-#if !defined( NDEBUG )
+#if OPTIX_DEBUG_DEVICE_CODE
             module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
             module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 #endif

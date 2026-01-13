@@ -94,6 +94,15 @@ void makeHairGAS( HairState* pState )
         case Hair::CATROM_SPLINE:
             buildInput.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_CATMULLROM;
             break;
+        case Hair::QUADRATIC_BSPLINE_ROCAPS:
+            buildInput.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_QUADRATIC_BSPLINE_ROCAPS;
+            break;
+        case Hair::CUBIC_BSPLINE_ROCAPS:
+            buildInput.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BSPLINE_ROCAPS;
+            break;
+        case Hair::CATROM_SPLINE_ROCAPS:
+            buildInput.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_CATMULLROM_ROCAPS;
+            break;
         default:
             SUTIL_ASSERT_FAIL_MSG( "Invalid spline mode" );
     }
@@ -376,12 +385,15 @@ std::vector<HitRecord> hairSbtHitRecords( HairState* pState, const ProgramGroups
             hitGroupRecord.data.geometry_data.setLinearCurveArray( pState->curves );
             break;
         case Hair::QUADRATIC_BSPLINE:
+        case Hair::QUADRATIC_BSPLINE_ROCAPS:
             hitGroupRecord.data.geometry_data.setQuadraticCurveArray( pState->curves );
             break;
         case Hair::CUBIC_BSPLINE:
+        case Hair::CUBIC_BSPLINE_ROCAPS:
             hitGroupRecord.data.geometry_data.setCubicCurveArray( pState->curves );
             break;
         case Hair::CATROM_SPLINE:
+        case Hair::CATROM_SPLINE_ROCAPS:
             hitGroupRecord.data.geometry_data.setCatromCurveArray( pState->curves );
             break;
         default:
@@ -591,6 +603,9 @@ void printKeyboardCommands()
                  "  '2' quadratic b-spline interpretation of the geometry.\n"
                  "  '3' cubic b-spline interpretation of the geometry.\n"
                  "  '4' Catmull-Rom spline interpretation of the geometry.\n"
+                 "  '5' quadratic b-spline rocaps interpretation of the geometry.\n"
+                 "  '6' cubic b-spline rocaps interpretation of the geometry.\n"
+                 "  '7' Catmull-Rom spline rocaps interpretation of the geometry.\n"
                  "  's' \"segment u\": lerp from red to green via  segment u,\n"
                  "      i.e. each segment starts green and ends red.\n"
                  "  'r' \"root-to-tip u\": lerp red to green with root-to-tip u,\n"
@@ -612,7 +627,8 @@ void printUsageAndExit( const char* argv0 )
     std::cerr << "         --dim=<width>x<height>      Set image dimensions; defaults to 1024x768\n";
     std::cerr << "         --hair <model.hair>         Specify the hair model; defaults to \"Hair/wStraight.hair\"\n";
     std::cerr << "         --deg=<1|2|3>               Specify the curve degree; defaults to 3\n";
-    std::cerr << "         --catrom                    Catmul-Rom spline for curve specification (forces deg = 3)\n";
+    std::cerr << "         --catrom                    Catmull-Rom spline for curve specification (forces deg = 3)\n";
+    std::cerr << "         --rocaps                    Rocaps variant of the quadratic/cubic curves.";
     std::cerr << "         --help | -h                 Print this usage message\n\n\n";
     printKeyboardCommands();
     exit( 0 );
@@ -647,6 +663,7 @@ int main( int argc, char* argv[] )
     image_size[1]           = 786;
     int curveDegree         = 3;
     bool catrom             = false;
+    bool rocaps             = false;
     std::string outputFile;
 
     //
@@ -684,6 +701,9 @@ int main( int argc, char* argv[] )
                 std::cerr << "Warning: --deg=" << curveDegree << " incompatible with --catrom mode. Forcing degree = 3." << std::endl;
                 curveDegree = 3;
             }
+            if (rocaps && curveDegree == 1) {
+                std::cerr << "Warning: --deg=" << curveDegree << " incompatible with --rocaps mode." << std::endl;
+            }
         }
         else if( arg == "--catrom" )
         {
@@ -691,6 +711,13 @@ int main( int argc, char* argv[] )
             if (curveDegree != 3) {
                 std::cerr << "Warning: --deg=" << curveDegree << " incompatible with --catrom mode. Forcing degree = 3." << std::endl;
                 curveDegree = 3;
+            }
+        }
+        else if( arg == "--rocaps" )
+        {
+            rocaps = true;
+            if (!(curveDegree == 2 || curveDegree == 3)) {
+                std::cerr << "Warning: --deg=1 incompatible with --rocaps mode, ignoring rocaps." << std::endl;
             }
         }
         else
@@ -719,13 +746,13 @@ int main( int argc, char* argv[] )
         state.accumBuffer.resize( state.width, state.height );
 
         if( catrom )
-            hair.setSplineMode( Hair::CATROM_SPLINE );
+            hair.setSplineMode( !rocaps ? Hair::CATROM_SPLINE : Hair::CATROM_SPLINE_ROCAPS );
         else if( 1 == curveDegree )
             hair.setSplineMode( Hair::LINEAR_BSPLINE );
         else if( 2 == curveDegree )
-            hair.setSplineMode( Hair::QUADRATIC_BSPLINE );
+            hair.setSplineMode( !rocaps ? Hair::QUADRATIC_BSPLINE : Hair::QUADRATIC_BSPLINE_ROCAPS );
         else if( 3 == curveDegree )
-            hair.setSplineMode( Hair::CUBIC_BSPLINE );
+            hair.setSplineMode( !rocaps ? Hair::CUBIC_BSPLINE : Hair::CUBIC_BSPLINE_ROCAPS );
         else
             SUTIL_ASSERT_FAIL_MSG( "Curve type unspecified" );
         std::cout << hair << std::endl;

@@ -2,7 +2,7 @@
 
  * SPDX-FileCopyrightText: Copyright (c) 2023 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
  *
@@ -240,4 +240,16 @@ void runSDKCurrent()
     relocateInput.instanceArray.numInstances       = 1;
     relocateInput.instanceArray.traversableHandles = d_instanceTraversableHandles;
     OPTIX_CHECK( optixAccelRelocate( context, 0, &iasRelocationInfo, &relocateInput, 1, d_iasRelocateBuffer, iasBufferSizes.outputSizeInBytes, &iasHandle ) );
+
+    OPTIX_CHECK( optixDeviceContextDestroy( context ) );
+
+    CUDA_CHECK( cudaFree( (void*)d_vertices ) );
+    CUDA_CHECK( cudaFree( (void*)d_indices ) );
+    CUDA_CHECK( cudaFree( (void*)d_instances ) );
+    CUDA_CHECK( cudaFree( (void*)d_tempBuffer ) );
+    CUDA_CHECK( cudaFree( (void*)d_gasOutputBuffer ) );
+    CUDA_CHECK( cudaFree( (void*)d_iasOutputBuffer ) );
+    CUDA_CHECK( cudaFree( (void*)d_gasRelocateBuffer ) );
+    CUDA_CHECK( cudaFree( (void*)d_iasRelocateBuffer ) );
+    CUDA_CHECK( cudaFree( (void*)d_instanceTraversableHandles ) );
 }

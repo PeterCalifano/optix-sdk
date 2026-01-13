@@ -1,5 +1,4 @@
 /*
-
  * SPDX-FileCopyrightText: Copyright (c) 2019 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  * 
@@ -114,7 +113,8 @@ void printUsageAndExit( const char* argv0 )
     std::cerr << "                                       2 - Quadratic b-spline/no caps,\n";
     std::cerr << "                                       3 - Cubic b-spline/no caps\n";
     std::cerr << "                                     For bezier and catmullrom the only option is 3.\n";
-    std::cerr << "         --basis | -b <basis type>   Set basis to bspline, bezier, catmullrom (default bspline);\n"; 
+    std::cerr << "         --basis | -b <basis type>   Set basis to bspline, bezier, catmullrom (default bspline).\n";
+    std::cerr << "         --rocaps                    Render quadratic or cubic curves as rocaps.\n";
     std::cerr << "         --rad   | -r <rad>          Specify radius of curve (default 0.4)\n";
     std::cerr << "         --mot   | -m                Render with motion blur\n";
     exit( 1 );
@@ -136,6 +136,7 @@ int main( int argc, char* argv[] )
     bool      motion_blur = false;
     bool      ribbon = false;
     bool      ribbon_normals = false;
+    bool      rocaps = false;
 
     for( int i = 1; i < argc; ++i )
     {
@@ -219,6 +220,21 @@ int main( int argc, char* argv[] )
             else
             {
                 printUsageAndExit( argv[0] );
+            }
+        }
+        else if( arg == "--rocaps" )
+        {
+            if( !(degree == 2 || degree == 3) )
+            {
+                std::cerr << "Curve degree of rocaps curves must be 2 or 3. Otherwise rocaps is ignored.\n";
+            }
+            else if( ribbon )
+            {
+                std::cerr << "--rocaps is ignored for ribbons.\n";
+            }
+            else
+            {
+                rocaps = true;
             }
         }
         else if( arg == "-r" || arg == "--rad" )
@@ -388,16 +404,27 @@ int main( int argc, char* argv[] )
             case 2:
                 if( ribbon )
                     curve_input.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_FLAT_QUADRATIC_BSPLINE;
+                else if( rocaps )
+                    curve_input.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_QUADRATIC_BSPLINE_ROCAPS;
                 else
                     curve_input.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_QUADRATIC_BSPLINE;
                 break;
             case 3:
                 if( basis == BEZIER )
-                    curve_input.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BEZIER;
+                    if( rocaps )
+                        curve_input.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BEZIER_ROCAPS;
+                    else
+                        curve_input.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BEZIER;
                 else if( basis == CATROM )
-                    curve_input.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_CATMULLROM;
+                    if( rocaps )
+                        curve_input.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_CATMULLROM_ROCAPS;
+                    else
+                        curve_input.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_CATMULLROM;
                 else
-                    curve_input.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BSPLINE;
+                    if( rocaps )
+                        curve_input.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BSPLINE_ROCAPS;
+                    else
+                        curve_input.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BSPLINE;
                 break;
             }
 
@@ -449,7 +476,7 @@ int main( int argc, char* argv[] )
         OptixPipelineCompileOptions pipeline_compile_options = {};
         {
             OptixModuleCompileOptions module_compile_options = {};
-#if !defined( NDEBUG )
+#if OPTIX_DEBUG_DEVICE_CODE
             module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
             module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 #endif
@@ -468,16 +495,27 @@ int main( int argc, char* argv[] )
                 case 2:
                     if( ribbon )
                         pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_FLAT_QUADRATIC_BSPLINE;
+                    else if( rocaps )
+                        pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_QUADRATIC_BSPLINE_ROCAPS;
                     else
                         pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_QUADRATIC_BSPLINE;
                     break;
                 case 3:
                     if( basis == BEZIER )
-                        pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CUBIC_BEZIER;
+                        if( rocaps )
+                            pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CUBIC_BEZIER_ROCAPS;
+                        else
+                            pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CUBIC_BEZIER;
                     else if( basis == CATROM )
-                        pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CATMULLROM;
+                        if( rocaps )
+                            pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CATMULLROM_ROCAPS;
+                        else
+                            pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CATMULLROM;
                     else
-                        pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CUBIC_BSPLINE;
+                        if( rocaps )
+                            pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CUBIC_BSPLINE_ROCAPS;
+                        else
+                            pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CUBIC_BSPLINE;
                     break;
             }
             size_t      inputSize  = 0;
@@ -494,16 +532,27 @@ int main( int argc, char* argv[] )
                 case 2:
                     if( ribbon )
                         builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_FLAT_QUADRATIC_BSPLINE;
+                    else if( rocaps )
+                        builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_QUADRATIC_BSPLINE_ROCAPS;
                     else
                         builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_QUADRATIC_BSPLINE;
                     break;
                 case 3:
                     if( basis == BEZIER )
-                        builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BEZIER;
+                        if( rocaps )
+                            builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BEZIER_ROCAPS;
+                        else
+                            builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BEZIER;
                     else if( basis == CATROM )
-                        builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_CATMULLROM;
+                        if( rocaps )
+                            builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_CATMULLROM_ROCAPS;
+                        else
+                            builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_CATMULLROM;
                     else
-                        builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BSPLINE;
+                        if( rocaps )
+                            builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BSPLINE_ROCAPS;
+                        else
+                            builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BSPLINE;
                     break;
             }
             builtinISOptions.usesMotionBlur = motion_blur;  // enable motion-blur for built-in intersector

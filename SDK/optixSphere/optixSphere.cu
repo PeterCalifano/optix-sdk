@@ -131,8 +131,6 @@ extern "C" __global__ void __miss__ms()
 extern "C" __global__ void __closesthit__ch()
 {
     float  t_hit = optixGetRayTmax();
-    // Backface hit not used.
-    //float  t_hit2 = __uint_as_float( optixGetAttribute_0() ); 
 
     const float3 ray_orig = optixGetWorldRayOrigin();
     const float3 ray_dir  = optixGetWorldRayDirection();

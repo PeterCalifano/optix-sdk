@@ -88,6 +88,7 @@ target_link_libraries(${sutil_target} LINK_PRIVATE
   ${GLFW_LIB_NAME}
   glad
   imgui
+  miniz
   ${CUDA_LIBRARIES}
   )
 

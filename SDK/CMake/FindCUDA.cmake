@@ -1,3 +1,31 @@
+# SPDX-FileCopyrightText: Copyright (c) 2008 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+#
+# 1. Redistributions of source code must retain the above copyright notice, this
+# list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+# this list of conditions and the following disclaimer in the documentation
+# and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the copyright holder nor the names of its
+# contributors may be used to endorse or promote products derived from
+# this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
 #.rst:
 # FindCUDA
 # --------
@@ -57,6 +85,20 @@
 #      is unaware of this behavior, there may be confusion.  It would be nice if
 #      this script could detect the reuse of source files across multiple targets
 #      and turn the option off for the user, but no good solution could be found.
+#
+#   CUDA_BUILD_CONFIGURATION (Default inherited)
+#   -- Configuration used to select build flags. This value must be from
+#      CMAKE_CONFIGURATION_TYPES, CMAKE_BUILD_TYPE, or one of the following
+#      values: Debug, MinSizeRel, Release, or RelWithDebInfo.
+#
+#      By default, this is set to match the host's configuration (e.g. it will
+#      be set to CMAKE_BUILD_TYPE for make generators, and the active configuration
+#      type for the Visual Studio generator). However, it can be overridden to allow
+#      selecting device debug flags independently of the host's configuration. 
+#
+#      This value should only be overridden for targets that don't generate host
+#      code, such as PTX or OptiX-IR. Otherwise, the options used to build host
+#      code might mismatch those used for non-CUDA files.
 #
 #   CUDA_BUILD_CUBIN (Default OFF)
 #   -- Set to ON to enable and extra compilation pass with the -cubin option in
@@ -1339,7 +1381,7 @@ function(CUDA_COMPUTE_BUILD_PATH path build_path)
   # Avoid spaces
   string(REPLACE " " "_" bpath "${bpath}")
 
-  # Strip off the filename.  I wait until here to do it, since removin the
+  # Strip off the filename.  I wait until here to do it, since removing the
   # basename can make a path that looked like path/../basename turn into
   # path/.. (notice the trailing slash).
   get_filename_component(bpath "${bpath}" PATH)
@@ -1423,10 +1465,12 @@ macro(CUDA_WRAP_SRCS cuda_target format generated_files)
   # the script.  We need to defer the decision until compilation time, because
   # for VS projects we won't know if we are making a debug or release build
   # until build time.
-  if(CMAKE_GENERATOR MATCHES "Visual Studio")
-    set( CUDA_build_configuration "$(ConfigurationName)" )
-  else()
-    set( CUDA_build_configuration "${CMAKE_BUILD_TYPE}")
+  if( NOT DEFINED CUDA_BUILD_CONFIGURATION )
+    if(CMAKE_GENERATOR MATCHES "Visual Studio")
+      set( CUDA_BUILD_CONFIGURATION "$(ConfigurationName)" )
+    else()
+      set( CUDA_BUILD_CONFIGURATION "${CMAKE_BUILD_TYPE}")
+    endif()
   endif()
 
   # Initialize our list of includes with the user ones followed by the CUDA system ones.
@@ -1623,7 +1667,7 @@ macro(CUDA_WRAP_SRCS cuda_target format generated_files)
 
       if(cuda_compile_to_external_module_multi_config_build)
         set(CUDA_NVCC_FLAGS_CONFIG ${_cuda_nvcc_flags_config})
-        set( cuda_compile_cfg_intdir "${CMAKE_CFG_INTDIR}" )
+        set( cuda_compile_cfg_intdir "${CUDA_BUILD_CONFIGURATION}" )
       else()
         set(CUDA_NVCC_FLAGS_CONFIG)
         set( cuda_compile_cfg_intdir "." )
@@ -1690,7 +1734,7 @@ macro(CUDA_WRAP_SRCS cuda_target format generated_files)
         list(APPEND ${cuda_target}_SEPARABLE_COMPILATION_OBJECTS "${generated_file}")
       endif()
 
-      # Convience string for output ###########################################
+      # Convenience string for output ###########################################
       if(CUDA_BUILD_EMULATION)
         set(cuda_build_type "Emulation")
       else()
@@ -1828,7 +1872,7 @@ macro(CUDA_WRAP_SRCS cuda_target format generated_files)
           -D verbose:BOOL=${verbose_output}
           -D check_dependencies:BOOL=${CUDA_CHECK_DEPENDENCIES_DURING_COMPILE}
           ${ccbin_flags}
-          -D build_configuration:STRING=${CUDA_build_configuration}
+          -D build_configuration:STRING=${CUDA_BUILD_CONFIGURATION}
           -D "generated_file:STRING=${generated_file}"
           -D "generated_cubin_file:STRING=${generated_cubin_file}"
           -D "generated_fatbin_file:STRING=${generated_fatbin_file}"
@@ -1881,7 +1925,7 @@ endfunction()
 function(CUDA_COMPUTE_SEPARABLE_COMPILATION_OBJECT_FILE_NAME output_file_var cuda_target object_files)
   if (object_files)
     set(generated_extension ${CMAKE_${CUDA_C_OR_CXX}_OUTPUT_EXTENSION})
-    set(output_file "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${cuda_target}.dir/${CMAKE_CFG_INTDIR}/${cuda_target}_intermediate_link${generated_extension}")
+    set(output_file "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${cuda_target}.dir/${CUDA_BUILD_CONFIGURATION}/${cuda_target}_intermediate_link${generated_extension}")
   else()
     set(output_file)
   endif()
@@ -2212,7 +2256,7 @@ function(CUDA_BATCH_BUILD_END target)
 
   if( CUDA_BATCH_BUILD_LOG )
     set(cuda_batch_build_target "_${target}_cudaBatchBuild")
-    set(stamp_dir "${CMAKE_BINARY_DIR}/CMakeFiles/${target}.dir/${CMAKE_CFG_INTDIR}")
+    set(stamp_dir "${CMAKE_BINARY_DIR}/CMakeFiles/${target}.dir/${CUDA_BUILD_CONFIGURATION}")
     set(stamp_file ${stamp_dir}/cuda-batch-build.stamp)
     get_property(cuda_depends GLOBAL PROPERTY CUDA_BATCH_BUILD_DEPENDS)
     list(REMOVE_DUPLICATES cuda_depends)

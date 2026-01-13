@@ -2,7 +2,7 @@
 
  * SPDX-FileCopyrightText: Copyright (c) 2022 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
  *
@@ -31,13 +31,13 @@
 
 //-----------------------------------------------------------------------------
 //
-// A simple demonstration of opacity micromaps.  
+// A simple demonstration of opacity micromaps.
 //
-// * A single quad, made of two triangles ABC and ACD is rendered with a 
-//   transparent circular cutout at its center.  
+// * A single quad, made of two triangles ABC and ACD is rendered with a
+//   transparent circular cutout at its center.
 // * OMMs are applied to the two triangles to accelerate the evaluation of the
 //   opacity function during traversal.
-// * As a preproces, OMM microtriangles are marked as either completely 
+// * As a preproces, OMM microtriangles are marked as either completely
 //   transparent, completely opaque, or unknown.
 // * During traversal, rays that hit opaque or transparent regions of the OMM
 //   can skip the anyhit function.
@@ -74,13 +74,13 @@
 
 
 constexpr int OMM_SUBDIV_LEVEL = 4;
-constexpr int NUM_TRIS         = 2; 
+constexpr int NUM_TRIS         = 2;
 constexpr int DEFAULT_WIDTH    = 1024;
 constexpr int DEFAULT_HEIGHT   =  768;
 
-constexpr float2 g_uvs[NUM_TRIS][3] = 
+constexpr float2 g_uvs[NUM_TRIS][3] =
 {
-    { {  1.0f, -1.0f }, { -1.0f, -1.0f }, { -1.0f,  1.0f } }, // Triangle ABC 
+    { {  1.0f, -1.0f }, { -1.0f, -1.0f }, { -1.0f,  1.0f } }, // Triangle ABC
     { {  1.0f, -1.0f }, { -1.0f,  1.0f }, {  1.0f,  1.0f } }  // Triangle ACD
 };
 
@@ -112,7 +112,7 @@ void printUsageAndExit( const char* argv0 )
     std::cerr << "Usage  : " << argv0 << " [options]\n";
     std::cerr << "Options: --file | -f <filename>      Specify file for image output\n";
     std::cerr << "         --help | -h                 Print this usage message\n";
-    std::cerr << "         --dim=<width>x<height>      Set image dimensions; defaults to " 
+    std::cerr << "         --dim=<width>x<height>      Set image dimensions; defaults to "
               << DEFAULT_WIDTH << "x" << DEFAULT_HEIGHT << "\n";
     exit( 0 );
 }
@@ -196,16 +196,16 @@ int main( int argc, char* argv[] )
             constexpr int NUM_MICRO_TRIS = 1 << ( OMM_SUBDIV_LEVEL*2 );
             constexpr int BITS_PER_STATE = 2;
 
-            unsigned short omm_input_data[ NUM_TRIS ][ NUM_MICRO_TRIS / 16 * BITS_PER_STATE ] = {}; 
+            unsigned short omm_input_data[ NUM_TRIS ][ NUM_MICRO_TRIS / 16 * BITS_PER_STATE ] = {};
 
-            // Calculate the texture coordinate at the micromesh vertices of the triangle and 
+            // Calculate the texture coordinate at the micromesh vertices of the triangle and
             // determine if the triangle is inside, outside, or spanning the boundary of the circle.
             // Note that the tex coords are in [-1, 1] and the circle is centered at uv=(0,0).
-            auto evaluteOpacity = []( 
-                const float2& bary0, 
-                const float2& bary1, 
-                const float2& bary2, 
-                const float2* uvs 
+            auto evaluteOpacity = [](
+                const float2& bary0,
+                const float2& bary1,
+                const float2& bary2,
+                const float2* uvs
                 )
             {
                 const float2 uv0 = computeUV(bary0, uvs[0], uvs[1], uvs[2] );
@@ -214,7 +214,7 @@ int main( int argc, char* argv[] )
                 const bool in_circle0 = inCircle( uv0 );
                 const bool in_circle1 = inCircle( uv1 );
                 const bool in_circle2 = inCircle( uv2 );
-                if( in_circle0 && in_circle1 && in_circle2 ) 
+                if( in_circle0 && in_circle1 && in_circle2 )
                     // All 3 verts inside circle, mark transparent
                     return OPTIX_OPACITY_MICROMAP_STATE_TRANSPARENT;
                 else if( !in_circle0 && !in_circle1 && !in_circle2 )
@@ -237,8 +237,8 @@ int main( int argc, char* argv[] )
                 // still intersect the circle, we choose to ignore this detail
                 // in this sample.
                 //
-                // NB: This computation must align with the anyhit program (We 
-                //     are essentially baking the anyhit program at micro-tri 
+                // NB: This computation must align with the anyhit program (We
+                //     are essentially baking the anyhit program at micro-tri
                 //     vertices).
                 float2 bary0, bary1, bary2;
                 optixMicromapIndexToBaseBarycentrics( uTriI, OMM_SUBDIV_LEVEL, bary0, bary1, bary2 );
@@ -248,26 +248,26 @@ int main( int argc, char* argv[] )
                     const int opacity = evaluteOpacity( bary0, bary1, bary2, g_uvs[0] );
                     omm_input_data[0][uTriI/8] |= opacity << ( uTriI%8 * 2 );
                 }
-                
+
                 // second triangle (a,c,d)
                 {
                     const int opacity = evaluteOpacity( bary0, bary1, bary2, g_uvs[1] );
                     omm_input_data[1][uTriI/8] |= opacity << ( uTriI%8 * 2 );
                 }
             }
-            
+
             // Copy the omm array to device
             CUdeviceptr  d_omm_input_data = 0;
-            CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_omm_input_data ), sizeof( omm_input_data ) ) ); 
-            CUDA_CHECK( cudaMemcpy( 
+            CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_omm_input_data ), sizeof( omm_input_data ) ) );
+            CUDA_CHECK( cudaMemcpy(
                 reinterpret_cast<void*>( d_omm_input_data ),
                 omm_input_data,
-                sizeof( omm_input_data ), 
-                cudaMemcpyHostToDevice 
+                sizeof( omm_input_data ),
+                cudaMemcpyHostToDevice
             ) );
 
             //
-            // Build micromap 
+            // Build micromap
             //
             OptixOpacityMicromapHistogramEntry histogram{};
             histogram.count            = NUM_TRIS;
@@ -276,8 +276,8 @@ int main( int argc, char* argv[] )
 
             OptixOpacityMicromapArrayBuildInput build_input = {};
             build_input.flags                       = OPTIX_OPACITY_MICROMAP_FLAG_NONE;
-            build_input.inputBuffer                 = d_omm_input_data;           
-            build_input.numMicromapHistogramEntries = 1; 
+            build_input.inputBuffer                 = d_omm_input_data;
+            build_input.numMicromapHistogramEntries = 1;
             build_input.micromapHistogramEntries    = &histogram;
 
             OptixMicromapBufferSizes buffer_sizes = {};
@@ -285,15 +285,15 @@ int main( int argc, char* argv[] )
 
             // Two OMMs, both with the same layout
             std::vector<OptixOpacityMicromapDesc> omm_descs =
-            {                                                                                           
-                {   
-                    0,   // byteOffset for triangle 0                                       
-                    OMM_SUBDIV_LEVEL, 
-                    OPTIX_OPACITY_MICROMAP_FORMAT_4_STATE 
+            {
+                {
+                    0,   // byteOffset for triangle 0
+                    OMM_SUBDIV_LEVEL,
+                    OPTIX_OPACITY_MICROMAP_FORMAT_4_STATE
                 },
-                {    
-                    // byteOffset for triangle 1                                       
-                    static_cast<unsigned int>( sizeof(omm_input_data[0]) ), 
+                {
+                    // byteOffset for triangle 1
+                    static_cast<unsigned int>( sizeof(omm_input_data[0]) ),
                     OMM_SUBDIV_LEVEL,
                     OPTIX_OPACITY_MICROMAP_FORMAT_4_STATE
                 }
@@ -302,11 +302,11 @@ int main( int argc, char* argv[] )
             CUdeviceptr  d_omm_desc = 0;
             const size_t omm_desc_size_bytes = omm_descs.size() * sizeof(OptixOpacityMicromapDesc);
             CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_omm_desc ), omm_desc_size_bytes ) );
-            CUDA_CHECK( cudaMemcpy( 
-                reinterpret_cast<void*>( d_omm_desc ), 
-                omm_descs.data(), 
-                omm_desc_size_bytes, 
-                cudaMemcpyHostToDevice 
+            CUDA_CHECK( cudaMemcpy(
+                reinterpret_cast<void*>( d_omm_desc ),
+                omm_descs.data(),
+                omm_desc_size_bytes,
+                cudaMemcpyHostToDevice
             ) );
 
             build_input.perMicromapDescBuffer = d_omm_desc;
@@ -340,18 +340,18 @@ int main( int argc, char* argv[] )
             // Create OMM input
             //
             OptixOpacityMicromapUsageCount usage_count={};
-            usage_count.count  = NUM_TRIS; 
-            // simple 2 state as the OMM perfectly matches the checkerboard pattern. 
+            usage_count.count  = NUM_TRIS;
+            // simple 2 state as the OMM perfectly matches the checkerboard pattern.
             // 'unknown' states that are resolved in the anyhit program are not needed.
-            usage_count.format = OPTIX_OPACITY_MICROMAP_FORMAT_4_STATE;  
+            usage_count.format = OPTIX_OPACITY_MICROMAP_FORMAT_4_STATE;
             usage_count.subdivisionLevel = OMM_SUBDIV_LEVEL;
 
             std::array<unsigned short, NUM_TRIS> omm_indices = { 0u, 1u };
-            const size_t omm_indices_size_bytes = omm_indices.size() * sizeof( unsigned short ); 
+            const size_t omm_indices_size_bytes = omm_indices.size() * sizeof( unsigned short );
 
             CUdeviceptr  d_omm_indices = 0;
             CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_omm_indices ), omm_indices_size_bytes ) );
-            CUDA_CHECK( cudaMemcpy( 
+            CUDA_CHECK( cudaMemcpy(
                 reinterpret_cast<void*>( d_omm_indices ),
                 omm_indices.data(),
                 omm_indices_size_bytes,
@@ -460,7 +460,7 @@ int main( int argc, char* argv[] )
         OptixPipelineCompileOptions pipeline_compile_options = {};
         {
             OptixModuleCompileOptions module_compile_options = {};
-#if !defined( NDEBUG )
+#if OPTIX_DEBUG_DEVICE_CODE
             module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
             module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 #endif
@@ -497,7 +497,7 @@ int main( int argc, char* argv[] )
         {
             OptixProgramGroupOptions program_group_options   = {}; // Initialize to zeros
 
-            OptixProgramGroupDesc raygen_prog_group_desc    = {}; 
+            OptixProgramGroupDesc raygen_prog_group_desc    = {};
             raygen_prog_group_desc.kind                     = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
             raygen_prog_group_desc.raygen.module            = module;
             raygen_prog_group_desc.raygen.entryFunctionName = "__raygen__rg";
@@ -613,8 +613,8 @@ int main( int argc, char* argv[] )
             //const size_t uvs_size_bytes = g_uvs.size() * sizeof( float2 );
             const size_t uvs_size_bytes = sizeof( g_uvs );
             CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_uvs ), uvs_size_bytes ) );
-            CUDA_CHECK( cudaMemcpy( 
-                        reinterpret_cast<void*>( d_uvs ), 
+            CUDA_CHECK( cudaMemcpy(
+                        reinterpret_cast<void*>( d_uvs ),
                         g_uvs,
                         uvs_size_bytes,
                         cudaMemcpyHostToDevice
@@ -701,6 +701,7 @@ int main( int argc, char* argv[] )
             CUDA_CHECK( cudaFree( reinterpret_cast<void*>( sbt.hitgroupRecordBase ) ) );
             CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_gas_output_buffer    ) ) );
             CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_uvs                  ) ) );
+            CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_omm_array            ) ) );
 
             OPTIX_CHECK( optixPipelineDestroy( pipeline ) );
             OPTIX_CHECK( optixProgramGroupDestroy( hitgroup_prog_group ) );

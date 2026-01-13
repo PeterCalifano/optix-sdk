@@ -2,7 +2,7 @@
 
  * SPDX-FileCopyrightText: Copyright (c) 2020 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
  *
@@ -906,7 +906,7 @@ void createModule( OptixDeviceContext context, const std::string& ptx, const Opt
 void createRadianceModule( PathTracerState& state )
 {
     OptixModuleCompileOptions module_compile_options ={};
-#if !defined( NDEBUG )
+#if OPTIX_DEBUG_DEVICE_CODE
     module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
     module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 #endif
@@ -930,7 +930,7 @@ void createRadianceModule( PathTracerState& state )
 void createModule( PathTracerState& state )
 {
     OptixModuleCompileOptions module_compile_options = {};
-#if !defined( NDEBUG )
+#if OPTIX_DEBUG_DEVICE_CODE
     module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
     module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 #endif
@@ -1267,14 +1267,21 @@ void updatePipelineWhenChanged( PathTracerState& state )
 
 void cleanupState( PathTracerState& state )
 {
-    OPTIX_CHECK( optixPipelineDestroy( state.pipeline ) );
-    OPTIX_CHECK( optixProgramGroupDestroy( state.raygen_prog_group ) );
-    OPTIX_CHECK( optixProgramGroupDestroy( state.radiance_miss_group ) );
-    OPTIX_CHECK( optixProgramGroupDestroy( state.radiance_hit_group ) );
-    OPTIX_CHECK( optixProgramGroupDestroy( state.occlusion_hit_group ) );
-    OPTIX_CHECK( optixProgramGroupDestroy( state.occlusion_miss_group ) );
-    OPTIX_CHECK( optixModuleDestroy( state.ptx_module ) );
-    OPTIX_CHECK( optixModuleDestroy( state.ptx_module_radiance ) );
+    if( state.pipeline != nullptr )
+    {
+        OPTIX_CHECK( optixPipelineDestroy( state.pipeline ) );
+        OPTIX_CHECK( optixProgramGroupDestroy( state.raygen_prog_group ) );
+        OPTIX_CHECK( optixProgramGroupDestroy( state.radiance_miss_group ) );
+        OPTIX_CHECK( optixProgramGroupDestroy( state.radiance_hit_group ) );
+        OPTIX_CHECK( optixProgramGroupDestroy( state.occlusion_hit_group ) );
+        OPTIX_CHECK( optixProgramGroupDestroy( state.occlusion_miss_group ) );
+    }
+
+    if( state.ptx_module != nullptr )
+        OPTIX_CHECK( optixModuleDestroy( state.ptx_module ) );
+    if( state.ptx_module_radiance != nullptr )
+        OPTIX_CHECK( optixModuleDestroy( state.ptx_module_radiance ) );
+
     OPTIX_CHECK( optixDeviceContextDestroy( state.context ) );
 
 

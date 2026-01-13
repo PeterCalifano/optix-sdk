@@ -2,7 +2,7 @@
 
  * SPDX-FileCopyrightText: Copyright (c) 2021 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
  *
@@ -274,7 +274,7 @@ inline __device__ float transmittanceHDDA(
         float dt = hdda.time() - t; // compute length of ray-segment intersecting current voxel/tile
         transmittance *= expf( -density * dt );
         t = hdda.time();
-        ijk = hdda.voxel();
+        ijk = nanovdb::RoundDown<nanovdb::Coord>( ray(t + 0.01f) );
 
         density = acc.getValue( ijk ) * opacity;
         hdda.update( ray, acc.getDim( ijk, ray ) ); // if necessary adjust DDA step size

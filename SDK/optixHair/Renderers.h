@@ -33,6 +33,7 @@
 #include <optix.h>
 #include <optix_stubs.h>
 
+#include "Hair.h"
 #include "optixHair.h"
 
 #include <sutil/Trackball.h>
@@ -70,7 +71,7 @@ class WindowRenderer : public Renderer
 
     ~WindowRenderer();
 
-    void run() const;
+    void run();
 
   protected:
     //
@@ -84,6 +85,10 @@ class WindowRenderer : public Renderer
     static void scrollCallback( GLFWwindow* window, double xscroll, double yscroll );
 
   private:
+    void                   displayHairStats( std::chrono::duration<double>& state_update_time,
+                                             std::chrono::duration<double>& render_time,
+                                             std::chrono::duration<double>& display_time,
+                                             const Hair::SplineMode         splineMode );
     static WindowRenderer* GetRenderer( GLFWwindow* window );
     GLFWwindow*            m_window        = nullptr;
     sutil::Trackball       m_trackball     = {};

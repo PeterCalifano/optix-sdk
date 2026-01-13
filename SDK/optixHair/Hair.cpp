@@ -125,13 +125,13 @@ void Hair::gatherProgramGroups( HairProgramGroups* pProgramGroups ) const
     programGroupDesc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
     programGroupDesc.hitgroup.moduleCH            = pProgramGroups->m_shadingModule;
     programGroupDesc.hitgroup.entryFunctionNameCH = "__closesthit__curve_segment_u";
-    if( QUADRATIC_BSPLINE == m_splineMode )
+    if( QUADRATIC_BSPLINE == m_splineMode || QUADRATIC_BSPLINE_ROCAPS == m_splineMode )
         programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_quadraticCurveModule;
-    else if( CUBIC_BSPLINE == m_splineMode )
+    else if( CUBIC_BSPLINE == m_splineMode || CUBIC_BSPLINE_ROCAPS == m_splineMode )
         programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_cubicCurveModule;
     else if( LINEAR_BSPLINE == m_splineMode )
         programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_linearCurveModule;
-    else if( CATROM_SPLINE == m_splineMode )
+    else if( CATROM_SPLINE == m_splineMode || CATROM_SPLINE_ROCAPS == m_splineMode )
         programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_catromCurveModule;
     programGroupDesc.hitgroup.entryFunctionNameIS = 0;  // automatically supplied for built-in moduleq
     pProgramGroups->add( programGroupDesc, programName() + "SegmentU" );
@@ -143,13 +143,13 @@ void Hair::gatherProgramGroups( HairProgramGroups* pProgramGroups ) const
     programGroupDesc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
     programGroupDesc.hitgroup.moduleCH            = pProgramGroups->m_shadingModule;
     programGroupDesc.hitgroup.entryFunctionNameCH = "__closesthit__curve_strand_u";
-    if( QUADRATIC_BSPLINE == m_splineMode )
+    if( QUADRATIC_BSPLINE == m_splineMode || QUADRATIC_BSPLINE_ROCAPS == m_splineMode )
         programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_quadraticCurveModule;
-    else if( CUBIC_BSPLINE == m_splineMode )
+    else if( CUBIC_BSPLINE == m_splineMode || CUBIC_BSPLINE_ROCAPS == m_splineMode )
         programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_cubicCurveModule;
     else if( LINEAR_BSPLINE == m_splineMode )
         programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_linearCurveModule;
-    else if( CATROM_SPLINE == m_splineMode )
+    else if( CATROM_SPLINE == m_splineMode || CATROM_SPLINE_ROCAPS == m_splineMode )
         programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_catromCurveModule;
     programGroupDesc.hitgroup.entryFunctionNameIS = 0;  // automatically supplied for built-in moduleq
     pProgramGroups->add( programGroupDesc, programName() + "StrandU" );
@@ -161,28 +161,46 @@ void Hair::gatherProgramGroups( HairProgramGroups* pProgramGroups ) const
     programGroupDesc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
     programGroupDesc.hitgroup.moduleCH            = pProgramGroups->m_shadingModule;
     programGroupDesc.hitgroup.entryFunctionNameCH = "__closesthit__curve_strand_idx";
-    if( QUADRATIC_BSPLINE == m_splineMode )
-        programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_quadraticCurveModule;
-    else if( CUBIC_BSPLINE == m_splineMode )
-        programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_cubicCurveModule;
-    else if( LINEAR_BSPLINE == m_splineMode )
-        programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_linearCurveModule;
-    else if( CATROM_SPLINE == m_splineMode )
-        programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_catromCurveModule;
+    switch( m_splineMode )
+    {
+        case QUADRATIC_BSPLINE:
+        case QUADRATIC_BSPLINE_ROCAPS:
+            programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_quadraticCurveModule;
+            break;
+        case CUBIC_BSPLINE:
+        case CUBIC_BSPLINE_ROCAPS:
+            programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_cubicCurveModule;
+            break;
+        case LINEAR_BSPLINE:
+            programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_linearCurveModule;
+            break;
+        case CATROM_SPLINE:
+        case CATROM_SPLINE_ROCAPS:
+            programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_catromCurveModule;
+    }
     programGroupDesc.hitgroup.entryFunctionNameIS = 0;  // automatically supplied for built-in moduleq
     pProgramGroups->add( programGroupDesc, programName() + "StrandIndex" );
 
     // Occlusion shader for shadow rays
     memset( &programGroupDesc, 0, sizeof( OptixProgramGroupDesc ) );
     programGroupDesc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-    if( QUADRATIC_BSPLINE == m_splineMode )
-        programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_quadraticCurveModule;
-    else if( CUBIC_BSPLINE == m_splineMode )
-        programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_cubicCurveModule;
-    else if( LINEAR_BSPLINE == m_splineMode )
-        programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_linearCurveModule;
-    else if( CATROM_SPLINE == m_splineMode )
-        programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_catromCurveModule;
+    switch( m_splineMode )
+    {
+        case QUADRATIC_BSPLINE:
+        case QUADRATIC_BSPLINE_ROCAPS:
+            programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_quadraticCurveModule;
+            break;
+        case CUBIC_BSPLINE:
+        case CUBIC_BSPLINE_ROCAPS:
+            programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_cubicCurveModule;
+            break;
+        case LINEAR_BSPLINE:
+            programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_linearCurveModule;
+            break;
+        case CATROM_SPLINE:
+        case CATROM_SPLINE_ROCAPS:
+            programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_catromCurveModule;
+    }
     programGroupDesc.hitgroup.entryFunctionNameIS = 0;  // automatically supplied for built-in modul
     pProgramGroups->add( programGroupDesc, "occludeCurve" );
 }
@@ -193,10 +211,13 @@ std::string Hair::programName() const
     case LINEAR_BSPLINE:
         return "hitLinearCurve";
     case QUADRATIC_BSPLINE:
+    case QUADRATIC_BSPLINE_ROCAPS:
         return "hitQuadraticCurve";
     case CUBIC_BSPLINE:
+    case CUBIC_BSPLINE_ROCAPS:
         return "hitCubicCurve";
     case CATROM_SPLINE:
+    case CATROM_SPLINE_ROCAPS:
         return "hitCatromCurve";
     }
 
@@ -424,6 +445,15 @@ std::ostream& operator<<( std::ostream& o, Hair::SplineMode splineMode )
             break;
         case Hair::CATROM_SPLINE:
             o <<  "CATROM_SPLINE";
+            break;
+        case Hair::QUADRATIC_BSPLINE_ROCAPS:
+            o << "QUADRATIC_BSPLINE_ROCAPS";
+            break;
+        case Hair::CUBIC_BSPLINE_ROCAPS:
+            o << "CUBIC_BSPLINE_ROCAPS";
+            break;
+        case Hair::CATROM_SPLINE_ROCAPS:
+            o << "CATROM_SPLINE_ROCAPS";
             break;
         default:
             SUTIL_ASSERT_FAIL_MSG( "Invalid spline mode." );

@@ -126,6 +126,9 @@ SUTILAPI void displayStats( std::chrono::duration<double>& state_update_time,
 // Display a short string starting at x,y.
 SUTILAPI void displayText( const char* text, float x, float y );
 
+// add radio button 
+SUTILAPI void buildRadioButtons( const char* options[], const int numOptions, float x, float y, int& selected_option );
+
 // Blocking sleep call
 SUTILAPI void sleep(
         int seconds );                      // Number of seconds to sleep

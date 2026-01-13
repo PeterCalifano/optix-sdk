@@ -1,7 +1,7 @@
 #
 # SPDX-FileCopyrightText: Copyright (c) 2019 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
-# 
+#
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
 #
@@ -27,7 +27,7 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-add_library( imgui STATIC
+add_library( imgui SHARED
   imconfig.h
   imgui.cpp
   imgui_demo.cpp
@@ -48,4 +48,16 @@ target_include_directories( imgui
   INTERFACE ..
   PRIVATE . )
 target_compile_definitions( imgui PRIVATE IMGUI_IMPL_OPENGL_LOADER_GLAD )
+
+# On Windows, define IMGUI_API for public DLL symbols.
+if( WIN32 )
+  # Mark functions as exports when compiling shared library
+  target_compile_definitions( imgui PRIVATE "IMGUI_API=__declspec(dllexport)" )
+
+  # Mark functions as imports when linking against the library
+  target_compile_definitions( imgui INTERFACE "IMGUI_API=__declspec(dllimport)" )
+else()
+  target_compile_definitions( imgui PUBLIC "IMGUI_API=__attribute__ ((visibility (\"default\")))" )
+endif()
+
 target_link_libraries( imgui glfw glad ${OPENGL_gl_LIBRARY})

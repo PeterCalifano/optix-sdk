@@ -298,7 +298,7 @@ std::string readFile( const std::string& filename )
 void createModules( OptixConsoleState& state )
 {
     OptixModuleCompileOptions module_compile_options = {};
-#if !defined( NDEBUG )
+#if OPTIX_DEBUG_DEVICE_CODE
     module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
     module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 #endif

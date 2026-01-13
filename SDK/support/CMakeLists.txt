@@ -1,7 +1,7 @@
 #
 # SPDX-FileCopyrightText: Copyright (c) 2019 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: BSD-3-Clause
-# 
+#
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
 #
@@ -36,13 +36,17 @@ else()
   set(GLFW_LIB_NAME glfw3)
 endif()
 
+# Disable unnecessary GLFW components.
+set(GLFW_BUILD_DOCS OFF)
+set(GLFW_BUILD_WAYLAND OFF)
+
 # Filter out warnings that cause problems with GLFW.
 if( WARNINGS_AS_ERRORS AND (USING_GNU_CXX OR USING_CLANG_CXX))
   string( REPLACE "-Wdeclaration-after-statement" "" filtered_c_flags ${CMAKE_C_FLAGS} )
   string( REPLACE "-Wsign-compare" "" filtered_c_flags ${filtered_c_flags} )
   push_variable( CMAKE_C_FLAGS "${filtered_c_flags} -Wno-format-truncation -Wno-deprecated" )
 endif()
-add_subdirectory( GLFW )
+add_subdirectory( glfw-3.4 )
 set_property( TARGET glfw PROPERTY C_STANDARD 99 )
 if( WARNINGS_AS_ERRORS AND (USING_GNU_CXX OR USING_CLANG_CXX))
   pop_variable( CMAKE_C_FLAGS )
@@ -55,6 +59,8 @@ add_subdirectory( imgui )
 if( WARNINGS_AS_ERRORS AND (USING_GNU_CXX OR USING_CLANG_CXX))
   pop_variable( CMAKE_CXX_FLAGS )
 endif()
+
+add_subdirectory( miniz )
 
 add_library( glad SHARED
   KHR/khrplatform.h
@@ -72,3 +78,4 @@ target_link_libraries( glad PUBLIC ${OPENGL_LIBRARIES} )
 set_property( TARGET glad PROPERTY FOLDER ${OPTIX_IDE_FOLDER} )
 set_property( TARGET glfw PROPERTY FOLDER ${OPTIX_IDE_FOLDER} )
 set_property( TARGET imgui PROPERTY FOLDER ${OPTIX_IDE_FOLDER} )
+set_property( TARGET miniz PROPERTY FOLDER ${OPTIX_IDE_FOLDER} )

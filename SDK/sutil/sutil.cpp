@@ -2,7 +2,7 @@
 
  * SPDX-FileCopyrightText: Copyright (c) 2019 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are met:
  *
@@ -319,7 +319,7 @@ ImageBuffer loadImage( const char* fname, int32_t force_components )
             throw sutil::Exception( "sutil::loadImage( png ): stbi_load failed" );
 
         image.width  = w;
-        image.height = w;
+        image.height = h;
         image.data   = new uchar4[ w*h ];
         image.pixel_format = UNSIGNED_BYTE4;
         memcpy( image.data, data, w*h*STBI_rgb_alpha );
@@ -443,7 +443,16 @@ void initImGui( GLFWwindow* window )
     ImGui_ImplGlfw_InitForOpenGL( window, false );
     ImGui_ImplOpenGL3_Init();
     ImGui::StyleColorsDark();
-    io.Fonts->AddFontDefault();
+
+    // Scale font size by the window's DPI.
+    float xscale, yscale;
+    glfwGetWindowContentScale( window, &xscale, &yscale );
+
+    const float DEFAULT_FONT_SIZE = 13.0f;  // See AddFontDefault in imgui.cpp
+
+    ImFontConfig config{};
+    config.SizePixels = DEFAULT_FONT_SIZE * yscale;
+    io.Fonts->AddFontDefault( &config );
 
     ImGui::GetStyle().WindowBorderSize = 0.0f;
 }
@@ -786,6 +795,25 @@ void displayText( const char* text, float x, float y )
     ImGui::End();
 }
 
+void buildRadioButtons( const char* options[], const int numOptions, float x, float y, int& selected_option )
+{
+    ImGui::SetNextWindowBgAlpha( 0.0f );
+    ImGui::SetNextWindowPos( ImVec2( x, y ) );
+    ImGui::Begin( "options", nullptr,
+                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize
+                      | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings );
+
+    int current_item = selected_option;
+    for (int i = 0; i < numOptions; i++)
+    {
+        ImGui::RadioButton(options[i], &current_item, i);
+        {
+            selected_option = current_item;
+        }
+    }
+    ImGui::End();
+}
+
 
 void parseDimensions( const char* arg, int& width, int& height )
 {
@@ -994,8 +1022,10 @@ static std::string sampleInputFilePath( const char* sampleName, const char* file
         // TODO: Remove the environment variable OPTIX_EXP_SAMPLES_SDK_PTX_DIR once SDK 6/7 packages are split
         getenv( "OPTIX_EXP_SAMPLES_SDK_PTX_DIR" ),
         getenv( "OPTIX_SAMPLES_SDK_PTX_DIR" ),
- #if defined(CMAKE_INTDIR)
-        SAMPLES_PTX_DIR "/" CMAKE_INTDIR,
+#if defined(OPTIX_OPTIXIR_BUILD_CONFIGURATION)
+        SAMPLES_PTX_DIR "/" OPTIX_OPTIXIR_BUILD_CONFIGURATION,
+#else
+#error "OPTIX_OPTIXIR_BUILD_CONFIGURATION not defined."
 #endif
         SAMPLES_PTX_DIR,
         "."

@@ -1303,7 +1303,7 @@ void buildMeshAccel( MotionGeometryState& state )
 void createModule( MotionGeometryState& state )
 {
     OptixModuleCompileOptions module_compile_options = {};
-#if !defined( NDEBUG )
+#if OPTIX_DEBUG_DEVICE_CODE
     module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
     module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 #endif
@@ -1741,7 +1741,7 @@ int main( int argc, char* argv[] )
                              "ambient occlusion: %s\n"
                              "samples per pixel: %d\n",
                              ( state.renderAO ? "on" : "off" ), state.params.spp );
-                    sutil::displayText( display_text, 10.0f, 100.0f );
+                    sutil::displayText( display_text, 10.0f, 140.0f );
                     sutil::endFrameImGui();
 
 

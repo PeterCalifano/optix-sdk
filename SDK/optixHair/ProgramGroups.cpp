@@ -91,7 +91,7 @@ HairProgramGroups::HairProgramGroups( const OptixDeviceContext context, OptixPip
     // Create modules
     //
     OptixModuleCompileOptions defaultOptions = {};
-#if !defined( NDEBUG )
+#if OPTIX_DEBUG_DEVICE_CODE
     defaultOptions.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
     defaultOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 #endif
@@ -131,6 +131,21 @@ HairProgramGroups::HairProgramGroups( const OptixDeviceContext context, OptixPip
     }
     if( pipeOptions.usesPrimitiveTypeFlags & OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CATMULLROM ) {
         builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_CATMULLROM;
+        OPTIX_CHECK( optixBuiltinISModuleGet( context, &defaultOptions, &pipeOptions, &builtinISOptions, &m_catromCurveModule ) );
+    }
+    if( pipeOptions.usesPrimitiveTypeFlags & OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_QUADRATIC_BSPLINE_ROCAPS )
+    {
+        builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_QUADRATIC_BSPLINE_ROCAPS;
+        OPTIX_CHECK( optixBuiltinISModuleGet( context, &defaultOptions, &pipeOptions, &builtinISOptions, &m_quadraticCurveModule ) );
+    }
+    if( pipeOptions.usesPrimitiveTypeFlags & OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CUBIC_BSPLINE_ROCAPS )
+    {
+        builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BSPLINE_ROCAPS;
+        OPTIX_CHECK( optixBuiltinISModuleGet( context, &defaultOptions, &pipeOptions, &builtinISOptions, &m_cubicCurveModule ) );
+    }
+    if( pipeOptions.usesPrimitiveTypeFlags & OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CATMULLROM_ROCAPS )
+    {
+        builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_CATMULLROM_ROCAPS;
         OPTIX_CHECK( optixBuiltinISModuleGet( context, &defaultOptions, &pipeOptions, &builtinISOptions, &m_catromCurveModule ) );
     }
 }
