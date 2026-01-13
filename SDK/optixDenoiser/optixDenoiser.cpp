@@ -56,8 +56,7 @@ void printUsageAndExit( const std::string& argv0 )
               << "         -F | --Frames <int-int> first-last frame number in sequence\n"
               << "         -e | --exposure <float> apply exposure on output images\n"
               << "         -t | --tilesize <int> <int> use tiling to save GPU memory\n"
-              << "         -alpha denoise alpha channel (treat as AOV)\n"
-              << "         -alphaFull denoise alpha channel (separate inference pass)\n"
+              << "         -alpha 0 ( AOV ) | 1 ( separate inference pass )\n"
               << "         -up2 upscale image by factor of 2\n"
               << "         -z apply flow to input images (no denoising), write output\n"
               << "         -k use kernel prediction model even if there are no AOVs\n"
@@ -179,11 +178,9 @@ int32_t main( int32_t argc, char** argv )
         }
         else if( arg == "-alpha" )
         {
-            alphaMode = 1;
-        }
-        else if( arg == "-alphaFull" )
-        {
-            alphaMode = 2;
+            if( i == argc - 2 )
+                printUsageAndExit( argv[0] );
+            alphaMode = std::atoi( argv[++i] );
         }
         else if( arg == "-F" || arg == "--Frames" )
         {
@@ -213,7 +210,6 @@ int32_t main( int32_t argc, char** argv )
     sutil::ImageBuffer              normal = {};
     sutil::ImageBuffer              albedo = {};
     sutil::ImageBuffer              flow   = {};
-    std::vector<sutil::ImageBuffer> aovs;
 
     unsigned int outScale = upscale2x ? 2 : 1;
 
@@ -222,6 +218,8 @@ int32_t main( int32_t argc, char** argv )
         OptiXDenoiser denoiser;
         for( int frame = firstFrame; frame <= lastFrame; frame++ )
         {
+            std::vector<sutil::ImageBuffer> aovs;
+
             const double t0 = sutil::currentTime();
             std::cout << "Loading inputs ";
             if( frame != -1 )
@@ -383,10 +381,12 @@ int32_t main( int32_t argc, char** argv )
                           << ( t1 - t0 ) * 1000.0 << " ms" << std::endl;
             }
 
-            delete[] reinterpret_cast<float*>( color.data );
-            delete[] reinterpret_cast<float*>( albedo.data );
-            delete[] reinterpret_cast<float*>( normal.data );
-            delete[] reinterpret_cast<float*>( flow.data );
+            color.destroy();
+            albedo.destroy();
+            normal.destroy();
+            flow.destroy();
+            for( size_t i = 0; i < aovs.size(); i++ )
+                aovs[i].destroy();
             for( size_t i = 0; i < 1 + aovs.size(); i++ )
                 delete[]( data.outputs[i] );
         }

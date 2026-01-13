@@ -210,6 +210,25 @@ const char* sampleDataFilePath( const char* relativePath )
     return sampleFilePath( "data", relativePath );
 }
 
+void ImageBuffer::destroy()
+{
+    switch( pixel_format )
+    {
+        case UNSIGNED_BYTE4:
+            delete[] reinterpret_cast<uint4*>( data );
+            break;
+        case FLOAT4:
+            delete[] reinterpret_cast<float4*>( data );
+            break;
+        case FLOAT3:
+            delete[] reinterpret_cast<float3*>( data );
+            break;
+    }
+    data   = nullptr;
+    width  = 0;
+    height = 0;
+}
+
 size_t pixelFormatSize( BufferImageFormat format )
 {
     switch( format )

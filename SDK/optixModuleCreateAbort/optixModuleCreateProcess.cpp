@@ -206,15 +206,13 @@ int main( int argc, char* argv[] )
         const std::string ptx_string( buffer.begin(), buffer.end() );
 
         // Actually compile the module and store the result in the OptiX disk cache
-        char   log[2048];
-        size_t sizeof_log = sizeof(log);
         OptixModule module = nullptr;
         OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
             context,
             &module_compile_options,
             &pipeline_compile_options,
             ptx_string.c_str(), ptx_string.size(),
-            log, &sizeof_log,
+            LOG, &LOG_SIZE,
             &module ) );
 
         // Clean up

@@ -28,6 +28,9 @@
 
 set(sources
     ${CMAKE_CURRENT_BINARY_DIR}/../sampleConfig.h
+    ${SAMPLES_CUDA_DIR}/camera.cu
+    ${SAMPLES_CUDA_DIR}/geometry.cu
+    ${SAMPLES_CUDA_DIR}/shading.cu
     ${SAMPLES_CUDA_DIR}/sphere.cu
     ${SAMPLES_CUDA_DIR}/whitted.cu
     ${SAMPLES_CUDA_DIR}/BufferView.h

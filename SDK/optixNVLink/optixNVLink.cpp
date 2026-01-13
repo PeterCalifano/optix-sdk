@@ -1133,16 +1133,13 @@ void createModule( PerDeviceSampleState& pd_state )
 
     size_t      inputSize = 0;
     const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixNVLink.cu", inputSize );
-    char log[2048];
-    size_t sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
                 pd_state.context,
                 &module_compile_options,
                 &pd_state.pipeline_compile_options,
                 input,
                 inputSize,
-                log,
-                &sizeof_log,
+                LOG, &LOG_SIZE,
                 &pd_state.ptx_module
                 ) );
 }
@@ -1157,15 +1154,12 @@ void createProgramGroups( PerDeviceSampleState& pd_state )
     raygen_prog_group_desc.raygen.module            = pd_state.ptx_module;
     raygen_prog_group_desc.raygen.entryFunctionName = "__raygen__rg";
 
-    char log[2048];
-    size_t sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixProgramGroupCreate(
                 pd_state.context,
                 &raygen_prog_group_desc,
                 1,                             // num program groups
                 &program_group_options,
-                log,
-                &sizeof_log,
+                LOG, &LOG_SIZE,
                 &pd_state.raygen_prog_group
                 ) );
 
@@ -1178,8 +1172,7 @@ void createProgramGroups( PerDeviceSampleState& pd_state )
                 &miss_prog_group_desc,
                 1,                             // num program groups
                 &program_group_options,
-                log,
-                &sizeof_log,
+                LOG, &LOG_SIZE,
                 &pd_state.radiance_miss_group
                 ) );
 
@@ -1192,8 +1185,7 @@ void createProgramGroups( PerDeviceSampleState& pd_state )
                 &miss_prog_group_desc,
                 1,                             // num program groups
                 &program_group_options,
-                log,
-                &sizeof_log,
+                LOG, &LOG_SIZE,
                 &pd_state.occlusion_miss_group
                 ) );
 
@@ -1207,8 +1199,7 @@ void createProgramGroups( PerDeviceSampleState& pd_state )
                 &hit_prog_group_desc,
                 1,                             // num program groups
                 &program_group_options,
-                log,
-                &sizeof_log,
+                LOG, &LOG_SIZE,
                 &pd_state.radiance_hit_group
                 ) );
 
@@ -1216,13 +1207,12 @@ void createProgramGroups( PerDeviceSampleState& pd_state )
     hit_prog_group_desc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
     hit_prog_group_desc.hitgroup.moduleCH            = pd_state.ptx_module;
     hit_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__occlusion";
-    OPTIX_CHECK( optixProgramGroupCreate(
+    OPTIX_CHECK_LOG( optixProgramGroupCreate(
                 pd_state.context,
                 &hit_prog_group_desc,
                 1,                             // num program groups
                 &program_group_options,
-                log,
-                &sizeof_log,
+                LOG, &LOG_SIZE,
                 &pd_state.occlusion_hit_group
                 ) );
 
@@ -1246,16 +1236,13 @@ void createPipeline( PerDeviceSampleState& pd_state )
     pipeline_link_options.maxTraceDepth          = max_trace_depth;
     pipeline_link_options.debugLevel             = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 
-    char log[2048];
-    size_t sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixPipelineCreate(
                 pd_state.context,
                 &pd_state.pipeline_compile_options,
                 &pipeline_link_options,
                 program_groups,
                 sizeof( program_groups ) / sizeof( program_groups[0] ),
-                log,
-                &sizeof_log,
+                LOG, &LOG_SIZE,
                 &pd_state.pipeline
                 ) );
 

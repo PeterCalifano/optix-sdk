@@ -28,13 +28,13 @@
 
 #pragma once
 
-#include <cuda/sphere.h>
+#include <cuda/whitted.h>
 
 struct EmptyData
 {
 };
 
-struct HitGroupData : sphere::SphereHitGroupData
+struct CallableProgramsHitGroupData : whitted::HitGroupData
 {
     unsigned int dc_index;
 };

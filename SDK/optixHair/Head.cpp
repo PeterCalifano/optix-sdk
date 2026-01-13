@@ -208,8 +208,6 @@ void Head::gatherProgramGroups( HairProgramGroups* pProgramGroups ) const
 
     memset( &programGroupDesc, 0, sizeof( OptixProgramGroupDesc ) );
     programGroupDesc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-    programGroupDesc.hitgroup.moduleCH            = pProgramGroups->m_whittedModule;
-    programGroupDesc.hitgroup.entryFunctionNameCH = "__closesthit__occlusion";
     pProgramGroups->add( programGroupDesc, "occludeTriangle" );
 }
 
@@ -220,8 +218,7 @@ std::vector<HitRecord> Head::sbtHitRecords( const ProgramGroups& programs, size_
 
     HitRecord hitGroupRecord = {};
 
-    hitGroupRecord.data.geometry_data.type           = GeometryData::TRIANGLE_MESH;
-    hitGroupRecord.data.geometry_data.triangle_mesh  = m_triangleMesh;
+    hitGroupRecord.data.geometry_data.setTriangleMesh( m_triangleMesh );
     hitGroupRecord.data.material_data.pbr.base_color = {0.5f, 0.5f, 0.5f};
     hitGroupRecord.data.material_data.pbr.metallic   = 0.2f;
     hitGroupRecord.data.material_data.pbr.roughness  = 1.0f;

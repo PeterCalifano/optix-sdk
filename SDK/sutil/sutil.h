@@ -63,6 +63,12 @@ struct ImageBuffer
     unsigned int      width = 0;
     unsigned int      height = 0;
     BufferImageFormat pixel_format;
+    // The memory backed by data isn't always owned by ImageBuffer (e.g. in the case of
+    // loadImage), so you can't always free the memory in a destructor. Additionally you
+    // can't simply delete the memory in the client either, because on some systems the
+    // heap isn't shared between the sutil library and the client. In this case you should
+    // call destroy to free the memory.
+    SUTILAPI void destroy();
 };
 
 struct Texture

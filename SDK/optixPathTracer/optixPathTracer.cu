@@ -45,20 +45,6 @@ __constant__ Params params;
 //
 //------------------------------------------------------------------------------
 
-struct RadiancePRD
-{
-    // TODO: move some state directly into payload registers?
-    float3       emitted;
-    float3       radiance;
-    float3       attenuation;
-    float3       origin;
-    float3       direction;
-    unsigned int seed;
-    int          countEmitted;
-    int          done;
-    int          pad;
-};
-
 
 struct Onb
 {
@@ -100,31 +86,69 @@ struct Onb
 //
 //------------------------------------------------------------------------------
 
-static __forceinline__ __device__ void* unpackPointer( unsigned int i0, unsigned int i1 )
+
+static __forceinline__ __device__ RadiancePRD loadClosesthitRadiancePRD()
 {
-    const unsigned long long uptr = static_cast<unsigned long long>( i0 ) << 32 | i1;
-    void*           ptr = reinterpret_cast<void*>( uptr );
-    return ptr;
+    RadiancePRD prd = {};
+
+    prd.attenuation.x = __uint_as_float( optixGetPayload_0() );
+    prd.attenuation.y = __uint_as_float( optixGetPayload_1() );
+    prd.attenuation.z = __uint_as_float( optixGetPayload_2() );
+    prd.seed  = optixGetPayload_3();
+    prd.depth = optixGetPayload_4();
+    return prd;
+}
+
+static __forceinline__ __device__ RadiancePRD loadMissRadiancePRD()
+{
+    RadiancePRD prd = {};
+    return prd;
+}
+
+static __forceinline__ __device__ void storeClosesthitRadiancePRD( RadiancePRD prd )
+{
+    optixSetPayload_0( __float_as_uint( prd.attenuation.x ) );
+    optixSetPayload_1( __float_as_uint( prd.attenuation.y ) );
+    optixSetPayload_2( __float_as_uint( prd.attenuation.z ) );
+
+    optixSetPayload_3( prd.seed );
+    optixSetPayload_4( prd.depth );
+
+    optixSetPayload_5( __float_as_uint( prd.emitted.x ) );
+    optixSetPayload_6( __float_as_uint( prd.emitted.y ) );
+    optixSetPayload_7( __float_as_uint( prd.emitted.z ) );
+
+    optixSetPayload_8( __float_as_uint( prd.radiance.x ) );
+    optixSetPayload_9( __float_as_uint( prd.radiance.y ) );
+    optixSetPayload_10( __float_as_uint( prd.radiance.z ) );
+
+    optixSetPayload_11( __float_as_uint( prd.origin.x ) );
+    optixSetPayload_12( __float_as_uint( prd.origin.y ) );
+    optixSetPayload_13( __float_as_uint( prd.origin.z ) );
+
+    optixSetPayload_14( __float_as_uint( prd.direction.x ) );
+    optixSetPayload_15( __float_as_uint( prd.direction.y ) );
+    optixSetPayload_16( __float_as_uint( prd.direction.z ) );
+
+    optixSetPayload_17( prd.done );
 }
 
 
-static __forceinline__ __device__ void  packPointer( void* ptr, unsigned int& i0, unsigned int& i1 )
+static __forceinline__ __device__ void storeMissRadiancePRD( RadiancePRD prd )
 {
-    const unsigned long long uptr = reinterpret_cast<unsigned long long>( ptr );
-    i0 = uptr >> 32;
-    i1 = uptr & 0x00000000ffffffff;
+    optixSetPayload_5( __float_as_uint( prd.emitted.x ) );
+    optixSetPayload_6( __float_as_uint( prd.emitted.y ) );
+    optixSetPayload_7( __float_as_uint( prd.emitted.z ) );
+
+    optixSetPayload_8( __float_as_uint( prd.radiance.x ) );
+    optixSetPayload_9( __float_as_uint( prd.radiance.y ) );
+    optixSetPayload_10( __float_as_uint( prd.radiance.z ) );
+
+    optixSetPayload_17( prd.done );
 }
 
 
-static __forceinline__ __device__ RadiancePRD* getPRD()
-{
-    const unsigned int u0 = optixGetPayload_0();
-    const unsigned int u1 = optixGetPayload_1();
-    return reinterpret_cast<RadiancePRD*>( unpackPointer( u0, u1 ) );
-}
-
-
-static __forceinline__ __device__ void setPayloadOcclusion( bool occluded )
+static __forceinline__ __device__ void storeOcclusionPRD( bool occluded )
 {
     optixSetPayload_0( static_cast<unsigned int>( occluded ) );
 }
@@ -149,14 +173,19 @@ static __forceinline__ __device__ void traceRadiance(
         float3                 ray_direction,
         float                  tmin,
         float                  tmax,
-        RadiancePRD*           prd
+        RadiancePRD&           prd
         )
 {
-    // TODO: deduce stride from num ray-types passed in params
+    unsigned int u0, u1, u2, u3, u4, u5, u6, u7, u8, u9, u10, u11, u12, u13, u14, u15, u16, u17;
 
-    unsigned int u0, u1;
-    packPointer( prd, u0, u1 );
+    u0 = __float_as_uint( prd.attenuation.x );
+    u1 = __float_as_uint( prd.attenuation.y );
+    u2 = __float_as_uint( prd.attenuation.z );
+    u3 = prd.seed;
+    u4 = prd.depth;
+
     optixTrace(
+            PAYLOAD_TYPE_RADIANCE,
             handle,
             ray_origin,
             ray_direction,
@@ -168,7 +197,17 @@ static __forceinline__ __device__ void traceRadiance(
             RAY_TYPE_RADIANCE,        // SBT offset
             RAY_TYPE_COUNT,           // SBT stride
             RAY_TYPE_RADIANCE,        // missSBTIndex
-            u0, u1 );
+            u0, u1, u2, u3, u4, u5, u6, u7, u8, u9, u10, u11, u12, u13, u14, u15, u16, u17 );
+
+    prd.attenuation = make_float3( __uint_as_float( u0 ), __uint_as_float( u1 ), __uint_as_float( u2 ) );
+    prd.seed  = u3;
+    prd.depth = u4;
+
+    prd.emitted   = make_float3( __uint_as_float( u5 ), __uint_as_float( u6 ), __uint_as_float( u7 ) );
+    prd.radiance  = make_float3( __uint_as_float( u8 ), __uint_as_float( u9 ), __uint_as_float( u10 ) );
+    prd.origin    = make_float3( __uint_as_float( u11 ), __uint_as_float( u12 ), __uint_as_float( u13 ) );
+    prd.direction = make_float3( __uint_as_float( u14 ), __uint_as_float( u15 ), __uint_as_float( u16 ) );
+    prd.done = u17;
 }
 
 
@@ -182,6 +221,7 @@ static __forceinline__ __device__ bool traceOcclusion(
 {
     unsigned int occluded = 0u;
     optixTrace(
+            PAYLOAD_TYPE_OCCLUSION,
             handle,
             ray_origin,
             ray_direction,
@@ -232,14 +272,10 @@ extern "C" __global__ void __raygen__rg()
         float3 ray_origin    = eye;
 
         RadiancePRD prd;
-        prd.emitted      = make_float3(0.f);
-        prd.radiance     = make_float3(0.f);
         prd.attenuation  = make_float3(1.f);
-        prd.countEmitted = true;
-        prd.done         = false;
         prd.seed         = seed;
+        prd.depth        = 0;        
 
-        int depth = 0;
         for( ;; )
         {
             traceRadiance(
@@ -248,18 +284,18 @@ extern "C" __global__ void __raygen__rg()
                     ray_direction,
                     0.01f,  // tmin       // TODO: smarter offset
                     1e16f,  // tmax
-                    &prd );
+                    prd );
 
             result += prd.emitted;
             result += prd.radiance * prd.attenuation;
 
-            if( prd.done  || depth >= 3 ) // TODO RR, variable for depth
+            if( prd.done  || prd.depth >= 3 ) // TODO RR, variable for depth
                 break;
 
             ray_origin    = prd.origin;
             ray_direction = prd.direction;
 
-            ++depth;
+            ++prd.depth;
         }
     }
     while( --i );
@@ -279,25 +315,41 @@ extern "C" __global__ void __raygen__rg()
 }
 
 
+extern "C" __global__ void __miss__occlusion()
+{
+    optixSetPayloadTypes( PAYLOAD_TYPE_OCCLUSION );
+
+    storeOcclusionPRD( false );
+}
+
+
 extern "C" __global__ void __miss__radiance()
 {
-    MissData* rt_data  = reinterpret_cast<MissData*>( optixGetSbtDataPointer() );
-    RadiancePRD* prd = getPRD();
+    optixSetPayloadTypes( PAYLOAD_TYPE_RADIANCE );
 
-    prd->radiance  = make_float3( rt_data->bg_color );
-    prd->emitted   = make_float3( 0.f );
-    prd->done      = true;
+    MissData* rt_data  = reinterpret_cast<MissData*>( optixGetSbtDataPointer() );
+    RadiancePRD prd = loadMissRadiancePRD();
+
+    prd.radiance  = make_float3( rt_data->bg_color );
+    prd.emitted   = make_float3( 0.f );
+    prd.done      = true;
+
+    storeMissRadiancePRD( prd );
 }
 
 
 extern "C" __global__ void __closesthit__occlusion()
 {
-    setPayloadOcclusion( true );
+    optixSetPayloadTypes( PAYLOAD_TYPE_OCCLUSION );
+
+    storeOcclusionPRD( true );
 }
 
 
 extern "C" __global__ void __closesthit__radiance()
 {
+    optixSetPayloadTypes( PAYLOAD_TYPE_RADIANCE );
+
     HitGroupData* rt_data = (HitGroupData*)optixGetSbtDataPointer();
 
     const int    prim_idx        = optixGetPrimitiveIndex();
@@ -312,15 +364,15 @@ extern "C" __global__ void __closesthit__radiance()
     const float3 N    = faceforward( N_0, -ray_dir, N_0 );
     const float3 P    = optixGetWorldRayOrigin() + optixGetRayTmax()*ray_dir;
 
-    RadiancePRD* prd = getPRD();
+    RadiancePRD prd = loadClosesthitRadiancePRD();
 
-    if( prd->countEmitted )
-        prd->emitted = rt_data->emission_color;
+    if( prd.depth == 0 )
+        prd.emitted = rt_data->emission_color;
     else
-        prd->emitted = make_float3( 0.0f );
+        prd.emitted = make_float3( 0.0f );
 
 
-    unsigned int seed = prd->seed;
+    unsigned int seed = prd.seed;
 
     {
         const float z1 = rnd(seed);
@@ -330,16 +382,15 @@ extern "C" __global__ void __closesthit__radiance()
         cosine_sample_hemisphere( z1, z2, w_in );
         Onb onb( N );
         onb.inverse_transform( w_in );
-        prd->direction = w_in;
-        prd->origin    = P;
+        prd.direction = w_in;
+        prd.origin    = P;
 
-        prd->attenuation *= rt_data->diffuse_color;
-        prd->countEmitted = false;
+        prd.attenuation *= rt_data->diffuse_color;
     }
 
     const float z1 = rnd(seed);
     const float z2 = rnd(seed);
-    prd->seed = seed;
+    prd.seed = seed;
 
     ParallelogramLight light = params.light;
     const float3 light_pos = light.corner + light.v1 * z1 + light.v2 * z2;
@@ -368,5 +419,8 @@ extern "C" __global__ void __closesthit__radiance()
         }
     }
 
-    prd->radiance += light.emission * weight;
+    prd.radiance = light.emission * weight;
+    prd.done     = false;
+
+    storeClosesthitRadiancePRD( prd );
 }

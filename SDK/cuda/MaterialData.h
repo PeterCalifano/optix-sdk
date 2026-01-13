@@ -35,7 +35,10 @@ struct MaterialData
 {
     enum Type
     {
-        PBR = 0
+        PBR           = 0,
+        GLASS         = 1,
+        PHONG         = 2,
+        CHECKER_PHONG = 3
     };
 
     MaterialData()
@@ -80,6 +83,41 @@ struct MaterialData
         Texture              metallic_roughness_tex;
     };
 
+    struct CheckerPhong
+    {
+        float3 Kd1, Kd2;
+        float3 Ka1, Ka2;
+        float3 Ks1, Ks2;
+        float3 Kr1, Kr2;
+        float  phong_exp1, phong_exp2;
+        float2 inv_checker_size;
+    };
+
+    struct Glass
+    {
+        float  importance_cutoff;
+        float3 cutoff_color;
+        float  fresnel_exponent;
+        float  fresnel_minimum;
+        float  fresnel_maximum;
+        float  refraction_index;
+        float3 refraction_color;
+        float3 reflection_color;
+        float3 extinction_constant;
+        float3 shadow_attenuation;
+        int    refraction_maxdepth;
+        int    reflection_maxdepth;
+    };
+
+    struct Phong
+    {
+        float3 Ka;
+        float3 Kd;
+        float3 Ks;
+        float3 Kr;
+        float  phong_exp;
+    };
+
     Type                 type            = PBR;
 
     Texture              normal_tex      = { 0 , 0 };
@@ -94,6 +132,9 @@ struct MaterialData
 
     union
     {
-        Pbr  pbr;
+        Pbr          pbr;
+        Glass        glass;
+        Phong        metal;
+        CheckerPhong checker;
     };
 };

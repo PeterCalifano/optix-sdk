@@ -1294,16 +1294,13 @@ void Scene::createPTXModule()
     const char* input     = sutil::getInputData( nullptr, nullptr, "whitted.cu", inputSize );
 
     m_ptx_module  = {};
-    char log[2048];
-    size_t sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
                 m_context,
                 &module_compile_options,
                 &m_pipeline_compile_options,
                 input,
                 inputSize,
-                log,
-                &sizeof_log,
+                LOG, &LOG_SIZE,
                 &m_ptx_module
                 ) );
 }
@@ -1312,9 +1309,6 @@ void Scene::createPTXModule()
 void Scene::createProgramGroups()
 {
     OptixProgramGroupOptions program_group_options = {};
-
-    char log[2048];
-    size_t sizeof_log = sizeof( log );
 
     //
     // Ray generation
@@ -1331,8 +1325,7 @@ void Scene::createProgramGroups()
                     &raygen_prog_group_desc,
                     1,                             // num program groups
                     &program_group_options,
-                    log,
-                    &sizeof_log,
+                    LOG, &LOG_SIZE,
                     &m_raygen_prog_group
                     )
                 );
@@ -1346,30 +1339,26 @@ void Scene::createProgramGroups()
         miss_prog_group_desc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
         miss_prog_group_desc.miss.module            = m_ptx_module;
         miss_prog_group_desc.miss.entryFunctionName = "__miss__constant_radiance";
-        sizeof_log = sizeof( log );
         OPTIX_CHECK_LOG( optixProgramGroupCreate(
                     m_context,
                     &miss_prog_group_desc,
                     1,                             // num program groups
                     &program_group_options,
-                    log,
-                    &sizeof_log,
+                    LOG, &LOG_SIZE,
                     &m_radiance_miss_group
                     )
                 );
 
         memset( &miss_prog_group_desc, 0, sizeof( OptixProgramGroupDesc ) );
         miss_prog_group_desc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
-        miss_prog_group_desc.miss.module            = nullptr;  // NULL miss program for occlusion rays
-        miss_prog_group_desc.miss.entryFunctionName = nullptr;
-        sizeof_log = sizeof( log );
+        miss_prog_group_desc.miss.module            = m_ptx_module;
+        miss_prog_group_desc.miss.entryFunctionName = "__miss__occlusion";
         OPTIX_CHECK_LOG( optixProgramGroupCreate(
                     m_context,
                     &miss_prog_group_desc,
                     1,                             // num program groups
                     &program_group_options,
-                    log,
-                    &sizeof_log,
+                    LOG, &LOG_SIZE,
                     &m_occlusion_miss_group
                     )
                 );
@@ -1385,34 +1374,28 @@ void Scene::createProgramGroups()
         hit_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__radiance";
         hit_prog_group_desc.hitgroup.moduleAH            = m_ptx_module;
         hit_prog_group_desc.hitgroup.entryFunctionNameAH = "__anyhit__radiance";
-        sizeof_log = sizeof( log );
         OPTIX_CHECK_LOG( optixProgramGroupCreate(
-                    m_context,
-                    &hit_prog_group_desc,
-                    1,                             // num program groups
-                    &program_group_options,
-                    log,
-                    &sizeof_log,
-                    &m_radiance_hit_group
-                    )
+                         m_context,
+                         &hit_prog_group_desc,
+                         1,                             // num program groups
+                         &program_group_options,
+                         LOG, &LOG_SIZE,
+                         &m_radiance_hit_group
+                         )
                 );
 
         memset( &hit_prog_group_desc, 0, sizeof( OptixProgramGroupDesc ) );
         hit_prog_group_desc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-        hit_prog_group_desc.hitgroup.moduleCH            = m_ptx_module;
-        hit_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__occlusion";
         hit_prog_group_desc.hitgroup.moduleAH            = m_ptx_module;
         hit_prog_group_desc.hitgroup.entryFunctionNameAH = "__anyhit__occlusion";
-        sizeof_log = sizeof( log );
-        OPTIX_CHECK( optixProgramGroupCreate(
-                    m_context,
-                    &hit_prog_group_desc,
-                    1,                             // num program groups
-                    &program_group_options,
-                    log,
-                    &sizeof_log,
-                    &m_occlusion_hit_group
-                    )
+        OPTIX_CHECK_LOG( optixProgramGroupCreate(
+                         m_context,
+                         &hit_prog_group_desc,
+                         1,                             // num program groups
+                         &program_group_options,
+                         LOG, &LOG_SIZE,
+                         &m_occlusion_hit_group
+                         )
                 );
     }
 }
@@ -1433,16 +1416,13 @@ void Scene::createPipeline()
     pipeline_link_options.maxTraceDepth          = whitted::MAX_TRACE_DEPTH;
     pipeline_link_options.debugLevel             = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 
-    char log[2048];
-    size_t sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixPipelineCreate(
                 m_context,
                 &m_pipeline_compile_options,
                 &pipeline_link_options,
                 program_groups,
                 sizeof( program_groups ) / sizeof( program_groups[0] ),
-                log,
-                &sizeof_log,
+                LOG, &LOG_SIZE,
                 &m_pipeline
                 ) );
 }
@@ -1494,13 +1474,14 @@ void Scene::createSBT()
             {
                 HitGroupRecord rec = {};
                 OPTIX_CHECK( optixSbtRecordPackHeader( m_radiance_hit_group, &rec ) );
-                rec.data.geometry_data.type                    = GeometryData::TRIANGLE_MESH;
-                rec.data.geometry_data.triangle_mesh.positions = mesh->positions[i];
-                rec.data.geometry_data.triangle_mesh.normals   = mesh->normals[i];
+                GeometryData::TriangleMesh triangle_mesh = {};
+                triangle_mesh.normals   = mesh->normals[i];
+                triangle_mesh.positions = mesh->positions[i];
                 for( size_t j = 0; j < GeometryData::num_textcoords; ++j )
-                    rec.data.geometry_data.triangle_mesh.texcoords[j] = mesh->texcoords[j][i];
-                rec.data.geometry_data.triangle_mesh.colors    = mesh->colors[i];
-                rec.data.geometry_data.triangle_mesh.indices   = mesh->indices[i];
+                    triangle_mesh.texcoords[j] = mesh->texcoords[j][i];
+                triangle_mesh.colors    = mesh->colors[i];
+                triangle_mesh.indices   = mesh->indices[i];
+                rec.data.geometry_data.setTriangleMesh( triangle_mesh );
 
                 const int32_t mat_idx  = mesh->material_idx[i];
                 if( mat_idx >= 0 )

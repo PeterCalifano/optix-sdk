@@ -39,8 +39,6 @@
 #include <sutil/Exception.h>
 #include <sutil/sutil.h>
 
-#include <cuda/sphere.h>
-
 #include "optixSphere.h"
 
 #include <iomanip>
@@ -129,9 +127,6 @@ int main( int argc, char* argv[] )
 
     try
     {
-        char log[2048]; // For error reporting from OptiX creation functions
-
-
         //
         // Initialize CUDA and create OptiX context
         //
@@ -256,10 +251,9 @@ int main( int argc, char* argv[] )
 
             size_t      inputSize = 0;
             const char* input = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixSphere.cu", inputSize );
-            size_t      sizeof_log = sizeof( log );
 
             OPTIX_CHECK_LOG( optixModuleCreateFromPTX( context, &module_compile_options, &pipeline_compile_options,
-                                                       input, inputSize, log, &sizeof_log, &module ) );
+                                                       input, inputSize, LOG, &LOG_SIZE, &module ) );
 
             OptixBuiltinISOptions builtin_is_options = {};
 
@@ -282,14 +276,12 @@ int main( int argc, char* argv[] )
             raygen_prog_group_desc.kind                     = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
             raygen_prog_group_desc.raygen.module            = module;
             raygen_prog_group_desc.raygen.entryFunctionName = "__raygen__rg";
-            size_t sizeof_log = sizeof( log );
             OPTIX_CHECK_LOG( optixProgramGroupCreate(
                         context,
                         &raygen_prog_group_desc,
                         1,   // num program groups
                         &program_group_options,
-                        log,
-                        &sizeof_log,
+                        LOG, &LOG_SIZE,
                         &raygen_prog_group
                         ) );
 
@@ -297,14 +289,12 @@ int main( int argc, char* argv[] )
             miss_prog_group_desc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
             miss_prog_group_desc.miss.module            = module;
             miss_prog_group_desc.miss.entryFunctionName = "__miss__ms";
-            sizeof_log = sizeof( log );
             OPTIX_CHECK_LOG( optixProgramGroupCreate(
                         context,
                         &miss_prog_group_desc,
                         1,   // num program groups
                         &program_group_options,
-                        log,
-                        &sizeof_log,
+                        LOG, &LOG_SIZE,
                         &miss_prog_group
                         ) );
 
@@ -316,14 +306,12 @@ int main( int argc, char* argv[] )
             hitgroup_prog_group_desc.hitgroup.entryFunctionNameAH = nullptr;
             hitgroup_prog_group_desc.hitgroup.moduleIS            = sphere_module;
             hitgroup_prog_group_desc.hitgroup.entryFunctionNameIS = nullptr;
-            sizeof_log = sizeof( log );
             OPTIX_CHECK_LOG( optixProgramGroupCreate(
                         context,
                         &hitgroup_prog_group_desc,
                         1,   // num program groups
                         &program_group_options,
-                        log,
-                        &sizeof_log,
+                        LOG, &LOG_SIZE,
                         &hitgroup_prog_group
                         ) );
         }
@@ -339,15 +327,13 @@ int main( int argc, char* argv[] )
             OptixPipelineLinkOptions pipeline_link_options = {};
             pipeline_link_options.maxTraceDepth          = max_trace_depth;
             pipeline_link_options.debugLevel             = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
-            size_t sizeof_log = sizeof( log );
             OPTIX_CHECK_LOG( optixPipelineCreate(
                         context,
                         &pipeline_compile_options,
                         &pipeline_link_options,
                         program_groups,
                         sizeof( program_groups ) / sizeof( program_groups[0] ),
-                        log,
-                        &sizeof_log,
+                        LOG, &LOG_SIZE,
                         &pipeline
                         ) );
 

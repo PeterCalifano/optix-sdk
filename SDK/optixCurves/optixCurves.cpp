@@ -174,8 +174,6 @@ int main( int argc, char* argv[] )
 
     try
     {
-        char log[2048];  // For error reporting from OptiX creation functions
-
         //
         // Initialize CUDA and create OptiX context
         //
@@ -375,9 +373,8 @@ int main( int argc, char* argv[] )
             }
             size_t      inputSize  = 0;
             const char* input      = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixCurves.cu", inputSize );
-            size_t      sizeof_log = sizeof( log );
             OPTIX_CHECK_LOG( optixModuleCreateFromPTX( context, &module_compile_options, &pipeline_compile_options,
-                                                       input, inputSize, log, &sizeof_log, &shading_module ) );
+                                                       input, inputSize, LOG, &LOG_SIZE, &shading_module ) );
 
             OptixBuiltinISOptions builtinISOptions = {};
             switch( degree )
@@ -418,19 +415,17 @@ int main( int argc, char* argv[] )
             {
                 raygen_prog_group_desc.raygen.entryFunctionName = "__raygen__basic";
             }
-            size_t sizeof_log = sizeof( log );
             OPTIX_CHECK_LOG( optixProgramGroupCreate( context, &raygen_prog_group_desc,
                                                       1,  // num program groups
-                                                      &program_group_options, log, &sizeof_log, &raygen_prog_group ) );
+                                                      &program_group_options, LOG, &LOG_SIZE, &raygen_prog_group ) );
 
             OptixProgramGroupDesc miss_prog_group_desc  = {};
             miss_prog_group_desc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
             miss_prog_group_desc.miss.module            = shading_module;
             miss_prog_group_desc.miss.entryFunctionName = "__miss__ms";
-            sizeof_log                                  = sizeof( log );
             OPTIX_CHECK_LOG( optixProgramGroupCreate( context, &miss_prog_group_desc,
                                                       1,  // num program groups
-                                                      &program_group_options, log, &sizeof_log, &miss_prog_group ) );
+                                                      &program_group_options, LOG, &LOG_SIZE, &miss_prog_group ) );
 
             OptixProgramGroupDesc hitgroup_prog_group_desc        = {};
             hitgroup_prog_group_desc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
@@ -438,10 +433,9 @@ int main( int argc, char* argv[] )
             hitgroup_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__ch";
             hitgroup_prog_group_desc.hitgroup.moduleIS            = geometry_module;
             hitgroup_prog_group_desc.hitgroup.entryFunctionNameIS = 0; // automatically supplied for built-in module
-            sizeof_log = sizeof( log );
             OPTIX_CHECK_LOG( optixProgramGroupCreate( context, &hitgroup_prog_group_desc,
                                                       1,  // num program groups
-                                                      &program_group_options, log, &sizeof_log, &hitgroup_prog_group ) );
+                                                      &program_group_options, LOG, &LOG_SIZE, &hitgroup_prog_group ) );
         }
 
         //
@@ -455,10 +449,9 @@ int main( int argc, char* argv[] )
             OptixPipelineLinkOptions pipeline_link_options = {};
             pipeline_link_options.maxTraceDepth            = max_trace_depth;
             pipeline_link_options.debugLevel               = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
-            size_t sizeof_log                              = sizeof( log );
             OPTIX_CHECK_LOG( optixPipelineCreate( context, &pipeline_compile_options, &pipeline_link_options,
                                                   program_groups, sizeof( program_groups ) / sizeof( program_groups[0] ),
-                                                  log, &sizeof_log, &pipeline ) );
+                                                  LOG, &LOG_SIZE, &pipeline ) );
 
             OptixStackSizes stack_sizes = {};
             for( auto& prog_group : program_groups )

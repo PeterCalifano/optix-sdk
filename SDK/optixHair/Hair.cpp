@@ -172,8 +172,6 @@ void Hair::gatherProgramGroups( HairProgramGroups* pProgramGroups ) const
     // Occlusion shader for shadow rays
     memset( &programGroupDesc, 0, sizeof( OptixProgramGroupDesc ) );
     programGroupDesc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-    programGroupDesc.hitgroup.moduleCH            = pProgramGroups->m_whittedModule;
-    programGroupDesc.hitgroup.entryFunctionNameCH = "__closesthit__occlusion";
     if( QUADRATIC_BSPLINE == m_splineMode )
         programGroupDesc.hitgroup.moduleIS = pProgramGroups->m_quadraticCurveModule;
     else if( CUBIC_BSPLINE == m_splineMode )

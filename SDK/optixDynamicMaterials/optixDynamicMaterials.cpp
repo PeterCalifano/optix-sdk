@@ -375,11 +375,8 @@ void createModule( SampleState& state )
     size_t      inputSize = 0;
     const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixDynamicMaterials.cu", inputSize );
 
-    char   log[2048];  // For error reporting from OptiX creation functions
-    size_t sizeof_log = sizeof( log );
-
     OPTIX_CHECK_LOG( optixModuleCreateFromPTX( state.context, &module_compile_options, &state.pipeline_compile_options,
-                                               input, inputSize, log, &sizeof_log, &state.module ) );
+                                               input, inputSize, LOG, &LOG_SIZE, &state.module ) );
 }
 
 
@@ -392,20 +389,17 @@ void createProgramGroups( SampleState& state )
     raygen_prog_group_desc.raygen.module            = state.module;
     raygen_prog_group_desc.raygen.entryFunctionName = "__raygen__rg";
 
-    char   log[2048];  // For error reporting from OptiX creation functions
-    size_t sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context, &raygen_prog_group_desc,
                                               1,  // num program groups
-                                              &program_group_options, log, &sizeof_log, &state.raygen_prog_group ) );
+                                              &program_group_options, LOG, &LOG_SIZE, &state.raygen_prog_group ) );
 
     OptixProgramGroupDesc miss_prog_group_desc  = {};
     miss_prog_group_desc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
     miss_prog_group_desc.miss.module            = state.module;
     miss_prog_group_desc.miss.entryFunctionName = "__miss__ms";
-    sizeof_log                                  = sizeof( log );
     OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context, &miss_prog_group_desc,
                                               1,  // num program groups
-                                              &program_group_options, log, &sizeof_log, &state.miss_prog_group ) );
+                                              &program_group_options, LOG, &LOG_SIZE, &state.miss_prog_group ) );
 
     // hard-coded list of different CH programs for different OptixInstances
     std::vector<const char*> chNames = {// The left sphere has a single CH program
@@ -428,11 +422,10 @@ void createProgramGroups( SampleState& state )
         hitgroup_prog_group_desc.hitgroup.entryFunctionNameIS = "__intersection__is";
         hitgroup_prog_group_descs.push_back( hitgroup_prog_group_desc );
     }
-    sizeof_log = sizeof( log );
     state.hitgroup_prog_groups.resize( hitgroup_prog_group_descs.size() );
     OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context, &hitgroup_prog_group_descs[0],
                                               static_cast<unsigned int>( hitgroup_prog_group_descs.size() ),
-                                              &program_group_options, log, &sizeof_log, &state.hitgroup_prog_groups[0] ) );
+                                              &program_group_options, LOG, &LOG_SIZE, &state.hitgroup_prog_groups[0] ) );
 }
 
 
@@ -450,11 +443,9 @@ void createPipeline( SampleState& state )
     pipeline_link_options.maxTraceDepth          = max_trace_depth;
     pipeline_link_options.debugLevel             = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 
-    char   log[2048];  // For error reporting from OptiX creation functions
-    size_t sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixPipelineCreate( state.context, &state.pipeline_compile_options, &pipeline_link_options,
-                                          &program_groups[0], static_cast<unsigned int>( program_groups.size() ), log,
-                                          &sizeof_log, &state.pipeline ) );
+                                          &program_groups[0], static_cast<unsigned int>( program_groups.size() ), LOG,
+                                          &LOG_SIZE, &state.pipeline ) );
 
     OptixStackSizes stack_sizes = {};
     for( auto& prog_group : program_groups )

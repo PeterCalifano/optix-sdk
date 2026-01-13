@@ -82,9 +82,6 @@
 #define OPTIX_CHECK( call )                                                    \
     ::sutil::optixCheck( call, #call, __FILE__, __LINE__ )
 
-#define OPTIX_CHECK_LOG( call )                                                \
-    ::sutil::optixCheckLog( call, log, sizeof( log ), sizeof_log, #call, __FILE__, __LINE__ )
-
 // This version of the log-check macro doesn't require the user do setup
 // a log buffer and size variable in the surrounding context; rather the
 // macro defines a log buffer and log size variable (LOG and LOG_SIZE)
@@ -92,10 +89,10 @@
 // E.g.:
 //  OPTIX_CHECK_LOG2( optixProgramGroupCreate( ..., LOG, &LOG_SIZE, ... );
 //
-#define OPTIX_CHECK_LOG2( call )                                               \
+#define OPTIX_CHECK_LOG( call )                                                \
     do                                                                         \
     {                                                                          \
-        char   LOG[400];                                                       \
+        char   LOG[2048];                                                      \
         size_t LOG_SIZE = sizeof( LOG );                                       \
         ::sutil::optixCheckLog( call, LOG, sizeof( LOG ), LOG_SIZE, #call,     \
                                 __FILE__, __LINE__ );                          \
@@ -185,7 +182,7 @@ inline void optixCheckLog( OptixResult  res,
     }
 }
 
-inline void optixCheckNoThrow( OptixResult res, const char* call, const char* file, unsigned int line )
+inline void optixCheckNoThrow( OptixResult res, const char* call, const char* file, unsigned int line ) noexcept
 {
     if( res != OPTIX_SUCCESS )
     {
@@ -218,7 +215,7 @@ inline void cudaSyncCheck( const char* file, unsigned int line )
     }
 }
 
-inline void cudaCheckNoThrow( cudaError_t error, const char* call, const char* file, unsigned int line )
+inline void cudaCheckNoThrow( cudaError_t error, const char* call, const char* file, unsigned int line ) noexcept
 {
     if( error != cudaSuccess )
     {

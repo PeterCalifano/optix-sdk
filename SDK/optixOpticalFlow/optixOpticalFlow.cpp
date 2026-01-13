@@ -187,11 +187,11 @@ int32_t main( int32_t argc, char** argv )
                                    createOptixImage2D( width, height, frame0.pixel_format == sutil::FLOAT4 ? 4 : 3 ) };
 
         initOptixImage2D( images[0], (const float*)frame0.data );
-        delete (float*)frame0.data;
+        frame0.destroy();
 
         if( const OptixResult res = oflow.init( cuCtx, stream, width, height ) )
         {
-            std::cerr << "Initialization of optical flow failed: %s " << oflow.getLastError() << "\n";
+            std::cerr << "Initialization of optical flow failed: " << oflow.getLastError() << "\n";
             return 1;
         }
 
@@ -238,7 +238,7 @@ int32_t main( int32_t argc, char** argv )
             }
 
             initOptixImage2D( images[0], (const float*)frame1.data );
-            delete (float*)frame1.data;
+            frame1.destroy();
 
             CUDA_CHECK( (cudaError_t)cuMemcpyDtoHAsync( hflow, flow.data, flow.rowStrideInBytes * flow.height, stream ) );
             CUDA_CHECK( (cudaError_t)cuStreamSynchronize( stream ) );

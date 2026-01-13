@@ -26,12 +26,13 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#include <glad/glad.h> // Needs to be included before gl_interop
+#include <glad/glad.h>  // Needs to be included before gl_interop
 
 #include <cuda_runtime.h>
 #include <cuda_gl_interop.h>
 
 #include <optix.h>
+#include <optix_micromap.h>
 #include <optix_function_table_definition.h>
 #include <optix_stack_size.h>
 #include <optix_stubs.h>
@@ -89,9 +90,9 @@ struct Record
     T data;
 };
 
-typedef Record<RayGenData>   RayGenRecord;
-typedef Record<MissData>     MissRecord;
-typedef Record<HitGroupData> HitGroupRecord;
+typedef Record<RayGenData>          RayGenRecord;
+typedef Record<MissData>            MissRecord;
+typedef Record<CutoutsHitGroupData> HitGroupRecord;
 
 
 struct Vertex
@@ -108,36 +109,42 @@ struct Instance
 
 struct CutoutsState
 {
-    OptixDeviceContext          context                      = 0;
+    OptixDeviceContext context = 0;
 
-    OptixTraversableHandle      triangle_gas_handle          = 0;  // Traversable handle for triangle AS
-    CUdeviceptr                 d_triangle_gas_output_buffer = 0;  // Triangle AS memory
-    CUdeviceptr                 d_vertices                   = 0;
-    CUdeviceptr                 d_tex_coords                 = 0;
+    OptixTraversableHandle triangle_gas_handle          = 0;  // Traversable handle for triangle AS
+    CUdeviceptr            d_triangle_gas_output_buffer = 0;  // Triangle AS memory
+    CUdeviceptr            d_vertices                   = 0;
+    CUdeviceptr            d_tex_coords                 = 0;
+    CUdeviceptr            d_omm_array                  = 0; // OMM array for triangles, memory needs to be persistent over GAS build
 
-    OptixTraversableHandle      sphere_gas_handle            = 0;  // Traversable handle for sphere AS
-    CUdeviceptr                 d_sphere_gas_output_buffer   = 0;  // Sphere AS memory
+    OptixTraversableHandle sphere_gas_handle          = 0;  // Traversable handle for sphere AS
+    CUdeviceptr            d_sphere_gas_output_buffer = 0;  // Sphere AS memory
 
-    OptixTraversableHandle      ias_handle                   = 0;  // Traversable handle for instance AS
-    CUdeviceptr                 d_ias_output_buffer          = 0;  // Instance AS memory
+    OptixTraversableHandle ias_handle          = 0;  // Traversable handle for instance AS
+    CUdeviceptr            d_ias_output_buffer = 0;  // Instance AS memory
 
-    OptixModule                 ptx_module                   = 0;
-    OptixModule                 sphere_module                = 0;
+    OptixModule module        = 0;
+    OptixModule sphere_module = 0;
 
-    OptixPipelineCompileOptions pipeline_compile_options     = {};
-    OptixPipeline               pipeline                     = 0;
+    OptixPipelineCompileOptions pipeline_compile_options = {};
+    OptixPipeline               pipeline                 = 0;
 
-    OptixProgramGroup           raygen_prog_group            = 0;
-    OptixProgramGroup           radiance_miss_group          = 0;
-    OptixProgramGroup           occlusion_miss_group         = 0;
-    OptixProgramGroup           radiance_hit_group           = 0;
-    OptixProgramGroup           occlusion_hit_group          = 0;
+    OptixProgramGroup raygen_prog_group               = 0;
+    OptixProgramGroup radiance_miss_group             = 0;
+    OptixProgramGroup occlusion_miss_group            = 0;
+    OptixProgramGroup triangle_checkerboard_hit_group = 0;
+    OptixProgramGroup triangle_circle_hit_group       = 0;
+    OptixProgramGroup sphere_checkerboard_hit_group   = 0;
 
-    CUstream                    stream                       = 0;
-    Params                      params;
-    Params*                     d_params;
 
-    OptixShaderBindingTable     sbt = {};
+    bool enableAH   = true;
+    bool enableOMMs = true;
+
+    CUstream stream   = 0;
+    Params   params   = {};
+    Params*  d_params = nullptr;
+
+    OptixShaderBindingTable sbt = {};
 };
 
 
@@ -147,10 +154,18 @@ struct CutoutsState
 //
 //------------------------------------------------------------------------------
 
-const int32_t TRIANGLE_COUNT     = 32;
-const int32_t TRIANGLE_MAT_COUNT = 5;
-const int32_t SPHERE_COUNT       = 1;
-const int32_t SPHERE_MAT_COUNT   = 1;
+
+constexpr int32_t TRIANGLE_COUNT     = 32;
+constexpr int32_t TRIANGLE_MAT_COUNT = 6;
+constexpr int32_t SPHERE_COUNT       = 1;
+constexpr int32_t SPHERE_MAT_COUNT   = 1;
+
+// Size of the checkerboard pattern on the 'cutout' box, must be power of two for simplicity of the opacity micromap in this sample.
+// The opacity micromap is generated to perfectly cover the checkerboard pattern.
+constexpr int CHECKERBOARD_OMM_SUBDIV_LEVEL = 3;
+constexpr int CHECKERBOARD_SIZE = 1 << CHECKERBOARD_OMM_SUBDIV_LEVEL;
+
+constexpr int CIRCLE_OMM_SUBDIV_LEVEL = 5;
 
 const static std::array<Vertex, TRIANGLE_COUNT*3> g_vertices =
 { {
@@ -299,7 +314,7 @@ static std::array<uint32_t, TRIANGLE_COUNT> g_mat_indices =
     0, 0,                          // Back wall     -- white lambert
     1, 1,                          // Right wall    -- green lambert
     2, 2,                          // Left wall     -- red lambert
-    4, 4, 4, 4, 4, 4, 4, 4, 4, 4,  // Short block   -- cutout
+    4, 4, 4, 4, 5, 5, 4, 4, 5, 5,  // Short block   -- cutout checkerboard and circle
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  // Tall block    -- white lambert
     3, 3                           // Ceiling light -- emmissive
 } };
@@ -311,6 +326,7 @@ const std::array<float3, TRIANGLE_MAT_COUNT> g_emission_colors =
     {  0.0f,  0.0f, 0.0f },
     {  0.0f,  0.0f, 0.0f },
     { 15.0f, 15.0f, 5.0f },
+    {  0.0f,  0.0f, 0.0f },
     {  0.0f,  0.0f, 0.0f }
 } };
 
@@ -321,9 +337,23 @@ const std::array<float3, TRIANGLE_MAT_COUNT> g_diffuse_colors =
     { 0.05f, 0.80f, 0.05f },
     { 0.80f, 0.05f, 0.05f },
     { 0.50f, 0.00f, 0.00f },
+    { 0.70f, 0.25f, 0.00f },
     { 0.70f, 0.25f, 0.00f }
 } };
 
+const std::array<float2, 2 * 3> g_checkerboard_tex_coords =
+{ {
+    { CHECKERBOARD_SIZE, 0.0f }, { 0.0f, 0.0f },
+    { 0.0f, CHECKERBOARD_SIZE }, { CHECKERBOARD_SIZE, 0.0f },
+    { 0.0f, CHECKERBOARD_SIZE }, { CHECKERBOARD_SIZE, CHECKERBOARD_SIZE }
+} };
+
+const std::array<float2, 2 * 3> g_circle_tex_coords =
+{ {
+    { 1.f, -1.0f }, { -1.0f, -1.0f },
+    { -1.0f, 1.f }, { 1.f, -1.0f },
+    { -1.0f, 1.f }, { 1.f, 1.f }
+} };
 
 // NB: Some UV scaling is baked into the coordinates for the short block, since
 //     the coordinates are used for the cutout texture.
@@ -350,16 +380,16 @@ const std::array<float2, TRIANGLE_COUNT* 3> g_tex_coords =
     { 1.0f, 0.0f }, { 0.0f, 1.0f }, { 1.0f, 1.0f },
 
     // Short Block
-    { 8.0f, 0.0f }, { 0.0f, 0.0f }, { 0.0f, 8.0f },
-    { 8.0f, 0.0f }, { 0.0f, 8.0f }, { 8.0f, 8.0f },
-    { 8.0f, 0.0f }, { 0.0f, 0.0f }, { 0.0f, 8.0f },
-    { 8.0f, 0.0f }, { 0.0f, 8.0f }, { 8.0f, 8.0f },
-    { 8.0f, 0.0f }, { 0.0f, 0.0f }, { 0.0f, 8.0f },
-    { 8.0f, 0.0f }, { 0.0f, 8.0f }, { 8.0f, 8.0f },
-    { 8.0f, 0.0f }, { 0.0f, 0.0f }, { 0.0f, 8.0f },
-    { 8.0f, 0.0f }, { 0.0f, 8.0f }, { 8.0f, 8.0f },
-    { 8.0f, 0.0f }, { 0.0f, 0.0f }, { 0.0f, 8.0f },
-    { 8.0f, 0.0f }, { 0.0f, 8.0f }, { 8.0f, 8.0f },
+    g_checkerboard_tex_coords[0], g_checkerboard_tex_coords[1], g_checkerboard_tex_coords[2],
+    g_checkerboard_tex_coords[3], g_checkerboard_tex_coords[4], g_checkerboard_tex_coords[5],
+    g_checkerboard_tex_coords[0], g_checkerboard_tex_coords[1], g_checkerboard_tex_coords[2],
+    g_checkerboard_tex_coords[3], g_checkerboard_tex_coords[4], g_checkerboard_tex_coords[5],
+    g_circle_tex_coords[0], g_circle_tex_coords[1], g_circle_tex_coords[2],
+    g_circle_tex_coords[3], g_circle_tex_coords[4], g_circle_tex_coords[5],
+    g_checkerboard_tex_coords[0], g_checkerboard_tex_coords[1], g_checkerboard_tex_coords[2],
+    g_checkerboard_tex_coords[3], g_checkerboard_tex_coords[4], g_checkerboard_tex_coords[5],
+    g_circle_tex_coords[0], g_circle_tex_coords[1], g_circle_tex_coords[2],
+    g_circle_tex_coords[3], g_circle_tex_coords[4], g_circle_tex_coords[5],
 
     // Tall Block
     { 1.0f, 0.0f }, { 0.0f, 0.0f }, { 0.0f, 1.0f },
@@ -382,6 +412,9 @@ const std::array<float2, TRIANGLE_COUNT* 3> g_tex_coords =
 const GeometryData::Sphere g_sphere                = {410.0f, 90.0f, 110.0f, 90.0f};
 const float3               g_sphere_emission_color = {0.0f};
 const float3               g_sphere_diffuse_color  = {0.1f, 0.2f, 0.8f};
+
+// decl
+void buildInstanceAccel( CutoutsState& state );
 
 //------------------------------------------------------------------------------
 //
@@ -408,18 +441,19 @@ static void mouseButtonCallback( GLFWwindow* window, int button, int action, int
 
 static void cursorPosCallback( GLFWwindow* window, double xpos, double ypos )
 {
-    Params* params = static_cast<Params*>( glfwGetWindowUserPointer( window ) );
+    CutoutsState& state  = *static_cast<CutoutsState*>( glfwGetWindowUserPointer( window ) );
+    Params&       params = state.params;
 
     if( mouse_button == GLFW_MOUSE_BUTTON_LEFT )
     {
         trackball.setViewMode( sutil::Trackball::LookAtFixed );
-        trackball.updateTracking( static_cast<int>( xpos ), static_cast<int>( ypos ), params->width, params->height );
+        trackball.updateTracking( static_cast<int>( xpos ), static_cast<int>( ypos ), params.width, params.height );
         camera_changed = true;
     }
     else if( mouse_button == GLFW_MOUSE_BUTTON_RIGHT )
     {
         trackball.setViewMode( sutil::Trackball::EyeFixed );
-        trackball.updateTracking( static_cast<int>( xpos ), static_cast<int>( ypos ), params->width, params->height );
+        trackball.updateTracking( static_cast<int>( xpos ), static_cast<int>( ypos ), params.width, params.height );
         camera_changed = true;
     }
 }
@@ -427,6 +461,8 @@ static void cursorPosCallback( GLFWwindow* window, double xpos, double ypos )
 
 static void windowSizeCallback( GLFWwindow* window, int32_t res_x, int32_t res_y )
 {
+    CutoutsState& state = *static_cast<CutoutsState*>( glfwGetWindowUserPointer( window ) );
+    Params&       params = state.params;
     // Keep rendering at the current resolution when the window is minimized.
     if( minimized )
         return;
@@ -434,9 +470,8 @@ static void windowSizeCallback( GLFWwindow* window, int32_t res_x, int32_t res_y
     // Output dimensions must be at least 1 in both x and y.
     sutil::ensureMinimumSize( res_x, res_y );
 
-    Params* params = static_cast<Params*>( glfwGetWindowUserPointer( window ) );
-    params->width  = res_x;
-    params->height = res_y;
+    params.width  = res_x;
+    params.height = res_y;
     camera_changed = true;
     resize_dirty   = true;
 }
@@ -450,6 +485,8 @@ static void windowIconifyCallback( GLFWwindow* window, int32_t iconified )
 
 static void keyCallback( GLFWwindow* window, int32_t key, int32_t /*scancode*/, int32_t action, int32_t /*mods*/ )
 {
+    CutoutsState& state = *static_cast<CutoutsState*>( glfwGetWindowUserPointer( window ) );
+
     if( action == GLFW_PRESS )
     {
         if( key == GLFW_KEY_Q || key == GLFW_KEY_ESCAPE )
@@ -457,9 +494,31 @@ static void keyCallback( GLFWwindow* window, int32_t key, int32_t /*scancode*/, 
             glfwSetWindowShouldClose( window, true );
         }
     }
-    else if( key == GLFW_KEY_G )
+    else if( key == GLFW_KEY_O )
     {
-        // toggle UI draw
+        // toggle enabling/disabling OMMs
+        // in this sample we always add OMMs to the triangles
+        // we can disable OMMs at the instance level (using instance flag OPTIX_INSTANCE_FLAG_DISABLE_OPACITY_MICROMAPS)
+        state.enableOMMs = !state.enableOMMs;
+        buildInstanceAccel( state );
+        state.params.subframe_index = 0;
+        if( state.enableOMMs )
+            std::cout << "Opacity micromaps (OMMs) on small block enabled.\n";
+        else
+            std::cout << "Opacity micromaps (OMMs) on small block disabled.\n";
+
+    }
+    else if( key == GLFW_KEY_A )
+    {
+        // toggle enabling/disabling AH program (entirely rely on OMMs)
+        // Like OMMs, AH can be disabled at the instance level (using instance flag OPTIX_INSTANCE_FLAG_DISABLE_ANYHIT)
+        state.enableAH = !state.enableAH;
+        buildInstanceAccel( state );
+        state.params.subframe_index = 0;
+        if( state.enableAH )
+            std::cout << "Anyhit program (AH) on small block enabled.\n";
+        else
+            std::cout << "Anyhit program (AH) on small block disabled.\n";
     }
 }
 
@@ -507,8 +566,6 @@ void initLaunchParams( CutoutsState& state )
 
     CUDA_CHECK( cudaStreamCreate( &state.stream ) );
     CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &state.d_params ), sizeof( Params ) ) );
-
-    state.params.handle = state.ias_handle;
 }
 
 
@@ -552,7 +609,6 @@ void updateState( sutil::CUDAOutputBuffer<uchar4>& output_buffer, Params& params
 
 void launchSubframe( sutil::CUDAOutputBuffer<uchar4>& output_buffer, CutoutsState& state )
 {
-
     // Launch
     uchar4* result_buffer_data = output_buffer.map();
     state.params.frame_buffer = result_buffer_data;
@@ -574,7 +630,6 @@ void launchSubframe( sutil::CUDAOutputBuffer<uchar4>& output_buffer, CutoutsStat
                  1                    // launch depth
                  ) );
     output_buffer.unmap();
-    CUDA_SYNC_CHECK();
 }
 
 
@@ -655,20 +710,67 @@ void buildGeomAccel( CutoutsState& state )
         CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( d_mat_indices ), g_mat_indices.data(),
                                 mat_indices_size_in_bytes, cudaMemcpyHostToDevice ) );
 
-        const size_t tex_coords_size_in_bytes = g_tex_coords.size() * sizeof( float2 );
-        CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &state.d_tex_coords ), tex_coords_size_in_bytes ) );
-        CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( state.d_tex_coords ), g_tex_coords.data(),
-                                tex_coords_size_in_bytes, cudaMemcpyHostToDevice ) );
-
+        // NOTE: the 'DISABLE_ANYHIT' flag will be overwritten by the explicit OMM predefined index below.
+        // With OMMs, the opacity state is explicitly defined per triangle.
         uint32_t triangle_input_flags[TRIANGLE_MAT_COUNT] = {
-            // One per SBT record for this build input
-            OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT,
-            OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT,
-            OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT,
-            OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT,
-            // Do not disable anyhit on the cutout material for the short block
-            OPTIX_GEOMETRY_FLAG_NONE
+            // One flag per SBT record for this build input
+            // The following materials are known to be opaque, so normally, we would use OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT.
+            // However, the usage of OMMs in the AS build input overwrites flag OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT.
+            // Instead we use predefined OMM indices to mark the triangles opaque that make use of opaque materials.
+            OPTIX_GEOMETRY_FLAG_NONE, // opaque material
+            OPTIX_GEOMETRY_FLAG_NONE, // opaque material
+            OPTIX_GEOMETRY_FLAG_NONE, // opaque material
+            OPTIX_GEOMETRY_FLAG_NONE, // opaque material
+            OPTIX_GEOMETRY_FLAG_NONE  // cutout material
         };
+
+        std::array<OptixOpacityMicromapUsageCount, 2> ommUsages ={};
+        {
+            OptixOpacityMicromapUsageCount& ommUsageCheckerboard = ommUsages[0];
+            ommUsageCheckerboard.count = 6;  // 3 out of 5 sides of a box, 2 triangles per side reference an OMM in the OMM array
+            ommUsageCheckerboard.format           = OPTIX_OPACITY_MICROMAP_FORMAT_2_STATE;  // simple 2 state as the OMM perfectly matches the checkerboard pattern. 'unknown' states that are resolved in the anyhit program are not needed.
+            ommUsageCheckerboard.subdivisionLevel = CHECKERBOARD_OMM_SUBDIV_LEVEL;
+        }
+        {
+            OptixOpacityMicromapUsageCount& ommUsageCirle = ommUsages[1];
+            ommUsageCirle.count = 4;  // 2 out of 5 sides of a box, 2 triangles per side reference an OMM in the OMM array
+            ommUsageCirle.format = OPTIX_OPACITY_MICROMAP_FORMAT_4_STATE;  // 4 state, some parts need to be resolved in the anyhit program.
+            ommUsageCirle.subdivisionLevel = CIRCLE_OMM_SUBDIV_LEVEL;
+        }
+
+        OptixBuildInputOpacityMicromap ommInput ={};
+        ommInput.opacityMicromapArray = state.d_omm_array;
+        ommInput.indexingMode = OPTIX_OPACITY_MICROMAP_ARRAY_INDEXING_MODE_INDEXED;
+        ommInput.indexSizeInBytes = 2;
+        ommInput.numMicromapUsageCounts = static_cast<unsigned int>(ommUsages.size());
+        ommInput.micromapUsageCounts = ommUsages.data();
+
+        // OMM indexing must be specified for all triangles in this build input.
+        // Since only the triangles of the small box actually reference OMMs, predefined indices must be used for the other triangles.
+        // Alternatively, a separate build input can be used for the geometry that uses OMMs (the small box)
+        // and only that build input references the OMM array.
+        constexpr unsigned int numTriangles = static_cast<uint32_t>(g_vertices.size()) / 3;
+        constexpr unsigned short opaqueIndex = static_cast<unsigned short>( OPTIX_OPACITY_MICROMAP_PREDEFINED_INDEX_FULLY_OPAQUE );
+        std::array<unsigned short, numTriangles> ommIndices ={
+            opaqueIndex, opaqueIndex, // floor
+            opaqueIndex, opaqueIndex, // ceiling
+            opaqueIndex, opaqueIndex, // back wall
+            opaqueIndex, opaqueIndex, // right wall
+            opaqueIndex, opaqueIndex, // left wall
+            0, 1, 0, 1, 2, 3, 0, 1, 2, 3,  // small box, three sides use OMMs 0 and 1, two sides of the box (front/back) use OMMs 2 and 3
+            opaqueIndex, opaqueIndex, // tall box ...
+            opaqueIndex, opaqueIndex,
+            opaqueIndex, opaqueIndex,
+            opaqueIndex, opaqueIndex,
+            opaqueIndex, opaqueIndex,
+            opaqueIndex, opaqueIndex  // ceiling light
+        };
+        const size_t omm_indices_size_in_bytes = ommIndices.size() * ommInput.indexSizeInBytes;
+        CUdeviceptr  d_omm_indices             = 0;
+        CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_omm_indices ), omm_indices_size_in_bytes ) );
+        CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( d_omm_indices ), ommIndices.data(),
+                                omm_indices_size_in_bytes, cudaMemcpyHostToDevice ) );
+        ommInput.indexBuffer = d_omm_indices;
 
         OptixBuildInput triangle_input                           = {};
         triangle_input.type                                      = OPTIX_BUILD_INPUT_TYPE_TRIANGLES;
@@ -682,8 +784,12 @@ void buildGeomAccel( CutoutsState& state )
         triangle_input.triangleArray.sbtIndexOffsetSizeInBytes   = sizeof( uint32_t );
         triangle_input.triangleArray.sbtIndexOffsetStrideInBytes = sizeof( uint32_t );
 
+        triangle_input.triangleArray.opacityMicromap = ommInput;
+
         OptixAccelBuildOptions accel_options = {};
-        accel_options.buildFlags             = OPTIX_BUILD_FLAG_ALLOW_COMPACTION;
+        // Enable 'OPTIX_BUILD_FLAG_ALLOW_DISABLE_OPACITY_MICROMAPS' for demonstration purposes to allow for toggling between enabling/disabling OMMs at runtime quickly
+        // we toggle by disabling OMMs at the instance level (using instance flag OPTIX_INSTANCE_FLAG_DISABLE_OPACITY_MICROMAPS)
+        accel_options.buildFlags             = OPTIX_BUILD_FLAG_ALLOW_COMPACTION | OPTIX_BUILD_FLAG_ALLOW_DISABLE_OPACITY_MICROMAPS;
         accel_options.operation              = OPTIX_BUILD_OPERATION_BUILD;
 
         OptixAccelBufferSizes gas_buffer_sizes;
@@ -723,6 +829,7 @@ void buildGeomAccel( CutoutsState& state )
 
         CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_temp_buffer ) ) );
         CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_mat_indices ) ) );
+        CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_omm_indices ) ) );
 
         size_t compacted_gas_size;
         CUDA_CHECK( cudaMemcpy(
@@ -827,9 +934,274 @@ void buildGeomAccel( CutoutsState& state )
     }
 }
 
+void buildCheckerboardOpacityMicromap( CutoutsState& state )
+{
+    // Need two histogram entries, one for the checkerboard pattern (combination of OMM format and OMM subdivision level),
+    // and one for the circular pattern
+    std::array<OptixOpacityMicromapHistogramEntry, 2> histogram;
+
+    {
+        OptixOpacityMicromapHistogramEntry& entry = histogram[0];
+        entry.count                               = 2;
+        entry.format                              = OptixOpacityMicromapFormat::OPTIX_OPACITY_MICROMAP_FORMAT_2_STATE;
+        entry.subdivisionLevel                    = CHECKERBOARD_OMM_SUBDIV_LEVEL;
+    }
+    {
+        OptixOpacityMicromapHistogramEntry& entry = histogram[1];
+        entry.count                               = 2;
+        entry.format                              = OptixOpacityMicromapFormat::OPTIX_OPACITY_MICROMAP_FORMAT_4_STATE;
+        entry.subdivisionLevel                    = CIRCLE_OMM_SUBDIV_LEVEL;
+    }
+
+    constexpr int numCheckerboardMicroTriangles = 1 << ( CHECKERBOARD_OMM_SUBDIV_LEVEL * 2 );
+    std::array<std::array<unsigned short, numCheckerboardMicroTriangles / 16>, 2> ommDataCheckerboard ={}; // 2 OMMs
+
+    constexpr int numCircleMicroTriangles = 1 << ( CIRCLE_OMM_SUBDIV_LEVEL * 2 );
+    std::array<std::array<unsigned short, numCircleMicroTriangles * 2 / 16>, 2> ommDataCircle = {};  // 2 OMMs with 2b per state
+
+    CUdeviceptr  d_omm_input_data = 0;
+    const size_t omm_data_checkerboard_size_in_bytes = numCheckerboardMicroTriangles / 8 * 2;  // 2 OMMs, 1b per micro triangle
+    const size_t omm_data_circle_size_in_bytes = numCircleMicroTriangles / 8 * 2 * 2;  // 2 OMMs, 2b per micro triangle
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_omm_input_data ), omm_data_checkerboard_size_in_bytes + omm_data_circle_size_in_bytes ) );
+
+    auto computeUV = []( const float2& bary, const float2* texcoord )
+    {
+        return ( 1 - bary.x - bary.y ) * texcoord[0] + bary.x * texcoord[1] + bary.y * texcoord[2];
+    };
+    {
+        // OMMs are used for 'quads' with vertices a,b,c,d as:
+        // first triangle:  a, b, c
+        // second triangle: a, c, d
+
+#if 0
+        // Knowing the order of the micro triangles, it is possible to hard code the sequence for a checkerboard pattern
+
+        // The simplified, 16 microtriangles example pictured below illustrates the space filling curve.
+        //
+        //                  w                            |
+        //                 / \                           |
+        //                v   \                          |
+        //                     x---                      |
+        //                \   / \                        |
+        //                 \ / F \                       |
+        //                  ----------                   |
+        //             \   / \ D / \                     |
+        //              \ / E \ / C \                    |
+        //               ----------------                |
+        //          \   / \ 4 / \ 6 / \                  |
+        //           \ / 3 \ / 5 \ / B \                 |
+        //            ----------------------             |
+        //       \   / \ 1 / \ 7 / \ 9 / \    ^          |
+        //        \ / 0 \ / 2 \ / 8 \ / A \    \         |
+        //         x-----------------------x--- v        |
+        //        /     /     /     /     /              |
+        //       u - >                                   |
+
+        unsigned short t00 = 0b1100100111001001; // 1100 1001 1100 1001
+        unsigned short t01 = 0b1001110010011100; // 1001 1100 1001 1100
+        unsigned short t10 = 0b0101010101010101; // 0101 0101 0101 0101
+        for( size_t i = 0; i < ommData[0].size(); ++i )
+        {
+            ommData[0][i] = i&1 ? t01 : t00;
+        }
+        for( size_t i = 0; i < ommData[1].size(); ++i )
+        {
+            ommData[1][i] = t10;
+        }
+#else
+        // Alternatively, one can use the uv values of the triangles to determine the position of the micro triangle and determine the state
+        // Note that the tex coords (uvs) are in range [0, CHECKERBOARD_SIZE] for the checkerboard in this sample.
+        ommDataCheckerboard[0].fill( 0 );
+        ommDataCheckerboard[1].fill( 0 );
+        const float2* tex_coords_t0 = &g_checkerboard_tex_coords[0];
+        const float2* tex_coords_t1 = &g_checkerboard_tex_coords[3];
+        for( uint32_t uTriI=0; uTriI<numCheckerboardMicroTriangles; ++uTriI )
+        {
+            float2 bary0, bary1, bary2;
+            optixMicromapIndexToBaseBarycentrics( uTriI, CHECKERBOARD_OMM_SUBDIV_LEVEL, bary0, bary1, bary2 );
+            constexpr float oneThird = 1.f / 3.f;
+            float2          midbary  = oneThird * bary0 + oneThird * bary1 + oneThird * bary2;
+            {
+                // first triangle (a,b,c)
+                // compute barycentrics of the midpoint of the micro triangle
+                float2 uvMidPoint = computeUV(midbary, tex_coords_t0);
+                // using the OMM state values: ((int( uvMidPoint.x ) & 1) == (int( uvMidPoint.y ) & 1)) ? OPTIX_OPACITY_MICROMAP_STATE_OPAQUE : OPTIX_OPACITY_MICROMAP_STATE_TRANSPARENT)
+                // using the bit directly (since OPTIX_OPACITY_MICROMAP_STATE_OPAQUE == 1):
+                ommDataCheckerboard[0][uTriI / 16] |= ((int( uvMidPoint.x ) & 1) == (int( uvMidPoint.y ) & 1)) << (uTriI % 16);  // set opaque if the 'integer' uvs are equal
+            }
+            {
+                // second triangle (a,c,d)
+                float2 uvMidPoint = computeUV( midbary, tex_coords_t1 );
+                ommDataCheckerboard[1][uTriI / 16] |= ((int( uvMidPoint.x ) & 1) == (int( uvMidPoint.y ) & 1)) << (uTriI % 16);  // set opaque if the 'integer' uvs are equal
+            }
+        }
+#endif
+
+        CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( d_omm_input_data ), ommDataCheckerboard.data(),
+                                omm_data_checkerboard_size_in_bytes, cudaMemcpyHostToDevice ) );
+    }
+
+    {
+        // Use the uv values of the triangles to determine the position of the micro triangle and determine the state
+        // Note that the tex coords (uvs) are in range [-1,1] for the circular cutout.
+        ommDataCircle[0].fill( 0 );
+        ommDataCircle[1].fill( 0 );
+        const float2* tex_coords_t0 = &g_circle_tex_coords[0];
+        const float2* tex_coords_t1 = &g_circle_tex_coords[3];
+        for( uint32_t uTriI = 0; uTriI < numCircleMicroTriangles; ++uTriI )
+        {
+            // Opacity micromaps for a circular cutout.
+            // Note that this computation is assumed to align with the anyhit program (AH).
+            // While AH only needs to evaluate opacity of a single (intersection) point, in the following we must determine the
+            // opacity state of the micro triangles, i.e., an area, making the evaluation more involved:
+            // Check if the micro triangle overlaps the circle, if so, it needs to be marked as 'unknown'.
+            // If the micro triangle is fully within the circle, it is marked as 'transparent'.
+            // Otherwise it must be fully outside the circle and can be marked 'opaque'.
+
+            // AH:
+            // texcoord = t0 * ( 1.0f - barycentrics.x - barycentrics.y ) + t1 * barycentrics.x + t2 * barycentrics.y;
+            // ignore   = ( texcoord.x * texcoord.x + texcoord.y * texcoord.y ) < ( CIRCLE_RADIUS * CIRCLE_RADIUS );
+
+            auto inCircle = [&]( const float2& uv ) -> bool
+            {
+                // check if point uv is in circle with center at [0,0] and radius CIRCLE_RADIUS
+                return ( uv.x * uv.x + uv.y * uv.y ) < ( CIRCLE_RADIUS * CIRCLE_RADIUS );
+            };
+            auto edgeIntersectsCircle = [&]( const float2& uv0, const float2& uv1 ) -> bool
+            {
+                float2 d = uv1 - uv0;
+                float2 f = uv0; // circle center is at [0,0]
+
+                float a = dot( d, d );
+                float b = 2.f * dot( f, d );
+                float c = dot(f, f) - CIRCLE_RADIUS * CIRCLE_RADIUS;
+
+                float discriminant = b * b - 4 * a * c;
+                if( discriminant < 0 )
+                {
+                    // no intersection
+                    return false;
+                }
+                else
+                {
+                    // there is a solution to the equation.
+                    discriminant = sqrtf( discriminant );
+
+                    float t0 = ( -b - discriminant ) / ( 2.f * a );
+                    float t1 = ( -b + discriminant ) / ( 2.f * a );
+
+                    // check for solutions of the quadratic equation, must be in range [0,1] to be 'within the edge'
+                    if( (t0 >= 0 && t0 <= 1.f) || (t1 >= 0 && t1 <= 1))
+                    {
+                        return true;
+                    }
+
+                    // no intersection: fully in front of, behind, or inside the circe
+                    return false;
+                }
+            };
+
+            float2 bary0, bary1, bary2;
+            optixMicromapIndexToBaseBarycentrics( uTriI, CIRCLE_OMM_SUBDIV_LEVEL, bary0, bary1, bary2 );
+
+            auto computeOMMData = [&]( int ommIdx, const float2* tex_coords )
+            {
+                float2 uv0         = computeUV( bary0, tex_coords );
+                float2 uv1         = computeUV( bary1, tex_coords );
+                float2 uv2         = computeUV( bary2, tex_coords );
+                bool   isInCircle0 = inCircle( uv0 );
+                bool   isInCircle1 = inCircle( uv1 );
+                bool   isInCircle2 = inCircle( uv2 );
+                if( isInCircle0 && isInCircle1 && isInCircle2 )
+                    // this is a nop since ommDataCircle is 0 initialized
+                    ommDataCircle[ommIdx][uTriI / 8] |= OPTIX_OPACITY_MICROMAP_STATE_TRANSPARENT << ( ( uTriI % 8 ) * 2 );
+                else if( !isInCircle0 && !isInCircle1 && !isInCircle2 && !edgeIntersectsCircle( uv0, uv1 )
+                         && !edgeIntersectsCircle( uv1, uv2 ) && !edgeIntersectsCircle( uv2, uv0 ) )
+                    // if all vertices are outside of the circle and no edge intersects the circle, mark it as opaque
+                    // we do not need to check if the circle is fully contained by the micro triangle as the circle is already cut
+                    // by the triangle that this OMM is applied to.
+                    ommDataCircle[ommIdx][uTriI / 8] |= OPTIX_OPACITY_MICROMAP_STATE_OPAQUE << ( ( uTriI % 8 ) * 2 );
+                else
+                    // otherwise, let AH resolve it
+                    ommDataCircle[ommIdx][uTriI / 8] |= OPTIX_OPACITY_MICROMAP_STATE_UNKNOWN_TRANSPARENT << ( ( uTriI % 8 ) * 2 );
+            };
+
+            // first triangle (a,b,c)
+            computeOMMData( 0, tex_coords_t0 );
+            // second triangle (a,c,d)
+            computeOMMData( 1, tex_coords_t1 );
+        }
+
+        CUDA_CHECK( cudaMemcpy( reinterpret_cast<char*>( d_omm_input_data ) + omm_data_checkerboard_size_in_bytes, ommDataCircle.data(),
+                                omm_data_circle_size_in_bytes, cudaMemcpyHostToDevice ) );
+    }
+
+
+    OptixOpacityMicromapArrayBuildInput bi = {};
+    bi.flags                       = OPTIX_OPACITY_MICROMAP_FLAG_NONE;
+    bi.inputBuffer                 = d_omm_input_data;
+    bi.numMicromapHistogramEntries = (unsigned)histogram.size();
+    bi.micromapHistogramEntries    = histogram.data();
+
+    OptixMicromapBufferSizes bs = {};
+    OPTIX_CHECK( optixOpacityMicromapArrayComputeMemoryUsage( state.context, &bi, &bs ) );
+
+    // this is fairly simple, two OMMs, both with the same layout
+    std::vector<OptixOpacityMicromapDesc> ommDescs =
+    {
+        { 
+            0,
+            CHECKERBOARD_OMM_SUBDIV_LEVEL, 
+            OPTIX_OPACITY_MICROMAP_FORMAT_2_STATE 
+        },
+        { 
+            static_cast<unsigned int>(ommDataCheckerboard[0].size() * sizeof(unsigned short) ), 
+            CHECKERBOARD_OMM_SUBDIV_LEVEL,
+            OPTIX_OPACITY_MICROMAP_FORMAT_2_STATE
+        },
+        { 
+            omm_data_checkerboard_size_in_bytes,
+            CIRCLE_OMM_SUBDIV_LEVEL,
+            OPTIX_OPACITY_MICROMAP_FORMAT_4_STATE
+        },
+        { 
+            static_cast<unsigned int>(omm_data_checkerboard_size_in_bytes + ommDataCircle[0].size() * sizeof(unsigned short) ),
+            CIRCLE_OMM_SUBDIV_LEVEL,
+            OPTIX_OPACITY_MICROMAP_FORMAT_4_STATE
+        }
+    };
+
+    CUdeviceptr  d_omm_desc = 0;
+    const size_t omm_desc_size_in_bytes = ommDescs.size() * sizeof(OptixOpacityMicromapDesc);
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_omm_desc ), omm_desc_size_in_bytes ) );
+    CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( d_omm_desc ), ommDescs.data(), omm_desc_size_in_bytes, cudaMemcpyHostToDevice ) );
+
+    bi.perMicromapDescBuffer        = d_omm_desc;
+    bi.perMicromapDescStrideInBytes = 0;
+
+    CUdeviceptr d_temp_buffer = 0;
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_temp_buffer ), bs.tempSizeInBytes ) );
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &state.d_omm_array ), bs.outputSizeInBytes ) );
+
+    OptixMicromapBuffers uBuffers = {};
+    uBuffers.output               = state.d_omm_array;
+    uBuffers.outputSizeInBytes    = bs.outputSizeInBytes;
+    uBuffers.temp                 = d_temp_buffer;
+    uBuffers.tempSizeInBytes      = bs.tempSizeInBytes;
+
+    OPTIX_CHECK( optixOpacityMicromapArrayBuild( state.context, 0, &bi, &uBuffers ) );
+
+    cudaFree( reinterpret_cast<void*>( d_omm_input_data ) );
+    cudaFree( reinterpret_cast<void*>( d_omm_desc ) );
+    cudaFree( reinterpret_cast<void*>( d_temp_buffer ) );
+}
+
 
 void buildInstanceAccel( CutoutsState& state )
 {
+    if( state.d_ias_output_buffer )
+        CUDA_CHECK( cudaFree( reinterpret_cast<void*>( state.d_ias_output_buffer ) ) );
+
     CUdeviceptr d_instances;
     size_t      instance_size_in_bytes = sizeof( OptixInstance ) * 2;
     CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_instances ), instance_size_in_bytes ) );
@@ -860,7 +1232,8 @@ void buildInstanceAccel( CutoutsState& state )
     memset( optix_instances, 0, instance_size_in_bytes );
 
     optix_instances[0].traversableHandle = state.triangle_gas_handle;
-    optix_instances[0].flags             = OPTIX_INSTANCE_FLAG_NONE;
+    optix_instances[0].flags             = ( state.enableOMMs ? OPTIX_INSTANCE_FLAG_NONE : OPTIX_INSTANCE_FLAG_DISABLE_OPACITY_MICROMAPS ) |
+                                           ( state.enableAH   ? OPTIX_INSTANCE_FLAG_NONE : OPTIX_INSTANCE_FLAG_DISABLE_ANYHIT );
     optix_instances[0].instanceId        = 0;
     optix_instances[0].sbtOffset         = 0;
     optix_instances[0].visibilityMask    = 1;
@@ -869,7 +1242,7 @@ void buildInstanceAccel( CutoutsState& state )
     optix_instances[1].traversableHandle = state.sphere_gas_handle;
     optix_instances[1].flags             = OPTIX_INSTANCE_FLAG_NONE;
     optix_instances[1].instanceId        = 1;
-    optix_instances[1].sbtOffset         = TRIANGLE_MAT_COUNT*RAY_TYPE_COUNT;
+    optix_instances[1].sbtOffset         = TRIANGLE_MAT_COUNT;
     optix_instances[1].visibilityMask    = 1;
     memcpy( optix_instances[1].transform, instance.transform, sizeof( float ) * 12 );
 
@@ -890,6 +1263,8 @@ void buildInstanceAccel( CutoutsState& state )
                                   0         // num emitted properties
                                   ) );
 
+    state.params.handle = state.ias_handle;
+
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_temp_buffer ) ) );
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_instances   ) ) );
 }
@@ -903,26 +1278,24 @@ void createModule( CutoutsState& state )
     module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 #endif
 
-    state.pipeline_compile_options.usesMotionBlur            = false;
-    state.pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_ANY;
-    state.pipeline_compile_options.numPayloadValues          = 2;
-    state.pipeline_compile_options.numAttributeValues        = sphere::NUM_ATTRIBUTE_VALUES;
-    state.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE; // should be OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
+    state.pipeline_compile_options.usesMotionBlur        = false;
+    state.pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING;
+    state.pipeline_compile_options.numPayloadValues      = 2;
+    state.pipeline_compile_options.numAttributeValues    = whitted::NUM_ATTRIBUTE_VALUES;
+    state.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
     state.pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
+    state.pipeline_compile_options.allowOpacityMicromaps            = 1;
 
     size_t      inputSize = 0;
     const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixCutouts.cu", inputSize );
-    char log[2048];
-    size_t sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
                 state.context,
                 &module_compile_options,
                 &state.pipeline_compile_options,
                 input,
                 inputSize,
-                log,
-                &sizeof_log,
-                &state.ptx_module
+                LOG, &LOG_SIZE,
+                &state.module
                 ) );
 
     input = sutil::getInputData( nullptr, nullptr, "sphere.cu", inputSize );
@@ -932,8 +1305,7 @@ void createModule( CutoutsState& state )
                 &state.pipeline_compile_options,
                 input,
                 inputSize,
-                log,
-                &sizeof_log,
+                LOG, &LOG_SIZE,
                 &state.sphere_module
                 ) );
 }
@@ -945,72 +1317,56 @@ void createProgramGroups( CutoutsState& state )
 
     OptixProgramGroupDesc raygen_prog_group_desc    = {};
     raygen_prog_group_desc.kind                     = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
-    raygen_prog_group_desc.raygen.module            = state.ptx_module;
+    raygen_prog_group_desc.raygen.module            = state.module;
     raygen_prog_group_desc.raygen.entryFunctionName = "__raygen__rg";
 
-    char   log[2048];
-    size_t sizeof_log = sizeof( log );
-    OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context,
-                                              &raygen_prog_group_desc,
+    OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context, &raygen_prog_group_desc,
                                               1,  // num program groups
-                                              &program_group_options,
-                                              log, &sizeof_log,
-                                              &state.raygen_prog_group ) );
+                                              &program_group_options, LOG, &LOG_SIZE, &state.raygen_prog_group ) );
 
     OptixProgramGroupDesc miss_prog_group_desc  = {};
     miss_prog_group_desc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
-    miss_prog_group_desc.miss.module            = state.ptx_module;
+    miss_prog_group_desc.miss.module            = state.module;
     miss_prog_group_desc.miss.entryFunctionName = "__miss__radiance";
-    sizeof_log                                  = sizeof( log );
-    OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context,
-                                              &miss_prog_group_desc,
+    OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context, &miss_prog_group_desc,
                                               1,  // num program groups
-                                              &program_group_options,
-                                              log, &sizeof_log,
-                                              &state.radiance_miss_group ) );
+                                              &program_group_options, LOG, &LOG_SIZE, &state.radiance_miss_group ) );
 
     memset( &miss_prog_group_desc, 0, sizeof( OptixProgramGroupDesc ) );
     miss_prog_group_desc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
-    miss_prog_group_desc.miss.module            = nullptr;  // NULL miss program for occlusion rays
-    miss_prog_group_desc.miss.entryFunctionName = nullptr;
-    sizeof_log                                  = sizeof( log );
+    miss_prog_group_desc.miss.module            = state.module;
+    miss_prog_group_desc.miss.entryFunctionName = "__miss__occlusion";
     OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context, &miss_prog_group_desc,
                                               1,  // num program groups
-                                              &program_group_options, log, &sizeof_log, &state.occlusion_miss_group ) );
+                                              &program_group_options, LOG, &LOG_SIZE, &state.occlusion_miss_group ) );
 
-    OptixProgramGroupDesc hit_prog_group_desc = {};
+    OptixProgramGroupDesc hit_prog_group_desc        = {};
     hit_prog_group_desc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-    hit_prog_group_desc.hitgroup.moduleCH            = state.ptx_module;
+    hit_prog_group_desc.hitgroup.moduleCH            = state.module;
     hit_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__radiance";
-    hit_prog_group_desc.hitgroup.moduleAH            = state.ptx_module;
-    hit_prog_group_desc.hitgroup.entryFunctionNameAH = "__anyhit__ah";
-    hit_prog_group_desc.hitgroup.moduleIS            = state.sphere_module;
-    hit_prog_group_desc.hitgroup.entryFunctionNameIS = "__intersection__sphere";
-    sizeof_log = sizeof( log );
-    OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context,
-                                              &hit_prog_group_desc,
-                                              1,  // num program groups
-                                              &program_group_options,
-                                              log,
-                                              &sizeof_log,
-                                              &state.radiance_hit_group ) );
+    hit_prog_group_desc.hitgroup.moduleAH            = state.module;
 
-    memset( &hit_prog_group_desc, 0, sizeof( OptixProgramGroupDesc ) );
-    hit_prog_group_desc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
-    hit_prog_group_desc.hitgroup.moduleCH            = state.ptx_module;
-    hit_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__occlusion";
-    hit_prog_group_desc.hitgroup.moduleAH            = state.ptx_module;
-    hit_prog_group_desc.hitgroup.entryFunctionNameAH = "__anyhit__ah";
-    hit_prog_group_desc.hitgroup.moduleIS            = state.sphere_module;
-    hit_prog_group_desc.hitgroup.entryFunctionNameIS = "__intersection__sphere";
-    sizeof_log = sizeof( log );
-    OPTIX_CHECK( optixProgramGroupCreate( state.context,
-                                          &hit_prog_group_desc,
-                                          1,  // num program groups
-                                          &program_group_options,
-                                          log,
-                                          &sizeof_log,
-                                          &state.occlusion_hit_group ) );
+    {
+        hit_prog_group_desc.hitgroup.entryFunctionNameAH = "__anyhit__ah_checkerboard";
+        OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context, &hit_prog_group_desc,
+                                                  1,  // num program groups
+                                                  &program_group_options, LOG, &LOG_SIZE, &state.triangle_checkerboard_hit_group ) );
+    }
+    {
+        hit_prog_group_desc.hitgroup.entryFunctionNameAH = "__anyhit__ah_circle";
+        OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context, &hit_prog_group_desc,
+                                                  1,  // num program groups
+                                                  &program_group_options, LOG, &LOG_SIZE, &state.triangle_circle_hit_group ) );
+    }
+    {
+        hit_prog_group_desc.hitgroup.entryFunctionNameAH = "__anyhit__ah_checkerboard";
+        hit_prog_group_desc.hitgroup.moduleIS            = state.sphere_module;
+        hit_prog_group_desc.hitgroup.entryFunctionNameIS = "__intersection__sphere";
+        OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context, &hit_prog_group_desc,
+                                                  1,  // num program groups
+                                                  &program_group_options, LOG, &LOG_SIZE, &state.sphere_checkerboard_hit_group ) );
+    }
+
 }
 
 
@@ -1022,23 +1378,21 @@ void createPipeline( CutoutsState& state )
         state.raygen_prog_group,
         state.radiance_miss_group,
         state.occlusion_miss_group,
-        state.radiance_hit_group,
-        state.occlusion_hit_group
+        state.triangle_checkerboard_hit_group,
+        state.triangle_circle_hit_group,
+        state.sphere_checkerboard_hit_group
     };
 
     OptixPipelineLinkOptions pipeline_link_options = {};
     pipeline_link_options.maxTraceDepth            = max_trace_depth;
     pipeline_link_options.debugLevel               = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 
-    char   log[2048];
-    size_t sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixPipelineCreate( state.context,
                                           &state.pipeline_compile_options,
                                           &pipeline_link_options,
                                           program_groups,
                                           sizeof( program_groups ) / sizeof( program_groups[0] ),
-                                          log,
-                                          &sizeof_log,
+                                          LOG, &LOG_SIZE,
                                           &state.pipeline ) );
 
     OptixStackSizes stack_sizes = {};
@@ -1057,13 +1411,19 @@ void createPipeline( CutoutsState& state )
                                              &direct_callable_stack_size_from_state, &continuation_stack_size ) );
     OPTIX_CHECK( optixPipelineSetStackSize( state.pipeline, direct_callable_stack_size_from_traversal,
                                             direct_callable_stack_size_from_state, continuation_stack_size,
-                                            1  // maxTraversableDepth
+                                            2  // maxTraversableDepth
                                             ) );
 }
 
 
 void createSBT( CutoutsState& state )
 {
+    // texture coordinates are custom application state, not part of any primitive data!
+    const size_t tex_coords_size_in_bytes = g_tex_coords.size() * sizeof( float2 );
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &state.d_tex_coords ), tex_coords_size_in_bytes ) );
+    CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( state.d_tex_coords ), g_tex_coords.data(),
+                            tex_coords_size_in_bytes, cudaMemcpyHostToDevice ) );
+
     CUdeviceptr  d_raygen_record;
     const size_t raygen_record_size = sizeof( RayGenRecord );
     CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_raygen_record ), raygen_record_size ) );
@@ -1075,78 +1435,66 @@ void createSBT( CutoutsState& state )
     CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( d_raygen_record ), &rg_sbt, raygen_record_size,
                             cudaMemcpyHostToDevice ) );
 
+    // two miss programs:
+    // first for 'radiance' rays, return the 'background' color
+    // second for 'occlusion' rays, marking a ray as 'unoccluded' if miss is executed.
     CUdeviceptr  d_miss_records;
     const size_t miss_record_size = sizeof( MissRecord );
-    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_miss_records ), miss_record_size * RAY_TYPE_COUNT ) );
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_miss_records ), miss_record_size * 2 ) );
 
     MissRecord ms_sbt[2];
     OPTIX_CHECK( optixSbtRecordPackHeader( state.radiance_miss_group, &ms_sbt[0] ) );
     ms_sbt[0].data = {0.0f, 0.0f, 0.0f};
     OPTIX_CHECK( optixSbtRecordPackHeader( state.occlusion_miss_group, &ms_sbt[1] ) );
-    ms_sbt[1].data = {0.0f, 0.0f, 0.0f};
+    ms_sbt[1].data = {}; // no data needed for occlusion miss program
 
-    CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( d_miss_records ), ms_sbt, miss_record_size * RAY_TYPE_COUNT,
+    CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( d_miss_records ), ms_sbt, miss_record_size * 2,
                             cudaMemcpyHostToDevice ) );
 
     CUdeviceptr  d_hitgroup_records;
     const size_t hitgroup_record_size = sizeof( HitGroupRecord );
     CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_hitgroup_records ),
-                            hitgroup_record_size * ( RAY_TYPE_COUNT * ( TRIANGLE_MAT_COUNT + SPHERE_MAT_COUNT ) ) ) );
+                            hitgroup_record_size * ( TRIANGLE_MAT_COUNT + SPHERE_MAT_COUNT ) ) );
 
-    HitGroupRecord hitgroup_records[RAY_TYPE_COUNT * ( TRIANGLE_MAT_COUNT + SPHERE_MAT_COUNT )];
+    HitGroupRecord hitgroup_records[TRIANGLE_MAT_COUNT + SPHERE_MAT_COUNT];
 
     // Set up the HitGroupRecords for the triangle materials
-    for( int i = 0; i < TRIANGLE_MAT_COUNT; ++i )
+    for( int sbt_idx = 0; sbt_idx < TRIANGLE_MAT_COUNT; ++sbt_idx )
     {
-        {
-            const int sbt_idx = i*RAY_TYPE_COUNT+0; // SBT for radiance ray-type for ith material
-
-            OPTIX_CHECK( optixSbtRecordPackHeader( state.radiance_hit_group, &hitgroup_records[sbt_idx] ) );
-            hitgroup_records[ sbt_idx ].data.emission_color = g_emission_colors[i];
-            hitgroup_records[ sbt_idx ].data.diffuse_color  = g_diffuse_colors[i];
-            hitgroup_records[ sbt_idx ].data.vertices       = reinterpret_cast<float4*>(state.d_vertices);
-            hitgroup_records[ sbt_idx ].data.tex_coords     = reinterpret_cast<float2*>(state.d_tex_coords);
-        }
-
-        {
-            const int sbt_idx = i*RAY_TYPE_COUNT+1; // SBT for occlusion ray-type for ith material
-            memset( &hitgroup_records[sbt_idx], 0, hitgroup_record_size );
-
-            OPTIX_CHECK( optixSbtRecordPackHeader( state.occlusion_hit_group, &hitgroup_records[sbt_idx] ) );
-            hitgroup_records[ sbt_idx ].data.vertices   = reinterpret_cast<float4*>(state.d_vertices);
-            hitgroup_records[ sbt_idx ].data.tex_coords = reinterpret_cast<float2*>(state.d_tex_coords);
-        }
+        // Apply hitgroup with checkerboard cutout in AH as default.
+        // The last triangle material uses a different hitgroup for the circular cutout,
+        // this material / sbt is applied to two faces of the small box.
+        // Both hit groups only differ in the AH though, which is disabled for all triangles referencing materials [0,3].
+        // These triangles use OMM predefined index 'opaque'.
+        OPTIX_CHECK( optixSbtRecordPackHeader( sbt_idx != TRIANGLE_MAT_COUNT - 1 ? state.triangle_checkerboard_hit_group :
+                                                                                   state.triangle_circle_hit_group,
+                                               &hitgroup_records[sbt_idx] ) );
+        hitgroup_records[sbt_idx].data.emission_color = g_emission_colors[sbt_idx];
+        hitgroup_records[sbt_idx].data.diffuse_color  = g_diffuse_colors[sbt_idx];
+        hitgroup_records[sbt_idx].data.vertices       = reinterpret_cast<float4*>( state.d_vertices );
+        hitgroup_records[sbt_idx].data.tex_coords     = reinterpret_cast<float2*>( state.d_tex_coords );
     }
 
     // Set up the HitGroupRecords for the sphere material
+    for( int sbt_idx = TRIANGLE_MAT_COUNT; sbt_idx < TRIANGLE_MAT_COUNT + SPHERE_MAT_COUNT; ++sbt_idx )
     {
-        const int sbt_idx = TRIANGLE_MAT_COUNT * RAY_TYPE_COUNT+0; // SBT for radiance ray-type for sphere material
-
-        OPTIX_CHECK( optixSbtRecordPackHeader( state.radiance_hit_group, &hitgroup_records[sbt_idx] ) );
-        hitgroup_records[ sbt_idx ].data.emission_color = g_sphere_emission_color;
-        hitgroup_records[ sbt_idx ].data.diffuse_color  = g_sphere_diffuse_color;
-        hitgroup_records[ sbt_idx ].data.sphere         = g_sphere;
-    }
-
-    {
-        const int sbt_idx = TRIANGLE_MAT_COUNT * RAY_TYPE_COUNT+1; // SBT for occlusion ray-type for sphere material
-        memset( &hitgroup_records[sbt_idx], 0, hitgroup_record_size );
-
-        OPTIX_CHECK( optixSbtRecordPackHeader( state.occlusion_hit_group, &hitgroup_records[sbt_idx] ) );
-        hitgroup_records[ sbt_idx ].data.sphere = g_sphere;
+        OPTIX_CHECK( optixSbtRecordPackHeader( state.sphere_checkerboard_hit_group, &hitgroup_records[sbt_idx] ) );
+        hitgroup_records[sbt_idx].data.emission_color = g_sphere_emission_color;
+        hitgroup_records[sbt_idx].data.diffuse_color  = g_sphere_diffuse_color;
+        hitgroup_records[sbt_idx].data.geometry_data.setSphere( g_sphere );
     }
 
     CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( d_hitgroup_records ), hitgroup_records,
-                            hitgroup_record_size * ( RAY_TYPE_COUNT * ( TRIANGLE_MAT_COUNT + SPHERE_MAT_COUNT ) ),
+                            hitgroup_record_size * ( TRIANGLE_MAT_COUNT + SPHERE_MAT_COUNT ),
                             cudaMemcpyHostToDevice ) );
 
     state.sbt.raygenRecord                = d_raygen_record;
     state.sbt.missRecordBase              = d_miss_records;
     state.sbt.missRecordStrideInBytes     = static_cast<uint32_t>( miss_record_size );
-    state.sbt.missRecordCount             = RAY_TYPE_COUNT;
+    state.sbt.missRecordCount             = 2; // one for 'radiance' rays and one for 'occlusion' rays
     state.sbt.hitgroupRecordBase          = d_hitgroup_records;
     state.sbt.hitgroupRecordStrideInBytes = static_cast<uint32_t>( hitgroup_record_size );
-    state.sbt.hitgroupRecordCount         = RAY_TYPE_COUNT * ( TRIANGLE_MAT_COUNT + SPHERE_MAT_COUNT );
+    state.sbt.hitgroupRecordCount         = TRIANGLE_MAT_COUNT + SPHERE_MAT_COUNT;
 }
 
 
@@ -1155,10 +1503,11 @@ void cleanupState( CutoutsState& state )
     OPTIX_CHECK( optixPipelineDestroy( state.pipeline ) );
     OPTIX_CHECK( optixProgramGroupDestroy( state.raygen_prog_group ) );
     OPTIX_CHECK( optixProgramGroupDestroy( state.radiance_miss_group ) );
-    OPTIX_CHECK( optixProgramGroupDestroy( state.radiance_hit_group ) );
-    OPTIX_CHECK( optixProgramGroupDestroy( state.occlusion_hit_group ) );
+    OPTIX_CHECK( optixProgramGroupDestroy( state.triangle_checkerboard_hit_group ) );
+    OPTIX_CHECK( optixProgramGroupDestroy( state.triangle_circle_hit_group ) );
+    OPTIX_CHECK( optixProgramGroupDestroy( state.sphere_checkerboard_hit_group ) );
     OPTIX_CHECK( optixProgramGroupDestroy( state.occlusion_miss_group ) );
-    OPTIX_CHECK( optixModuleDestroy( state.ptx_module ) );
+    OPTIX_CHECK( optixModuleDestroy( state.module ) );
     OPTIX_CHECK( optixModuleDestroy( state.sphere_module ) );
     OPTIX_CHECK( optixDeviceContextDestroy( state.context ) );
 
@@ -1167,6 +1516,7 @@ void cleanupState( CutoutsState& state )
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( state.sbt.hitgroupRecordBase ) ) );
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( state.d_vertices ) ) );
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( state.d_tex_coords ) ) );
+    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( state.d_omm_array ) ) );
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( state.d_triangle_gas_output_buffer ) ) );
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( state.d_sphere_gas_output_buffer ) ) );
     CUDA_CHECK( cudaFree( reinterpret_cast<void*>( state.params.accum_buffer ) ) );
@@ -1183,7 +1533,7 @@ void cleanupState( CutoutsState& state )
 
 int main( int argc, char* argv[] )
 {
-    CutoutsState state;
+    CutoutsState state; // init with values as specified at definition
     state.params.width  = 768;
     state.params.height = 768;
     sutil::CUDAOutputBufferType output_buffer_type = sutil::CUDAOutputBufferType::GL_INTEROP;
@@ -1236,22 +1586,35 @@ int main( int argc, char* argv[] )
     {
         initCameraState();
 
-
         //
         // Set up OptiX state
         //
-        createContext      ( state );
-        buildGeomAccel     ( state );
-        buildInstanceAccel ( state );
-        createModule       ( state );
-        createProgramGroups( state );
-        createPipeline     ( state );
-        createSBT          ( state );
-        initLaunchParams( state );
+        createContext                   ( state );
+        buildCheckerboardOpacityMicromap( state );
+        buildGeomAccel                  ( state );
+        buildInstanceAccel              ( state );
+        createModule                    ( state );
+        createProgramGroups             ( state );
+        createPipeline                  ( state );
+        createSBT                       ( state );
+        initLaunchParams                ( state );
 
 
         if( outfile.empty() )
         {
+            std::cout << "////////////////////////////////////////////////////////////////////////////////////////////////////////////\n";
+            std::cout << "Keys:\n";
+            std::cout << "         Q    Quit sample\n";
+            std::cout << "         A    Toggle usage of anyhit program (AH) on small block (checkerboard and circle cutout)\n";
+            std::cout << "         O    Toggle usage of opacity micromaps (OMM) on small block (checkerboard and circle cutout)\n";
+            std::cout << "\n";
+            std::cout << "Default: OMMs and AH are enabled.\n";
+            std::cout << "Toggle behavior:\n";
+            std::cout << "Having OMMs disabled, but AH enabled will cause all hits of the small block to be resolve by AH. This has no visual difference to OMMs and AH being enabled.\n";
+            std::cout << "Having OMMs enabled, but AH disabled will turn all micro triangles with opacity states 'opaque' and 'unknown opaque' to opaque, causing a 'jaggy' circular cutout.\n";
+            std::cout << "Having both, OMMs and AH disabled will cause all intersections on the small block to be accepted, i.e., fully opaque triangles.\n";
+            std::cout << "////////////////////////////////////////////////////////////////////////////////////////////////////////////\n";
+
             GLFWwindow* window = sutil::initUI( "optixCutouts", state.params.width, state.params.height );
             glfwSetMouseButtonCallback  ( window, mouseButtonCallback   );
             glfwSetCursorPosCallback    ( window, cursorPosCallback     );
@@ -1259,7 +1622,7 @@ int main( int argc, char* argv[] )
             glfwSetWindowIconifyCallback( window, windowIconifyCallback );
             glfwSetKeyCallback          ( window, keyCallback           );
             glfwSetScrollCallback       ( window, scrollCallback        );
-            glfwSetWindowUserPointer    ( window, &state.params         );
+            glfwSetWindowUserPointer    ( window, &state                );
 
             //
             // Render loop

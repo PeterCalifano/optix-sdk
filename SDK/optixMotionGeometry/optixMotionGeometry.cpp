@@ -1064,7 +1064,7 @@ void buildMeshAccel( MotionGeometryState& state )
     // The memory requirements for the uncompressed exploding GAS (fume) won't change so we can rebuild in-place.
     state.exploding_gas_output_buffer_size = gas_buffer_sizes.outputSizeInBytes;
 
-    OptixAccelRelocationInfo relocationInfo;
+    OptixRelocationInfo relocationInfo;
     OPTIX_CHECK( optixAccelGetRelocationInfo( state.context, state.static_gas_handle, &relocationInfo ) );
 
     // Compress sphere GAS
@@ -1323,16 +1323,13 @@ void createModule( MotionGeometryState& state )
     size_t      inputSize = 0;
     const char* input = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixMotionGeometry.cu", inputSize );
 
-    char   log[2048];
-    size_t sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
         state.context,
         &module_compile_options,
         &state.pipeline_compile_options,
         input,
         inputSize,
-        log,
-        &sizeof_log,
+        LOG, &LOG_SIZE,
         &state.ptx_module
     ) );
 }
@@ -1341,9 +1338,6 @@ void createModule( MotionGeometryState& state )
 void createProgramGroups( MotionGeometryState& state )
 {
     OptixProgramGroupOptions  program_group_options = {};
-
-    char   log[2048];
-    size_t sizeof_log = sizeof( log );
 
     {
         OptixProgramGroupDesc raygen_prog_group_desc = {};
@@ -1355,8 +1349,7 @@ void createProgramGroups( MotionGeometryState& state )
             state.context, &raygen_prog_group_desc,
             1,  // num program groups
             &program_group_options,
-            log,
-            &sizeof_log,
+            LOG, &LOG_SIZE,
             &state.raygen_prog_group
         ) );
     }
@@ -1366,12 +1359,11 @@ void createProgramGroups( MotionGeometryState& state )
         miss_prog_group_desc.kind = OPTIX_PROGRAM_GROUP_KIND_MISS;
         miss_prog_group_desc.miss.module = state.ptx_module;
         miss_prog_group_desc.miss.entryFunctionName = "__miss__ms";
-        sizeof_log = sizeof( log );
         OPTIX_CHECK_LOG( optixProgramGroupCreate(
             state.context, &miss_prog_group_desc,
             1,  // num program groups
             &program_group_options,
-            log, &sizeof_log,
+            LOG, &LOG_SIZE,
             &state.miss_group
         ) );
     }
@@ -1381,14 +1373,12 @@ void createProgramGroups( MotionGeometryState& state )
         hit_prog_group_desc.kind = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
         hit_prog_group_desc.hitgroup.moduleCH = state.ptx_module;
         hit_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__ch";
-        sizeof_log = sizeof( log );
         OPTIX_CHECK_LOG( optixProgramGroupCreate(
             state.context,
             &hit_prog_group_desc,
             1,  // num program groups
             &program_group_options,
-            log,
-            &sizeof_log,
+            LOG, &LOG_SIZE,
             &state.hit_group
         ) );
     }
@@ -1398,10 +1388,9 @@ void createProgramGroups( MotionGeometryState& state )
         miss_prog_group_desc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
         miss_prog_group_desc.miss.module            = state.ptx_module;
         miss_prog_group_desc.miss.entryFunctionName = "__miss__occlusion";
-        sizeof_log                                  = sizeof( log );
         OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context, &miss_prog_group_desc,
                                                   1,  // num program groups
-                                                  &program_group_options, log, &sizeof_log, &state.miss_group_occlusion ) );
+                                                  &program_group_options, LOG, &LOG_SIZE, &state.miss_group_occlusion ) );
     }
 }
 
@@ -1420,16 +1409,13 @@ void createPipeline( MotionGeometryState& state )
     pipeline_link_options.maxTraceDepth = 20;
     pipeline_link_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 
-    char   log[2048];
-    size_t sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixPipelineCreate(
         state.context,
         &state.pipeline_compile_options,
         &pipeline_link_options,
         program_groups,
         sizeof( program_groups ) / sizeof( program_groups[0] ),
-        log,
-        &sizeof_log,
+        LOG, &LOG_SIZE,
         &state.pipeline
     ) );
 

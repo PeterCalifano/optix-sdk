@@ -56,14 +56,14 @@ struct LocalGeometry
 };
 
 
-SUTIL_HOSTDEVICE LocalGeometry getLocalGeometry( const GeometryData& geometry_data )
+__forceinline__ __device__ LocalGeometry getLocalGeometry( const GeometryData& geometry_data )
 {
     LocalGeometry lgeom;
     switch( geometry_data.type )
     {
         case GeometryData::TRIANGLE_MESH:
         {
-            const GeometryData::TriangleMesh& mesh_data = geometry_data.triangle_mesh;
+            const GeometryData::TriangleMesh& mesh_data = geometry_data.getTriangleMesh();
 
             const unsigned int prim_idx = optixGetPrimitiveIndex();
             const float2       barys    = optixGetTriangleBarycentrics();

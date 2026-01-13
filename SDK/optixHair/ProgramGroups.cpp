@@ -54,9 +54,9 @@ void ProgramGroups::add( const OptixProgramGroupDesc& programGroupDescriptor, co
         size_t last         = m_programGroups.size();
         m_nameToIndex[name] = static_cast<unsigned int>( last );
         m_programGroups.resize( last + 1 );
-        OPTIX_CHECK_LOG2( optixProgramGroupCreate( m_context, &programGroupDescriptor,
-                                                   1,  // num program groups
-                                                   &m_programGroupOptions, LOG, &LOG_SIZE, &m_programGroups[last] ) );
+        OPTIX_CHECK_LOG( optixProgramGroupCreate( m_context, &programGroupDescriptor,
+                                                  1,  // num program groups
+                                                  &m_programGroupOptions, LOG, &LOG_SIZE, &m_programGroups[last] ) );
     }
 }
 
@@ -95,22 +95,22 @@ HairProgramGroups::HairProgramGroups( const OptixDeviceContext context, OptixPip
 
     size_t      inputSize = 0;
     const char* input = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixHair.cu", inputSize );
-    OPTIX_CHECK_LOG2( optixModuleCreateFromPTX( context,
-                                                &defaultOptions,
-                                                &pipeOptions,
-                                                input,
-                                                inputSize,
-                                                LOG, &LOG_SIZE,
-                                                &m_shadingModule ) );
+    OPTIX_CHECK_LOG( optixModuleCreateFromPTX( context,
+                                               &defaultOptions,
+                                               &pipeOptions,
+                                               input,
+                                               inputSize,
+                                               LOG, &LOG_SIZE,
+                                               &m_shadingModule ) );
 
     input = sutil::getInputData( nullptr, nullptr, "whitted.cu", inputSize );
-    OPTIX_CHECK_LOG2( optixModuleCreateFromPTX( context,
-                                                &defaultOptions,
-                                                &pipeOptions,
-                                                input,
-                                                inputSize,
-                                                LOG, &LOG_SIZE,
-                                                &m_whittedModule ) );
+    OPTIX_CHECK_LOG( optixModuleCreateFromPTX( context,
+                                               &defaultOptions,
+                                               &pipeOptions,
+                                               input,
+                                               inputSize,
+                                               LOG, &LOG_SIZE,
+                                               &m_whittedModule ) );
 
     OptixBuiltinISOptions builtinISOptions = {};
     builtinISOptions.buildFlags = buildFlags;

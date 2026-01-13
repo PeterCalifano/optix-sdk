@@ -30,23 +30,23 @@
 
 #include <sutil/vec_math.h>
 
-#include "sphere.h"
+#include "whitted.h"
 
 #define float3_as_uints( u ) __float_as_uint( u.x ), __float_as_uint( u.y ), __float_as_uint( u.z )
 
 extern "C" __global__ void __intersection__sphere()
 {
-    const sphere::SphereHitGroupData* hit_group_data = reinterpret_cast<sphere::SphereHitGroupData*>( optixGetSbtDataPointer() );
+    const whitted::HitGroupData* hit_group_data = reinterpret_cast<whitted::HitGroupData*>( optixGetSbtDataPointer() );
 
     const float3 ray_orig = optixGetWorldRayOrigin();
     const float3 ray_dir  = optixGetWorldRayDirection();
     const float  ray_tmin = optixGetRayTmin();
     const float  ray_tmax = optixGetRayTmax();
 
-    const float3 O      = ray_orig - hit_group_data->sphere.center;
+    const float3 O      = ray_orig - hit_group_data->geometry_data.getSphere().center;
     const float  l      = 1.0f / length( ray_dir );
     const float3 D      = ray_dir * l;
-    const float  radius = hit_group_data->sphere.radius;
+    const float  radius = hit_group_data->geometry_data.getSphere().radius;
 
     float b    = dot( O, D );
     float c    = dot( O, O ) - radius * radius;

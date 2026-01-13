@@ -88,10 +88,10 @@ struct Record
     T data;
 };
 
-typedef Record<EmptyData>    RayGenRecord;
-typedef Record<EmptyData>    MissRecord;
-typedef Record<HitGroupData> HitGroupRecord;
-typedef Record<EmptyData>    CallablesRecord;
+typedef Record<EmptyData>                    RayGenRecord;
+typedef Record<EmptyData>                    MissRecord;
+typedef Record<CallableProgramsHitGroupData> HitGroupRecord;
+typedef Record<EmptyData>                    CallablesRecord;
 
 struct CallableProgramsState
 {
@@ -370,28 +370,25 @@ void createModules( CallableProgramsState& state )
     module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 #endif
 
-    char   log[2048];
-    size_t sizeof_log = sizeof( log );
-
     {
         size_t      inputSize = 0;
         const char* input     = sutil::getInputData( nullptr, nullptr, "whitted.cu", inputSize );
         OPTIX_CHECK_LOG( optixModuleCreateFromPTX( state.context, &module_compile_options, &state.pipeline_compile_options,
-                                                   input, inputSize, log, &sizeof_log, &state.camera_module ) );
+                                                   input, inputSize, LOG, &LOG_SIZE, &state.camera_module ) );
     }
 
     {
         size_t      inputSize = 0;
         const char* input     = sutil::getInputData( nullptr, nullptr, "sphere.cu", inputSize );
         OPTIX_CHECK_LOG( optixModuleCreateFromPTX( state.context, &module_compile_options, &state.pipeline_compile_options,
-                                                   input, inputSize, log, &sizeof_log, &state.geometry_module ) );
+                                                   input, inputSize, LOG, &LOG_SIZE, &state.geometry_module ) );
     }
 
     {
         size_t      inputSize = 0;
         const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixCallablePrograms.cu", inputSize );
         OPTIX_CHECK_LOG( optixModuleCreateFromPTX( state.context, &module_compile_options, &state.pipeline_compile_options,
-                                                   input, inputSize, log, &sizeof_log, &state.shading_module ) );
+                                                   input, inputSize, LOG, &LOG_SIZE, &state.shading_module ) );
     }
 }
 
@@ -404,10 +401,8 @@ static void createCameraProgram( CallableProgramsState& state, std::vector<Optix
     cam_prog_group_desc.raygen.module               = state.camera_module;
     cam_prog_group_desc.raygen.entryFunctionName    = "__raygen__pinhole";
 
-    char   log[2048];
-    size_t sizeof_log = sizeof( log );
-    OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context, &cam_prog_group_desc, 1, &cam_prog_group_options, log,
-                                              &sizeof_log, &cam_prog_group ) );
+    OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context, &cam_prog_group_desc, 1, &cam_prog_group_options, LOG,
+                                              &LOG_SIZE, &cam_prog_group ) );
 
     program_groups.push_back( cam_prog_group );
     state.raygen_prog_group = cam_prog_group;
@@ -426,10 +421,8 @@ static void createSphereProgram( CallableProgramsState& state, std::vector<Optix
     hitgroup_prog_group_desc.hitgroup.moduleAH            = nullptr;
     hitgroup_prog_group_desc.hitgroup.entryFunctionNameAH = nullptr;
 
-    char   log[2048];
-    size_t sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context, &hitgroup_prog_group_desc, 1, &hitgroup_prog_group_options,
-                                              log, &sizeof_log, &hitgroup_prog_group ) );
+                                              LOG, &LOG_SIZE, &hitgroup_prog_group ) );
 
     program_groups.push_back( hitgroup_prog_group );
     state.hitgroup_prog_group = hitgroup_prog_group;
@@ -452,8 +445,8 @@ static void createSphereProgram( CallableProgramsState& state, std::vector<Optix
     callable_prog_group_descs[2].callables.moduleDC            = state.shading_module;
     callable_prog_group_descs[2].callables.entryFunctionNameDC = "__direct_callable__normal_shade";
 
-    OPTIX_CHECK( optixProgramGroupCreate( state.context, callable_prog_group_descs, 3, &callable_prog_group_options,
-                                          log, &sizeof_log, state.callable_prog_groups ) );
+    OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context, callable_prog_group_descs, 3, &callable_prog_group_options,
+                                              LOG, &LOG_SIZE, state.callable_prog_groups ) );
 
     program_groups.push_back( state.callable_prog_groups[0] );
     program_groups.push_back( state.callable_prog_groups[1] );
@@ -468,10 +461,8 @@ static void createMissProgram( CallableProgramsState& state, std::vector<OptixPr
     miss_prog_group_desc.miss.module                 = state.shading_module;
     miss_prog_group_desc.miss.entryFunctionName      = "__miss__raydir_shade";
 
-    char   log[2048];
-    size_t sizeof_log = sizeof( log );
-    OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context, &miss_prog_group_desc, 1, &miss_prog_group_options, log,
-                                              &sizeof_log, &state.miss_prog_group ) );
+    OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context, &miss_prog_group_desc, 1, &miss_prog_group_options, LOG,
+                                              &LOG_SIZE, &state.miss_prog_group ) );
 
     program_groups.push_back( state.miss_prog_group );
 }
@@ -489,7 +480,7 @@ void createPipeline( CallableProgramsState& state )
         false,                                          // usesMotionBlur
         OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS,  // traversableGraphFlags
         whitted::NUM_PAYLOAD_VALUES,                    // numPayloadValues
-        sphere::NUM_ATTRIBUTE_VALUES,                   // numAttributeValues
+        whitted::NUM_ATTRIBUTE_VALUES,                  // numAttributeValues
         OPTIX_EXCEPTION_FLAG_NONE,                      // exceptionFlags
         "params"                                        // pipelineLaunchParamsVariableName
     };
@@ -505,11 +496,9 @@ void createPipeline( CallableProgramsState& state )
         max_trace_depth,                // maxTraceDepth
         OPTIX_COMPILE_DEBUG_LEVEL_FULL  // debugLevel
     };
-    char   log[2048];
-    size_t sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixPipelineCreate( state.context, &state.pipeline_compile_options, &pipeline_link_options,
-                                          program_groups.data(), static_cast<unsigned int>( program_groups.size() ),
-                                          log, &sizeof_log, &state.pipeline ) );
+                                         program_groups.data(), static_cast<unsigned int>( program_groups.size() ),
+                                         LOG, &LOG_SIZE, &state.pipeline ) );
 
     OptixStackSizes stack_sizes = {};
     for( auto& prog_group : program_groups )
@@ -572,8 +561,8 @@ void createSBT( CallableProgramsState& state )
     {
         HitGroupRecord hitgroup_record;
         OPTIX_CHECK( optixSbtRecordPackHeader( state.hitgroup_prog_group, &hitgroup_record ) );
-        hitgroup_record.data.sphere   = g_sphere;
-        hitgroup_record.data.dc_index = dc_index;
+        hitgroup_record.data.geometry_data.setSphere( g_sphere );
+        hitgroup_record.data.dc_index             = dc_index;
 
         CUdeviceptr d_hitgroup_record;
         size_t      sizeof_hitgroup_record = sizeof( HitGroupRecord );

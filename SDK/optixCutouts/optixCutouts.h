@@ -30,14 +30,9 @@
 
 #include <sutil/vec_math.h>
 
-#include <cuda/sphere.h>
+#include <cuda/whitted.h>
 
-enum RayType
-{
-    RAY_TYPE_RADIANCE  = 0,
-    RAY_TYPE_OCCLUSION = 1,
-    RAY_TYPE_COUNT
-};
+#define CIRCLE_RADIUS 0.65f
 
 
 struct ParallelogramLight
@@ -51,12 +46,12 @@ struct ParallelogramLight
 
 struct Params
 {
-    unsigned int subframe_index;
     float4*      accum_buffer;
     uchar4*      frame_buffer;
     unsigned int width;
     unsigned int height;
     unsigned int samples_per_launch;
+    unsigned int subframe_index;
 
     float3       eye;
     float3       U;
@@ -80,7 +75,7 @@ struct MissData
 };
 
 
-struct HitGroupData : sphere::SphereHitGroupData
+struct CutoutsHitGroupData : whitted::HitGroupData
 {
     float3   emission_color;
     float3   diffuse_color;

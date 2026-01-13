@@ -127,7 +127,6 @@ extern "C" __global__ void __anyhit__occlusion()
             }
 
             float attenuation = whitted::getPayloadOcclusion() * (1.f - base_alpha);
-
             if( attenuation > 0.f )
             {
                 whitted::setPayloadOcclusion( attenuation );
@@ -142,12 +141,10 @@ extern "C" __global__ void __miss__constant_radiance()
     whitted::setPayloadResult( whitted::params.miss_color );
 }
 
-
-extern "C" __global__ void __closesthit__occlusion()
+extern "C" __global__ void __miss__occlusion()
 {
-    whitted::setPayloadOcclusion( 0.f );
+    whitted::setPayloadOcclusionCommit();
 }
-
 
 extern "C" __global__ void __closesthit__radiance()
 {

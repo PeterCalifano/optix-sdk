@@ -39,7 +39,7 @@
 #include <sutil/Exception.h>
 #include <sutil/sutil.h>
 
-#include <cuda/sphere.h>
+#include <cuda/whitted.h>
 
 #include "optixCustomPrimitive.h"
 
@@ -59,9 +59,9 @@ struct SbtRecord
     T data;
 };
 
-typedef SbtRecord<RayGenData>                 RayGenSbtRecord;
-typedef SbtRecord<MissData>                   MissSbtRecord;
-typedef SbtRecord<sphere::SphereHitGroupData> HitGroupSbtRecord;
+typedef SbtRecord<RayGenData>            RayGenSbtRecord;
+typedef SbtRecord<MissData>              MissSbtRecord;
+typedef SbtRecord<whitted::HitGroupData> HitGroupSbtRecord;
 
 
 void configureCamera( sutil::Camera& cam, const uint32_t width, const uint32_t height )
@@ -129,9 +129,6 @@ int main( int argc, char* argv[] )
 
     try
     {
-        char log[2048]; // For error reporting from OptiX creation functions
-
-
         //
         // Initialize CUDA and create OptiX context
         //
@@ -248,13 +245,12 @@ int main( int argc, char* argv[] )
             pipeline_compile_options.usesMotionBlur        = false;
             pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
             pipeline_compile_options.numPayloadValues      = 3;
-            pipeline_compile_options.numAttributeValues    = sphere::NUM_ATTRIBUTE_VALUES;
+            pipeline_compile_options.numAttributeValues    = whitted::NUM_ATTRIBUTE_VALUES;
             pipeline_compile_options.exceptionFlags        = OPTIX_EXCEPTION_FLAG_NONE;  // TODO: should be OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
             pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
             size_t      inputSize  = 0;
             const char* input      = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixCustomPrimitive.cu", inputSize );
-            size_t sizeof_log = sizeof( log );
 
             OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
                         context,
@@ -262,8 +258,7 @@ int main( int argc, char* argv[] )
                         &pipeline_compile_options,
                         input,
                         inputSize,
-                        log,
-                        &sizeof_log,
+                        LOG, &LOG_SIZE,
                         &module
                         ) );
 
@@ -274,8 +269,7 @@ int main( int argc, char* argv[] )
                         &pipeline_compile_options,
                         input,
                         inputSize,
-                        log,
-                        &sizeof_log,
+                        LOG, &LOG_SIZE,
                         &sphere_module
                         ) );
         }
@@ -293,14 +287,12 @@ int main( int argc, char* argv[] )
             raygen_prog_group_desc.kind                     = OPTIX_PROGRAM_GROUP_KIND_RAYGEN;
             raygen_prog_group_desc.raygen.module            = module;
             raygen_prog_group_desc.raygen.entryFunctionName = "__raygen__rg";
-            size_t sizeof_log = sizeof( log );
             OPTIX_CHECK_LOG( optixProgramGroupCreate(
                         context,
                         &raygen_prog_group_desc,
                         1,   // num program groups
                         &program_group_options,
-                        log,
-                        &sizeof_log,
+                        LOG, &LOG_SIZE,
                         &raygen_prog_group
                         ) );
 
@@ -308,14 +300,12 @@ int main( int argc, char* argv[] )
             miss_prog_group_desc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
             miss_prog_group_desc.miss.module            = module;
             miss_prog_group_desc.miss.entryFunctionName = "__miss__ms";
-            sizeof_log = sizeof( log );
             OPTIX_CHECK_LOG( optixProgramGroupCreate(
                         context,
                         &miss_prog_group_desc,
                         1,   // num program groups
                         &program_group_options,
-                        log,
-                        &sizeof_log,
+                        LOG, &LOG_SIZE,
                         &miss_prog_group
                         ) );
 
@@ -327,14 +317,12 @@ int main( int argc, char* argv[] )
             hitgroup_prog_group_desc.hitgroup.entryFunctionNameAH = nullptr;
             hitgroup_prog_group_desc.hitgroup.moduleIS            = sphere_module;
             hitgroup_prog_group_desc.hitgroup.entryFunctionNameIS = "__intersection__sphere";
-            sizeof_log = sizeof( log );
             OPTIX_CHECK_LOG( optixProgramGroupCreate(
                         context,
                         &hitgroup_prog_group_desc,
                         1,   // num program groups
                         &program_group_options,
-                        log,
-                        &sizeof_log,
+                        LOG, &LOG_SIZE,
                         &hitgroup_prog_group
                         ) );
         }
@@ -350,15 +338,13 @@ int main( int argc, char* argv[] )
             OptixPipelineLinkOptions pipeline_link_options = {};
             pipeline_link_options.maxTraceDepth          = max_trace_depth;
             pipeline_link_options.debugLevel             = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
-            size_t sizeof_log = sizeof( log );
             OPTIX_CHECK_LOG( optixPipelineCreate(
                         context,
                         &pipeline_compile_options,
                         &pipeline_link_options,
                         program_groups,
                         sizeof( program_groups ) / sizeof( program_groups[0] ),
-                        log,
-                        &sizeof_log,
+                        LOG, &LOG_SIZE,
                         &pipeline
                         ) );
 
@@ -421,8 +407,10 @@ int main( int argc, char* argv[] )
             size_t      hitgroup_record_size = sizeof( HitGroupSbtRecord );
             CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &hitgroup_record ), hitgroup_record_size ) );
             HitGroupSbtRecord hg_sbt;
-            hg_sbt.data.sphere.center = { 0.0f, 0.0f, 0.0f };
-            hg_sbt.data.sphere.radius = 1.5f;
+            GeometryData::Sphere sphere = {};
+            sphere.center = { 0.0f, 0.0f, 0.0f };
+            sphere.radius = 1.5f;
+            hg_sbt.data.geometry_data.setSphere( sphere );
             OPTIX_CHECK( optixSbtRecordPackHeader( hitgroup_prog_group, &hg_sbt ) );
             CUDA_CHECK( cudaMemcpy(
                         reinterpret_cast<void*>( hitgroup_record ),

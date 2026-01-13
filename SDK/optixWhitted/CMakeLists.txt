@@ -28,12 +28,11 @@
 
 OPTIX_add_sample_executable( optixWhitted target_name
   ${SAMPLES_CUDA_DIR}/helpers.h
+  ${SAMPLES_CUDA_DIR}/whitted.h
+  ${SAMPLES_CUDA_DIR}/camera.cu
+  ${SAMPLES_CUDA_DIR}/geometry.cu
+  ${SAMPLES_CUDA_DIR}/shading.cu
   optixWhitted.cpp
-  optixWhitted.h
-  camera.cu
-  geometry.cu
-  shading.cu
-  OPTIONS -rdc true
   )
 
 target_link_libraries( ${target_name}

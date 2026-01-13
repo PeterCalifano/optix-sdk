@@ -37,9 +37,9 @@
 namespace whitted
 {
 
-const unsigned int NUM_PAYLOAD_VALUES = 4u;
-const unsigned int MAX_TRACE_DEPTH    = 8u;
-
+const unsigned int NUM_ATTRIBUTE_VALUES = 4u;
+const unsigned int NUM_PAYLOAD_VALUES   = 4u;
+const unsigned int MAX_TRACE_DEPTH      = 8u;
 
 struct HitGroupData
 {
@@ -64,6 +64,7 @@ struct LaunchParams
     float4*                  accum_buffer;
     uchar4*                  frame_buffer;
     int                      max_depth;
+    float                    scene_epsilon;
 
     float3                   eye;
     float3                   U;
@@ -79,6 +80,7 @@ struct LaunchParams
 struct PayloadRadiance
 {
     float3 result;
+    float  importance;
     int    depth;
 };
 

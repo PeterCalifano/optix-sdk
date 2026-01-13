@@ -1251,9 +1251,6 @@ void createModule( OptixModule& module, const OptixDeviceContext& context )
     pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
 
-    char log[2048];
-    size_t sizeof_log = sizeof( log );
-
     size_t      inputSize = 0;
     const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "volume.cu", inputSize );
     module = {};
@@ -1263,8 +1260,7 @@ void createModule( OptixModule& module, const OptixDeviceContext& context )
         &pipeline_compile_options,
         input,
         inputSize,
-        log,
-        &sizeof_log,
+        LOG, &LOG_SIZE,
         &module
     ) );
 }
@@ -1280,9 +1276,6 @@ void createProgramGroups( ProgramGroups& program_groups,
 {
     OptixProgramGroupOptions program_group_options = {};
 
-    char log[2048];
-    size_t sizeof_log = sizeof( log );
-
     //
     // Ray generation
     //
@@ -1297,8 +1290,7 @@ void createProgramGroups( ProgramGroups& program_groups,
 			&raygen_prog_group_desc,
 			1,                             // num program groups
 			&program_group_options,
-			log,
-			&sizeof_log,
+			LOG, &LOG_SIZE,
 			&program_groups.raygen
 		) );
     }
@@ -1311,14 +1303,12 @@ void createProgramGroups( ProgramGroups& program_groups,
         miss_prog_group_desc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
         miss_prog_group_desc.miss.module            = module;
         miss_prog_group_desc.miss.entryFunctionName = "__miss__radiance";
-        sizeof_log = sizeof( log );
         OPTIX_CHECK_LOG( optixProgramGroupCreate(
 			context,
 			&miss_prog_group_desc,
 			1,                             // num program groups
 			&program_group_options,
-			log,
-			&sizeof_log,
+			LOG, &LOG_SIZE,
 			&program_groups.miss_radiance
 		) );
 
@@ -1326,14 +1316,12 @@ void createProgramGroups( ProgramGroups& program_groups,
         miss_prog_group_desc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
         miss_prog_group_desc.miss.module            = module;
         miss_prog_group_desc.miss.entryFunctionName = "__miss__occlusion";
-        sizeof_log = sizeof( log );
         OPTIX_CHECK_LOG( optixProgramGroupCreate(
 			context,
 			&miss_prog_group_desc,
 			1,                             // num program groups
 			&program_group_options,
-			log,
-			&sizeof_log,
+			LOG, &LOG_SIZE,
 			&program_groups.miss_occlusion
 		) );
     }
@@ -1348,14 +1336,12 @@ void createProgramGroups( ProgramGroups& program_groups,
         hit_prog_group_desc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
         hit_prog_group_desc.hitgroup.moduleCH            = module;
         hit_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__radiance_mesh";
-        sizeof_log = sizeof( log );
         OPTIX_CHECK_LOG( optixProgramGroupCreate(
 			context,
 			&hit_prog_group_desc,
 			1,                             // num program groups
 			&program_group_options,
-			log,
-			&sizeof_log,
+			LOG, &LOG_SIZE,
 			&program_groups.mesh_radiance
 		) );
 
@@ -1363,14 +1349,12 @@ void createProgramGroups( ProgramGroups& program_groups,
         hit_prog_group_desc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
         hit_prog_group_desc.hitgroup.moduleCH            = module;
         hit_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__occlusion_mesh";
-        sizeof_log = sizeof( log );
-        OPTIX_CHECK( optixProgramGroupCreate(
+        OPTIX_CHECK_LOG( optixProgramGroupCreate(
 			context,
 			&hit_prog_group_desc,
 			1,                             // num program groups
 			&program_group_options,
-			log,
-			&sizeof_log,
+			LOG, &LOG_SIZE,
 			&program_groups.mesh_occlusion
 		) );
     }
@@ -1387,14 +1371,12 @@ void createProgramGroups( ProgramGroups& program_groups,
         hit_prog_group_desc.hitgroup.entryFunctionNameAH = nullptr;
         hit_prog_group_desc.hitgroup.moduleIS = module;
         hit_prog_group_desc.hitgroup.entryFunctionNameIS = "__intersection__volume";
-        sizeof_log = sizeof( log );
         OPTIX_CHECK_LOG( optixProgramGroupCreate(
             context,
             &hit_prog_group_desc,
             1,                             // num program groups
             &program_group_options,
-            log,
-            &sizeof_log,
+            LOG, &LOG_SIZE,
             &program_groups.volume_radiance
         ) );
 
@@ -1406,14 +1388,12 @@ void createProgramGroups( ProgramGroups& program_groups,
         hit_prog_group_desc.hitgroup.entryFunctionNameAH = nullptr;
         hit_prog_group_desc.hitgroup.moduleIS = module;
         hit_prog_group_desc.hitgroup.entryFunctionNameIS = "__intersection__volume";
-        sizeof_log = sizeof( log );
-        OPTIX_CHECK( optixProgramGroupCreate(
+        OPTIX_CHECK_LOG( optixProgramGroupCreate(
             context,
             &hit_prog_group_desc,
             1,                             // num program groups
             &program_group_options,
-            log,
-            &sizeof_log,
+            LOG, &LOG_SIZE,
             &program_groups.volume_occlusion
         ) );
     }
@@ -1445,16 +1425,13 @@ void createPipeline( OptixPipeline& pipeline, const ProgramGroups& programs, con
     pipeline_link_options.maxTraceDepth          = 4;
     pipeline_link_options.debugLevel             = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 
-    char log[2048];
-    size_t sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixPipelineCreate(
                 context,
                 &pipeline_compile_options,
                 &pipeline_link_options,
                 &programs.raygen,                      // ptr to first program group
                 sizeof( ProgramGroups ) / sizeof( OptixProgramGroup ), // number of program groups
-                log,
-                &sizeof_log,
+                LOG, &LOG_SIZE,
                 &pipeline
                 ) );
 

@@ -179,6 +179,32 @@ else()
   option( SAMPLES_INPUT_GENERATE_PTX "Generate PTX OptiX shaders" ON )
 endif()
 
+# Determine if we are going to use the static CRT on windows.
+if(WIN32)
+  option(RELEASE_USE_STATIC_CRT "Build using the static CRT library" ON)
+endif()
+
+# Helper for fixing compiler flags
+function(replace_flag var old_flag new_flag)
+  string(REPLACE "${old_flag}" "${new_flag}" ${var} ${${var}})
+  set(${var} "${${var}}" CACHE STRING "Default compiler flags" FORCE)
+endfunction()
+
+function(replace_flags old_flag new_flag)
+  foreach(build "" _DEBUG _MINSIZEREL _RELEASE _RELWITHDEBINFO)
+    replace_flag(CMAKE_C_FLAGS${build}   "${old_flag}" "${new_flag}")
+    replace_flag(CMAKE_CXX_FLAGS${build} "${old_flag}" "${new_flag}")
+  endforeach()
+endfunction()
+
+if(WIN32)
+  if(RELEASE_USE_STATIC_CRT)
+    replace_flags("/MD" "/MT")
+  else()
+    replace_flags("/MT" "/MD")
+  endif()
+endif(WIN32)
+
 # Present the CUDA_64_BIT_DEVICE_CODE on the default set of options.
 mark_as_advanced(CLEAR CUDA_64_BIT_DEVICE_CODE)
 
@@ -213,12 +239,20 @@ if( NOT PASSED_FIRST_CONFIGURE )
 
   optix_add_cuda_flag("--use_fast_math")
   optix_add_cuda_flag("-lineinfo")
-  foreach( config ${CMAKE_CONFIGURATION_TYPES} )
-    if( ${config} STREQUAL "Debug" )
-      optix_add_cuda_flag_config( _${config} "-G" )
-      optix_add_cuda_flag_config( _${config} "-O0" )
+  if( DEFINED CMAKE_CONFIGURATION_TYPES )
+    foreach( config ${CMAKE_CONFIGURATION_TYPES} )
+      if( ${config} STREQUAL "Debug" )
+        optix_add_cuda_flag_config( _${config} "-G" )
+        optix_add_cuda_flag_config( _${config} "-O0" )
+      endif()
+    endforeach()
+  else()
+    if( CMAKE_BUILD_TYPE STREQUAL "Debug" )
+      optix_add_cuda_flag( "-G" )
+      optix_add_cuda_flag( "-O0" )
     endif()
-  endforeach()
+  endif()
+  
 
 
   if( CUDA_VERSION VERSION_LESS "3.0" )
@@ -303,8 +337,6 @@ set(SAMPLES_SUPPORT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../SDK/support")
 set(SAMPLES_RELATIVE_INCLUDE_DIRS "\\
   \"cuda\", \\
   \"sutil\", \\
-  \"lib/DemandLoading/include\", \\
-  \"lib/ImageSource/include\", \\
   \".\", ")
 
 # NVRTC absolute include paths to the headers used to build the samples
@@ -444,11 +476,10 @@ endfunction()
 add_subdirectory( optixBoundValues       )
 add_subdirectory( optixCallablePrograms  )
 add_subdirectory( optixCompileWithTasks  )
+add_subdirectory( optixConsole           )
 add_subdirectory( optixCurves            )
 add_subdirectory( optixCustomPrimitive   )
 add_subdirectory( optixCutouts           )
-add_subdirectory( optixDemandLoadSimple  )
-add_subdirectory( optixDemandTexture     )
 add_subdirectory( optixDenoiser          )
 add_subdirectory( optixDynamicGeometry   )
 add_subdirectory( optixDynamicMaterials  )
@@ -460,6 +491,7 @@ add_subdirectory( optixMotionGeometry    )
 add_subdirectory( optixMultiGPU          )
 add_subdirectory( optixNVLink            )
 add_subdirectory( optixOpticalFlow       )
+add_subdirectory( optixOpacityMicromap   )
 add_subdirectory( optixPathTracer        )
 add_subdirectory( optixRaycasting        )
 add_subdirectory( optixSimpleMotionBlur  )
@@ -470,9 +502,6 @@ add_subdirectory( optixWhitted           )
 
 # Our sutil library.  The rules to build it are found in the subdirectory.
 add_subdirectory(sutil)
-# Our other libraries.
-add_subdirectory( lib/DemandLoading )
-add_subdirectory( lib/ImageSource )
 # Third-party support libraries.
 add_subdirectory(support)
 

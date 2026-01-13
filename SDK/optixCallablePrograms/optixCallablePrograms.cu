@@ -106,7 +106,8 @@ extern "C" __device__ float3 __direct_callable__normal_shade( float3 hit_point, 
 // Closest hit
 extern "C" __global__ void __closesthit__radiance()
 {
-    const HitGroupData* hitgroup_data = reinterpret_cast<HitGroupData*>( optixGetSbtDataPointer() );
+    const CallableProgramsHitGroupData* hitgroup_data =
+        reinterpret_cast<CallableProgramsHitGroupData*>( optixGetSbtDataPointer() );
 
     const float3 ray_orig  = optixGetWorldRayOrigin();
     const float3 ray_dir   = optixGetWorldRayDirection();

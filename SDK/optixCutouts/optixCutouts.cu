@@ -149,8 +149,6 @@ static __forceinline__ __device__ void traceRadiance(
         RadiancePRD*           prd
         )
 {
-    // TODO: deduce stride from num ray-types passed in params
-
     unsigned int u0, u1;
     packPointer( prd, u0, u1 );
     optixTrace(
@@ -162,9 +160,9 @@ static __forceinline__ __device__ void traceRadiance(
             0.0f,                     // rayTime
             OptixVisibilityMask( 1 ),
             OPTIX_RAY_FLAG_NONE,
-            RAY_TYPE_RADIANCE,        // SBT offset
-            RAY_TYPE_COUNT,           // SBT stride
-            RAY_TYPE_RADIANCE,        // missSBTIndex
+            0,                        // SBT offset
+            1,                        // SBT stride
+            0,                        // missSBTIndex
             u0, u1 );
 }
 
@@ -177,7 +175,7 @@ static __forceinline__ __device__ bool traceOcclusion(
         float                  tmax
         )
 {
-    unsigned int occluded = 0u;
+    unsigned int occluded = 1u;
     optixTrace(
             handle,
             ray_origin,
@@ -186,10 +184,10 @@ static __forceinline__ __device__ bool traceOcclusion(
             tmax,
             0.0f,                    // rayTime
             OptixVisibilityMask( 1 ),
-            OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT,
-            RAY_TYPE_OCCLUSION,      // SBT offset
-            RAY_TYPE_COUNT,          // SBT stride
-            RAY_TYPE_OCCLUSION,      // missSBTIndex
+            OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT | OPTIX_RAY_FLAG_DISABLE_CLOSESTHIT,
+            0,                       // SBT offset
+            1,                       // SBT stride
+            1,                       // missSBTIndex
             occluded );
     return occluded;
 }
@@ -250,7 +248,15 @@ extern "C" __global__ void __raygen__rg()
             result += prd.emitted;
             result += prd.radiance * prd.attenuation;
 
-            if( prd.done  || depth >= 3 ) // TODO RR, variable for depth
+            if( prd.done || depth >= 10 )
+                break;
+
+            // russian roulette in linear color space
+            const float rr = rnd( prd.seed );
+            float lumAttenuation = luminance( prd.attenuation );
+            if( lumAttenuation > rr )
+                prd.attenuation /= min(1.f, lumAttenuation);
+            else
                 break;
 
             ray_origin    = prd.origin;
@@ -286,15 +292,16 @@ extern "C" __global__ void __miss__radiance()
 }
 
 
-extern "C" __global__ void __anyhit__ah()
+extern "C" __global__ void __anyhit__ah_checkerboard()
 {
-    const unsigned int hit_kind = optixGetHitKind();
-    HitGroupData*      rt_data  = (HitGroupData*)optixGetSbtDataPointer();
-    const int          prim_idx = optixGetPrimitiveIndex();
+    const unsigned int   hit_kind = optixGetHitKind();
+    CutoutsHitGroupData* rt_data  = (CutoutsHitGroupData*)optixGetSbtDataPointer();
+    const int            prim_idx = optixGetPrimitiveIndex();
 
     // The texture coordinates are defined per-vertex for built-in triangles,
     // and are derived from the surface normal for our custom sphere geometry.
-    float3 texcoord;    
+    float2 texcoord;
+    int ignore = 0;
     if( optixIsTriangleHit() )
     {
         const int    vert_idx_offset = prim_idx*3;
@@ -304,12 +311,11 @@ extern "C" __global__ void __anyhit__ah()
         const float2 t1 = rt_data->tex_coords[ vert_idx_offset+1 ];
         const float2 t2 = rt_data->tex_coords[ vert_idx_offset+2 ];
 
-        texcoord = make_float3( t0 * (1.0f - barycentrics.x - barycentrics.y) +
-                                t1 * barycentrics.x +
-                                t2 * barycentrics.y );
+        texcoord = t0 * ( 1.0f - barycentrics.x - barycentrics.y ) + t1 * barycentrics.x + t2 * barycentrics.y;
     }
     else
     {
+        // assume sphere, could use a custom hit kind to identify the sphere type
         const float3 normal = make_float3( __uint_as_float( optixGetAttribute_0() ),
                                            __uint_as_float( optixGetAttribute_1() ),
                                            __uint_as_float( optixGetAttribute_2() ) );
@@ -318,28 +324,55 @@ extern "C" __global__ void __anyhit__ah()
         const float uv_scale = 16.0f;
         const float u = uv_scale * ( 0.5f + atan2f( normal.z, normal.x ) * 0.5f * M_1_PIf );
         const float v = uv_scale * ( 0.5f - asinf( normal.y ) * M_1_PIf );
-        texcoord = make_float3( u, v, 0.0f );
+        texcoord = make_float2( u, v );
     }
+    ignore = ( static_cast<int>( texcoord.x ) + static_cast<int>( texcoord.y ) ) & 1;
 
-    int which_check = (static_cast<int>(texcoord.x) + static_cast<int>(texcoord.y)) & 1;
-    if( which_check == 0 )
+    if( ignore )
+    {
+        optixIgnoreIntersection();
+    }
+}
+
+extern "C" __global__ void __anyhit__ah_circle()
+{
+    CutoutsHitGroupData* rt_data  = (CutoutsHitGroupData*)optixGetSbtDataPointer();
+    const int            prim_idx = optixGetPrimitiveIndex();
+
+    // The texture coordinates are defined per-vertex for built-in triangles
+    float2 texcoord;
+    int    ignore = 0;
+
+    const int    vert_idx_offset = prim_idx * 3;
+    const float2 barycentrics    = optixGetTriangleBarycentrics();
+
+    const float2 t0 = rt_data->tex_coords[vert_idx_offset + 0];
+    const float2 t1 = rt_data->tex_coords[vert_idx_offset + 1];
+    const float2 t2 = rt_data->tex_coords[vert_idx_offset + 2];
+
+    texcoord = t0 * ( 1.0f - barycentrics.x - barycentrics.y ) + t1 * barycentrics.x + t2 * barycentrics.y;
+    // circular cutout
+    ignore = ( texcoord.x * texcoord.x + texcoord.y * texcoord.y ) < ( CIRCLE_RADIUS * CIRCLE_RADIUS );
+
+    if( ignore )
     {
         optixIgnoreIntersection();
     }
 }
 
 
-extern "C" __global__ void __closesthit__occlusion()
+
+extern "C" __global__ void __miss__occlusion()
 {
-    setPayloadOcclusion( true );
+    setPayloadOcclusion( false );
 }
 
 
 extern "C" __global__ void __closesthit__radiance()
 {
-    HitGroupData* rt_data = (HitGroupData*)optixGetSbtDataPointer();
-    RadiancePRD*  prd     = getPRD();
-    
+    CutoutsHitGroupData* rt_data = (CutoutsHitGroupData*)optixGetSbtDataPointer();
+    RadiancePRD*         prd     = getPRD();
+
     const int          prim_idx        = optixGetPrimitiveIndex();
     const float3       ray_dir         = optixGetWorldRayDirection();
     const int          vert_idx_offset = prim_idx*3;
@@ -353,14 +386,14 @@ extern "C" __global__ void __closesthit__radiance()
         const float3 v2  = make_float3( rt_data->vertices[vert_idx_offset + 2] );
         const float3 N_0 = normalize( cross( v1 - v0, v2 - v0 ) );
 
-        N = faceforward( N_0, -ray_dir, N_0 );        
+        N = faceforward( N_0, -ray_dir, N_0 );
     }
     else
     {
         N = make_float3(__uint_as_float( optixGetAttribute_0() ),
                         __uint_as_float( optixGetAttribute_1() ),
                         __uint_as_float( optixGetAttribute_2() ));
-    }    
+    }
 
     prd->emitted = ( prd->countEmitted ) ? rt_data->emission_color : make_float3( 0.0f );
 

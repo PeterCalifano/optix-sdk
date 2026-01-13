@@ -132,7 +132,14 @@ static __forceinline__ __device__ float traceOcclusion(
         float                  tmax
         )
 {
-    unsigned int u0 = __float_as_uint(1.f);
+    // Introduce the concept of 'pending' and 'committed' attenuation.
+    // This avoids the usage of closesthit shaders and allows the usage of the OPTIX_RAY_FLAG_DISABLE_CLOSESTHIT flag.
+    // The attenuation is marked as pending with a positive sign bit and marked committed by switching the sign bit.
+    // Attenuation magnitude can be changed in anyhit programs and stays pending.
+    // The final attenuation gets committed in the miss shader (by setting the sign bit).
+    // If no miss shader is invoked (traversal was terminated due to an opaque hit)
+    // the attenuation is not committed and the ray is deemed fully occluded.
+    unsigned int attenuation = __float_as_uint(1.f);
     optixTrace(
             handle,
             ray_origin,
@@ -141,14 +148,15 @@ static __forceinline__ __device__ float traceOcclusion(
             tmax,
             0.0f,                    // rayTime
             OptixVisibilityMask( 1 ),
-            OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT,
+            OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT | OPTIX_RAY_FLAG_DISABLE_CLOSESTHIT,
             whitted::RAY_TYPE_OCCLUSION,      // SBT offset
             whitted::RAY_TYPE_COUNT,          // SBT stride
             whitted::RAY_TYPE_OCCLUSION,      // missSBTIndex
-            u0);
-    return __uint_as_float( u0 );
-}
+            attenuation );
 
+    // committed attenuation is negated
+    return fmaxf(0, -__uint_as_float(attenuation));
+}
 
 __forceinline__ __device__ void setPayloadResult( float3 p )
 {
@@ -165,6 +173,12 @@ __forceinline__ __device__ float getPayloadOcclusion()
 __forceinline__ __device__ void setPayloadOcclusion( float attenuation )
 {
     optixSetPayload_0( __float_as_uint( attenuation ) );
+}
+
+__forceinline__ __device__ void setPayloadOcclusionCommit()
+{
+    // set the sign
+    optixSetPayload_0( optixGetPayload_0() | 0x80000000 );
 }
 
 } // namespace whitted

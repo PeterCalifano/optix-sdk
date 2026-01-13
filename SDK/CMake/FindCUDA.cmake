@@ -685,8 +685,12 @@ if(NOT "${CUDA_TOOLKIT_ROOT_DIR}" STREQUAL "${CUDA_TOOLKIT_ROOT_DIR_INTERNAL}")
   unset(CUDA_VERSION CACHE)
 endif()
 
-if(NOT "${CUDA_TOOLKIT_TARGET_DIR}" STREQUAL "${CUDA_TOOLKIT_TARGET_DIR_INTERNAL}")
-  cuda_unset_include_and_libraries()
+# CUDA_TOOLKIT_TARGET_DIR doesn't always exist in the cache, so in this case we need to
+# only check equality if CUDA_TOOLKIT_TARGET_DIR is defined.
+if(DEFINED CUDA_TOOLKIT_TARGET_DIR)
+  if(NOT "${CUDA_TOOLKIT_TARGET_DIR}" STREQUAL "${CUDA_TOOLKIT_TARGET_DIR_INTERNAL}")
+    cuda_unset_include_and_libraries()
+  endif()
 endif()
 
 #
@@ -2216,9 +2220,10 @@ function(CUDA_BATCH_BUILD_END target)
       DEPENDS ${cuda_depends}
       )    
     add_dependencies( ${target} ${cuda_batch_build_target} )
+    set_property(TARGET ${cuda_batch_build_target} PROPERTY FOLDER "CUDA Batch Build")
   endif() 
   
-  set( CUDA_BATCH_BUILD_LOG )
+  set( CUDA_BATCH_BUILD_LOG "" PARENT_SCOPE )
   set_property( GLOBAL PROPERTY CUDA_BATCH_BUILD_DEPENDS "" )    
 endfunction()
 

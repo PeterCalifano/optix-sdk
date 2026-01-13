@@ -93,9 +93,6 @@ void printUsageAndExit( const char* argv0 )
 
 void createModule( RaycastingState& state )
 {
-    char   log[2048];  // For error reporting from OptiX creation functions
-    size_t sizeof_log = sizeof( log );
-
     OptixModuleCompileOptions module_compile_options = {};
 #if !defined( NDEBUG )
     module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
@@ -109,20 +106,21 @@ void createModule( RaycastingState& state )
     state.pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_LEVEL_INSTANCING;
     state.pipeline_compile_options.numPayloadValues      = 4;
     state.pipeline_compile_options.numAttributeValues    = 2;
-    state.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;  // should be OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
+#if !defined( NDEBUG )  // Enables debug exceptions during optix launches. This may incur significant performance cost and should only be done during development.
+    state.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_DEBUG | OPTIX_EXCEPTION_FLAG_TRACE_DEPTH | OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
+#else
+    state.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_NONE;
+#endif
     state.pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
     size_t      inputSize = 0;
     const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixRaycasting.cu", inputSize );
     OPTIX_CHECK_LOG( optixModuleCreateFromPTX( state.context, &module_compile_options, &state.pipeline_compile_options,
-                                               input, inputSize, log, &sizeof_log, &state.ptx_module ) );
+                                               input, inputSize, LOG, &LOG_SIZE, &state.ptx_module ) );
 }
 
 void createProgramGroups( RaycastingState& state )
 {
-    char   log[2048];
-    size_t sizeof_log = sizeof( log );
-
     OptixProgramGroupOptions program_group_options = {};
 
     OptixProgramGroupDesc raygen_prog_group_desc    = {};
@@ -132,7 +130,7 @@ void createProgramGroups( RaycastingState& state )
 
     OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context, &raygen_prog_group_desc,
                                               1,  // num program groups
-                                              &program_group_options, log, &sizeof_log, &state.raygen_prog_group ) );
+                                              &program_group_options, LOG, &LOG_SIZE, &state.raygen_prog_group ) );
 
     OptixProgramGroupDesc miss_prog_group_desc  = {};
     miss_prog_group_desc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
@@ -140,7 +138,7 @@ void createProgramGroups( RaycastingState& state )
     miss_prog_group_desc.miss.entryFunctionName = "__miss__buffer_miss";
     OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context, &miss_prog_group_desc,
                                               1,  // num program groups
-                                              &program_group_options, log, &sizeof_log, &state.miss_prog_group ) );
+                                              &program_group_options, LOG, &LOG_SIZE, &state.miss_prog_group ) );
 
 
     OptixProgramGroupDesc hit_prog_group_desc = {};
@@ -151,15 +149,12 @@ void createProgramGroups( RaycastingState& state )
     hit_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__buffer_hit";
     OPTIX_CHECK_LOG( optixProgramGroupCreate( state.context, &hit_prog_group_desc,
                                               1,  // num program groups
-                                              &program_group_options, log, &sizeof_log, &state.hit_prog_group ) );
+                                              &program_group_options, LOG, &LOG_SIZE, &state.hit_prog_group ) );
 }
 
 
 void createPipelines( RaycastingState& state )
 {
-    char   log[2048];
-    size_t sizeof_log = sizeof( log );
-
     const uint32_t    max_trace_depth   = 1;
     OptixProgramGroup program_groups[3] = {state.raygen_prog_group, state.miss_prog_group, state.hit_prog_group};
 
@@ -168,11 +163,11 @@ void createPipelines( RaycastingState& state )
     pipeline_link_options.debugLevel               = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 
     OPTIX_CHECK_LOG( optixPipelineCreate( state.context, &state.pipeline_compile_options, &pipeline_link_options,
-                                          program_groups, sizeof( program_groups ) / sizeof( program_groups[0] ), log,
-                                          &sizeof_log, &state.pipeline_1 ) );
+                                          program_groups, sizeof( program_groups ) / sizeof( program_groups[0] ), LOG,
+                                          &LOG_SIZE, &state.pipeline_1 ) );
     OPTIX_CHECK_LOG( optixPipelineCreate( state.context, &state.pipeline_compile_options, &pipeline_link_options,
-                                          program_groups, sizeof( program_groups ) / sizeof( program_groups[0] ), log,
-                                          &sizeof_log, &state.pipeline_2 ) );
+                                          program_groups, sizeof( program_groups ) / sizeof( program_groups[0] ), LOG,
+                                          &LOG_SIZE, &state.pipeline_2 ) );
 
     OptixStackSizes stack_sizes = {};
     for( auto& prog_group : program_groups )
@@ -227,13 +222,14 @@ void createSBT( RaycastingState& state )
         {
             HitGroupRecord rec = {};
             OPTIX_CHECK( optixSbtRecordPackHeader( state.hit_prog_group, &rec ) );
-            rec.data.geometry_data.type                    = GeometryData::TRIANGLE_MESH;
-            rec.data.geometry_data.triangle_mesh.positions = mesh->positions[i];
-            rec.data.geometry_data.triangle_mesh.normals   = mesh->normals[i];
+            GeometryData::TriangleMesh triangle_mesh = {};
+            triangle_mesh.positions                  = mesh->positions[i];
+            triangle_mesh.normals                    = mesh->normals[i];
             for( size_t j = 0; j < GeometryData::num_textcoords; ++j )
-                rec.data.geometry_data.triangle_mesh.texcoords[j] = mesh->texcoords[j][i];
-            rec.data.geometry_data.triangle_mesh.indices   = mesh->indices[i];
-            rec.data.material_data                         = state.scene.materials()[mesh->material_idx[i]];
+                triangle_mesh.texcoords[j] = mesh->texcoords[j][i];
+            triangle_mesh.indices = mesh->indices[i];
+            rec.data.geometry_data.setTriangleMesh( triangle_mesh );
+            rec.data.material_data = state.scene.materials()[mesh->material_idx[i]];
             hitgroup_records.push_back( rec );
         }
     }

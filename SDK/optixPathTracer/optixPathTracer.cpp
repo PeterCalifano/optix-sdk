@@ -681,18 +681,27 @@ void buildMeshAccel( PathTracerState& state )
     }
 }
 
-
 void createModule( PathTracerState& state )
 {
+    OptixPayloadType payloadTypes[2] = {};
+    // radiance prd
+    payloadTypes[0].numPayloadValues = sizeof( radiancePayloadSemantics ) / sizeof( radiancePayloadSemantics[0] );
+    payloadTypes[0].payloadSemantics = radiancePayloadSemantics;
+    // occlusion prd
+    payloadTypes[1].numPayloadValues = sizeof( occlusionPayloadSemantics ) / sizeof( occlusionPayloadSemantics[0] );
+    payloadTypes[1].payloadSemantics = occlusionPayloadSemantics;
+
     OptixModuleCompileOptions module_compile_options = {};
 #if !defined( NDEBUG )
     module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
     module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 #endif
+    module_compile_options.numPayloadTypes = 2;
+    module_compile_options.payloadTypes    = payloadTypes;
 
     state.pipeline_compile_options.usesMotionBlur        = false;
     state.pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_SINGLE_GAS;
-    state.pipeline_compile_options.numPayloadValues      = 2;
+    state.pipeline_compile_options.numPayloadValues      = 0;
     state.pipeline_compile_options.numAttributeValues    = 2;
 #ifdef DEBUG // Enables debug exceptions during optix launches. This may incur significant performance cost and should only be done during development.
     state.pipeline_compile_options.exceptionFlags = OPTIX_EXCEPTION_FLAG_DEBUG | OPTIX_EXCEPTION_FLAG_TRACE_DEPTH | OPTIX_EXCEPTION_FLAG_STACK_OVERFLOW;
@@ -704,16 +713,13 @@ void createModule( PathTracerState& state )
     size_t      inputSize = 0;
     const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixPathTracer.cu", inputSize );
 
-    char   log[2048];
-    size_t sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
                 state.context,
                 &module_compile_options,
                 &state.pipeline_compile_options,
                 input,
                 inputSize,
-                log,
-                &sizeof_log,
+                LOG, &LOG_SIZE,
                 &state.ptx_module
                 ) );
 }
@@ -722,9 +728,6 @@ void createModule( PathTracerState& state )
 void createProgramGroups( PathTracerState& state )
 {
     OptixProgramGroupOptions  program_group_options = {};
-
-    char   log[2048];
-    size_t sizeof_log = sizeof( log );
 
     {
         OptixProgramGroupDesc raygen_prog_group_desc    = {};
@@ -736,8 +739,7 @@ void createProgramGroups( PathTracerState& state )
                     state.context, &raygen_prog_group_desc,
                     1,  // num program groups
                     &program_group_options,
-                    log,
-                    &sizeof_log,
+                    LOG, &LOG_SIZE,
                     &state.raygen_prog_group
                     ) );
     }
@@ -747,26 +749,23 @@ void createProgramGroups( PathTracerState& state )
         miss_prog_group_desc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
         miss_prog_group_desc.miss.module            = state.ptx_module;
         miss_prog_group_desc.miss.entryFunctionName = "__miss__radiance";
-        sizeof_log                                  = sizeof( log );
         OPTIX_CHECK_LOG( optixProgramGroupCreate(
                     state.context, &miss_prog_group_desc,
                     1,  // num program groups
                     &program_group_options,
-                    log, &sizeof_log,
+                    LOG, &LOG_SIZE,
                     &state.radiance_miss_group
                     ) );
 
         memset( &miss_prog_group_desc, 0, sizeof( OptixProgramGroupDesc ) );
         miss_prog_group_desc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
-        miss_prog_group_desc.miss.module            = nullptr;  // NULL miss program for occlusion rays
-        miss_prog_group_desc.miss.entryFunctionName = nullptr;
-        sizeof_log                                  = sizeof( log );
+        miss_prog_group_desc.miss.module            = state.ptx_module;
+        miss_prog_group_desc.miss.entryFunctionName = "__miss__occlusion";
         OPTIX_CHECK_LOG( optixProgramGroupCreate(
                     state.context, &miss_prog_group_desc,
                     1,  // num program groups
                     &program_group_options,
-                    log,
-                    &sizeof_log,
+                    LOG, &LOG_SIZE,
                     &state.occlusion_miss_group
                     ) );
     }
@@ -776,14 +775,12 @@ void createProgramGroups( PathTracerState& state )
         hit_prog_group_desc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
         hit_prog_group_desc.hitgroup.moduleCH            = state.ptx_module;
         hit_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__radiance";
-        sizeof_log                                       = sizeof( log );
         OPTIX_CHECK_LOG( optixProgramGroupCreate(
                     state.context,
                     &hit_prog_group_desc,
                     1,  // num program groups
                     &program_group_options,
-                    log,
-                    &sizeof_log,
+                    LOG, &LOG_SIZE,
                     &state.radiance_hit_group
                     ) );
 
@@ -791,14 +788,12 @@ void createProgramGroups( PathTracerState& state )
         hit_prog_group_desc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
         hit_prog_group_desc.hitgroup.moduleCH            = state.ptx_module;
         hit_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__occlusion";
-        sizeof_log                                       = sizeof( log );
-        OPTIX_CHECK( optixProgramGroupCreate(
+        OPTIX_CHECK_LOG( optixProgramGroupCreate(
                     state.context,
                     &hit_prog_group_desc,
                     1,  // num program groups
                     &program_group_options,
-                    log,
-                    &sizeof_log,
+                    LOG, &LOG_SIZE,
                     &state.occlusion_hit_group
                     ) );
     }
@@ -820,16 +815,13 @@ void createPipeline( PathTracerState& state )
     pipeline_link_options.maxTraceDepth            = 2;
     pipeline_link_options.debugLevel               = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 
-    char   log[2048];
-    size_t sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixPipelineCreate(
                 state.context,
                 &state.pipeline_compile_options,
                 &pipeline_link_options,
                 program_groups,
                 sizeof( program_groups ) / sizeof( program_groups[0] ),
-                log,
-                &sizeof_log,
+                LOG, &LOG_SIZE,
                 &state.pipeline
                 ) );
 

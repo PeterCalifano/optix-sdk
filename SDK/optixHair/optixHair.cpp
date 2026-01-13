@@ -320,8 +320,8 @@ void makeProgramGroups( HairState* pState )
 
     memset( &programGroupDesc, 0, sizeof( OptixProgramGroupDesc ) );
     programGroupDesc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
-    programGroupDesc.miss.module            = nullptr;  // NULL program for occlusion rays
-    programGroupDesc.miss.entryFunctionName = nullptr;
+    programGroupDesc.miss.module            = pState->pProgramGroups->m_whittedModule;
+    programGroupDesc.miss.entryFunctionName = "__miss__occlusion";
     pState->pProgramGroups->add( programGroupDesc, "missOcclude" );
 
     // add raygen group
@@ -351,24 +351,6 @@ std::vector<HitRecord> hairSbtHitRecords( HairState* pState, const ProgramGroups
     std::vector<HitRecord> records;
     HitRecord              hitGroupRecord = {};
 
-    switch( pState->pHair->splineMode() )
-    {
-        case Hair::LINEAR_BSPLINE:
-            hitGroupRecord.data.geometry_data.type = GeometryData::LINEAR_CURVE_ARRAY;
-            break;
-        case Hair::QUADRATIC_BSPLINE:
-            hitGroupRecord.data.geometry_data.type = GeometryData::QUADRATIC_CURVE_ARRAY;
-            break;
-        case Hair::CUBIC_BSPLINE:
-            hitGroupRecord.data.geometry_data.type = GeometryData::CUBIC_CURVE_ARRAY;
-            break;
-        case Hair::CATROM_SPLINE:
-            hitGroupRecord.data.geometry_data.type = GeometryData::CATROM_CURVE_ARRAY;
-            break;
-        default:
-            SUTIL_ASSERT_FAIL_MSG( "Invalid spline mode." );
-    }
-
     CUdeviceptr strandUs = 0;
     createOnDevice( pState->pHair->strandU(), &strandUs );
     pState->curves.strand_u.data        = strandUs;
@@ -389,7 +371,24 @@ std::vector<HitRecord> hairSbtHitRecords( HairState* pState, const ProgramGroups
     pState->curves.strand_info.count          = static_cast<uint16_t>( pState->pHair->numberOfStrands() );
     pState->curves.strand_info.elmt_byte_size = static_cast<uint16_t>( sizeof( uint2 ) );
 
-    hitGroupRecord.data.geometry_data.curves         = pState->curves;
+    switch( pState->pHair->splineMode() )
+    {
+        case Hair::LINEAR_BSPLINE:
+            hitGroupRecord.data.geometry_data.setLinearCurveArray( pState->curves );
+            break;
+        case Hair::QUADRATIC_BSPLINE:
+            hitGroupRecord.data.geometry_data.setQuadraticCurveArray( pState->curves );
+            break;
+        case Hair::CUBIC_BSPLINE:
+            hitGroupRecord.data.geometry_data.setCubicCurveArray( pState->curves );
+            break;
+        case Hair::CATROM_SPLINE:
+            hitGroupRecord.data.geometry_data.setCatromCurveArray( pState->curves );
+            break;
+        default:
+            SUTIL_ASSERT_FAIL_MSG( "Invalid spline mode." );
+    }
+
     hitGroupRecord.data.material_data.pbr.base_color = {0.8f, 0.1f, 0.1f};
     hitGroupRecord.data.material_data.pbr.metallic   = 0.0f;
     hitGroupRecord.data.material_data.pbr.roughness  = 0.6f;
@@ -462,14 +461,14 @@ void makePipeline( HairState* pState )
     OptixPipelineLinkOptions    pipelineLinkOptions    = {};
     pipelineLinkOptions.maxTraceDepth                  = max_trace_depth;
     pipelineLinkOptions.debugLevel                     = OPTIX_COMPILE_DEBUG_LEVEL_NONE;
-    OPTIX_CHECK_LOG2( optixPipelineCreate( pState->context,
-                                           &pipelineCompileOptions,
-                                           &pipelineLinkOptions,
-                                           pState->pProgramGroups->data(),
-                                           pState->pProgramGroups->size(),
-                                           LOG,
-                                           &LOG_SIZE,
-                                           &pState->pipeline ) );
+    OPTIX_CHECK_LOG( optixPipelineCreate( pState->context,
+                                          &pipelineCompileOptions,
+                                          &pipelineLinkOptions,
+                                          pState->pProgramGroups->data(),
+                                          pState->pProgramGroups->size(),
+                                          LOG,
+                                          &LOG_SIZE,
+                                          &pState->pipeline ) );
 
     OptixStackSizes stack_sizes = {};
     for( unsigned int i = 0; i < pState->pProgramGroups->size(); ++i )

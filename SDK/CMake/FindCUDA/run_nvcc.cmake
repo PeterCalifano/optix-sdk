@@ -154,7 +154,7 @@ endif()
 #
 # Make this a macro instead of a function, so that things like RESULT_VARIABLE
 # and other return variables are present after executing the process.
-function(cuda_execute_process status command)
+macro(cuda_execute_process status command)
   set(_command ${command})
   if(NOT "x${_command}" STREQUAL "xCOMMAND")
     message(FATAL_ERROR "Malformed call to cuda_execute_process.  Missing COMMAND as second argument. (command = ${command})")
@@ -185,7 +185,7 @@ function(cuda_execute_process status command)
   endif()
   # Run the command
   execute_process(COMMAND ${ARGN} RESULT_VARIABLE CUDA_result )
-endfunction()
+endmacro()
 
 # For CUDA 2.3 and below, -G -M doesn't work, so remove the -G flag
 # for dependency generation and hope for the best.

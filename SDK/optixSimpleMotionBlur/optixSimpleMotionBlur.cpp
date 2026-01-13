@@ -751,16 +751,13 @@ void createModule( SimpleMotionBlurState& state )
 
     size_t      inputSize = 0;
     const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixSimpleMotionBlur.cu", inputSize );
-    char log[2048];
-    size_t sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
                 state.context,
                 &module_compile_options,
                 &state.pipeline_compile_options,
                 input,
                 inputSize,
-                log,
-                &sizeof_log,
+                LOG, &LOG_SIZE,
                 &state.ptx_module
                 ) );
 }
@@ -775,15 +772,12 @@ void createProgramGroups( SimpleMotionBlurState& state )
     raygen_prog_group_desc.raygen.module            = state.ptx_module;
     raygen_prog_group_desc.raygen.entryFunctionName = "__raygen__rg";
 
-    char log[2048];
-    size_t sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixProgramGroupCreate(
                 state.context,
                 &raygen_prog_group_desc,
                 1,                             // num program groups
                 &program_group_options,
-                log,
-                &sizeof_log,
+                LOG, &LOG_SIZE,
                 &state.raygen_prog_group
                 )
             );
@@ -792,14 +786,12 @@ void createProgramGroups( SimpleMotionBlurState& state )
     miss_prog_group_desc.kind                   = OPTIX_PROGRAM_GROUP_KIND_MISS;
     miss_prog_group_desc.miss.module            = state.ptx_module;
     miss_prog_group_desc.miss.entryFunctionName = "__miss__camera";
-    sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixProgramGroupCreate(
                 state.context,
                 &miss_prog_group_desc,
                 1,                             // num program groups
                 &program_group_options,
-                log,
-                &sizeof_log,
+                LOG, &LOG_SIZE,
                 &state.miss_group
                 )
             );
@@ -808,30 +800,26 @@ void createProgramGroups( SimpleMotionBlurState& state )
     hit_prog_group_desc.kind                         = OPTIX_PROGRAM_GROUP_KIND_HITGROUP;
     hit_prog_group_desc.hitgroup.moduleCH            = state.ptx_module;
     hit_prog_group_desc.hitgroup.entryFunctionNameCH = "__closesthit__camera";
-    sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG(
             optixProgramGroupCreate(
                 state.context,
                 &hit_prog_group_desc,
                 1,                             // num program groups
                 &program_group_options,
-                log,
-                &sizeof_log,
+                LOG, &LOG_SIZE,
                 &state.tri_hit_group
                 )
             );
 
     hit_prog_group_desc.hitgroup.moduleIS            = state.ptx_module;
     hit_prog_group_desc.hitgroup.entryFunctionNameIS = "__intersection__sphere";
-    sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG(
             optixProgramGroupCreate(
                 state.context,
                 &hit_prog_group_desc,
                 1,                             // num program groups
                 &program_group_options,
-                log,
-                &sizeof_log,
+                LOG, &LOG_SIZE,
                 &state.sphere_hit_group
                 )
             );
@@ -852,16 +840,13 @@ void createPipeline( SimpleMotionBlurState& state )
     pipeline_link_options.maxTraceDepth          = 2;
     pipeline_link_options.debugLevel             = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 
-    char log[2048];
-    size_t sizeof_log = sizeof( log );
     OPTIX_CHECK_LOG( optixPipelineCreate(
                 state.context,
                 &state.pipeline_compile_options,
                 &pipeline_link_options,
                 program_groups,
                 sizeof( program_groups ) / sizeof( program_groups[0] ),
-                log,
-                &sizeof_log,
+                LOG, &LOG_SIZE,
                 &state.pipeline
                 ) );
 
