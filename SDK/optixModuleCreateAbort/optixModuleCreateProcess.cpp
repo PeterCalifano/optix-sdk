@@ -207,7 +207,7 @@ int main( int argc, char* argv[] )
 
         // Actually compile the module and store the result in the OptiX disk cache
         OptixModule module = nullptr;
-        OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
+        OPTIX_CHECK_LOG( optixModuleCreate(
             context,
             &module_compile_options,
             &pipeline_compile_options,

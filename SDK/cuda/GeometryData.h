@@ -30,9 +30,9 @@
 #include <cuda/BufferView.h>
 
 #include <sutil/vec_math.h>
-#include <cassert>
 
 #ifndef __CUDACC_RTC__
+#include <cassert>
 #else
 #define assert(x) /*nop*/
 #endif
@@ -68,14 +68,14 @@ struct GeometryData
     };
 
     // The number of supported texture spaces per mesh.
-    static const unsigned int num_textcoords = 2;
+    static const unsigned int num_texcoords = 2;
 
     struct TriangleMesh
     {
         GenericBufferView  indices;
         BufferView<float3> positions;
         BufferView<float3> normals;
-        BufferView<Vec2f>  texcoords[num_textcoords]; // The buffer view may not be aligned, so don't use float2
+        BufferView<Vec2f>  texcoords[num_texcoords]; // The buffer view may not be aligned, so don't use float2
         BufferView<Vec4f>  colors;                    // The buffer view may not be aligned, so don't use float4
     };
 

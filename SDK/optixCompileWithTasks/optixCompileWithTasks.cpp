@@ -119,8 +119,8 @@ void compileModule( const std::string& input, int numIters = 1 )
     for( int i = 0; i < numIters; ++i )
     {
         Timer iterTimer;
-        OPTIX_CHECK( optixModuleCreateFromPTX( s_context, &s_moduleCompileOptions, &s_pipelineCompileOptions,
-                                               input.c_str(), input.size(), 0, 0, &module ) );
+        OPTIX_CHECK( optixModuleCreate( s_context, &s_moduleCompileOptions, &s_pipelineCompileOptions, input.c_str(),
+                                        input.size(), 0, 0, &module ) );
         if( i == 0 )
             SetLoggingLevel( 0 );
         std::cout << "iter[" << i << "] duration = " << iterTimer << " seconds\n";
@@ -139,8 +139,8 @@ void compileModuleWithTasks( const std::string& input, int numIters = 1 )
     {
         Timer     iterTimer;
         OptixTask firstTask;
-        OPTIX_CHECK( optixModuleCreateFromPTXWithTasks( s_context, &s_moduleCompileOptions, &s_pipelineCompileOptions,
-                                                        input.c_str(), input.size(), 0, 0, &module, &firstTask ) );
+        OPTIX_CHECK( optixModuleCreateWithTasks( s_context, &s_moduleCompileOptions, &s_pipelineCompileOptions,
+                                                 input.c_str(), input.size(), 0, 0, &module, &firstTask ) );
         OPTIX_CHECK( g_pool.executeTaskAndWait( module, firstTask ) );
         if( i == 0 )
             SetLoggingLevel( 0 );
@@ -155,7 +155,7 @@ void compileModuleWithTasks( const std::string& input, int numIters = 1 )
 void printUsageAndExit( const std::string& argv0, bool doExit = true )
 {
     // These provide a rudimentary set of options and are by no means exhaustive to the
-    // set of compile options available to optixModuleCreateFromPTX.
+    // set of compile options available to optixModuleCreate.
     std::cerr << "\nUsage  : " << argv0 << " [options] <input_file>\n"
               << "App options:\n"
               << "  -h   | --help                     Print this usage message\n"

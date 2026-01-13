@@ -112,7 +112,8 @@ int32_t           height = 768;
 int32_t           samples_per_launch = 8;
 
 // Output file name (empty means do not output a file)
-std::string       g_outfile = "";
+std::string       g_outfile          = "";
+int32_t           file_launch_frames = 1;
 
 // How to scale the device color overlay on the image (0 means do not show)
 float             g_device_color_scale = 1.0f;
@@ -760,6 +761,7 @@ void printUsageAndExit( const char* argv0 )
     std::cout <<  "Usage  : " << argv0 << " [options]\n";
     std::cout <<  "Options: --launch-samples | -s         Number of samples per pixel per launch (default 8)\n";
     std::cout <<  "         --file | -f                   Output file name\n";
+    std::cout <<  "         --launch-frames               Number of frames to accumulate when saving an output file (default 1)\n";
     std::cout <<  "         --device-color-scale | -d     Device color overlay scale (default 1.0)\n";
     std::cout <<  "         --peers | -p                  P2P connections to include [none, nvlink, all] (default nvlink)\n";
     std::cout <<  "         --optimize-framebuffer | -o   Optimize the framebuffer for speed [true, false] (default true)\n";
@@ -1133,7 +1135,7 @@ void createModule( PerDeviceSampleState& pd_state )
 
     size_t      inputSize = 0;
     const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixNVLink.cu", inputSize );
-    OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
+    OPTIX_CHECK_LOG( optixModuleCreate(
                 pd_state.context,
                 &module_compile_options,
                 &pd_state.pipeline_compile_options,
@@ -1233,8 +1235,7 @@ void createPipeline( PerDeviceSampleState& pd_state )
     };
 
     OptixPipelineLinkOptions pipeline_link_options = {};
-    pipeline_link_options.maxTraceDepth          = max_trace_depth;
-    pipeline_link_options.debugLevel             = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+    pipeline_link_options.maxTraceDepth            = max_trace_depth;
 
     OPTIX_CHECK_LOG( optixPipelineCreate(
                 pd_state.context,
@@ -1249,7 +1250,7 @@ void createPipeline( PerDeviceSampleState& pd_state )
     OptixStackSizes stack_sizes = {};
     for( auto& prog_group : program_groups )
     {
-        OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes ) );
+        OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes, pd_state.pipeline ) );
     }
 
     uint32_t direct_callable_stack_size_from_traversal;
@@ -1840,6 +1841,12 @@ void parseCommandLine( int argc, char* argv[] )
                 printUsageAndExit( argv[0] );
             samples_per_launch = atoi( argv[++i] );
         }
+        else if( arg == "--launch-frames" )
+        {
+            if( i >= argc - 1 )
+                printUsageAndExit( argv[0] );
+            file_launch_frames = max( 1, atoi( argv[++i] ) );
+        }
         else if( arg == "--device-color-scale" || arg == "-d" )
         {
             if( i >= argc - 1 )
@@ -2041,7 +2048,13 @@ int main( int argc, char* argv[] )
             output_buffer.setDevice( 0 );
 
             updateDeviceStates( output_buffer, pd_states );
-            launchSubframe( output_buffer, pd_states );
+            for( int i = 0; i < file_launch_frames; ++i )
+            {
+                updateDeviceStates( output_buffer, pd_states );
+                launchSubframe( output_buffer, pd_states );
+                for( PerDeviceSampleState& pd_state : pd_states )
+                    ++pd_state.params.subframe_index;
+            }
 
             sutil::ImageBuffer buffer;
             buffer.data         = output_buffer.getHostPointer();

@@ -75,8 +75,10 @@ static inline unsigned int getNumChannels( const OptixImage2D& image )
         // internal format, not used in this sample
         case OPTIX_PIXEL_FORMAT_INTERNAL_GUIDE_LAYER:
             return 0;
+
+        default:
+            return 0;
     }
-    return 0;
 }
 
 class OptixUtilOpticalFlow

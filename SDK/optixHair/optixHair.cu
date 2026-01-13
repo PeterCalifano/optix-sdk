@@ -83,7 +83,7 @@ static __forceinline__ __device__ float3 normalQuadratic( const int primitiveInd
     return optixTransformNormalFromObjectToWorldSpace( normal );
 }
 
-// Compute surface normal of cubic pimitive in world space.
+// Compute surface normal of cubic b-spline pimitive in world space.
 static __forceinline__ __device__ float3 normalCubic( const int primitiveIndex )
 {
     const OptixTraversableHandle gas         = optixGetGASTraversableHandle();
@@ -102,7 +102,7 @@ static __forceinline__ __device__ float3 normalCubic( const int primitiveIndex )
     return optixTransformNormalFromObjectToWorldSpace( normal );
 }
 
-// Compute surface normal of cubic pimitive in world space.
+// Compute surface normal of Catmull-Rom pimitive in world space.
 static __forceinline__ __device__ float3 normalCatrom( const int primitiveIndex )
 {
     const OptixTraversableHandle gas         = optixGetGASTraversableHandle();
@@ -198,17 +198,13 @@ static __forceinline__ __device__ float3 computeNormal( OptixPrimitiveType type,
 {
   switch( type ) {
   case OPTIX_PRIMITIVE_TYPE_ROUND_LINEAR:
-        return  normalLinear( primitiveIndex );
-    break;
+      return  normalLinear( primitiveIndex );
   case OPTIX_PRIMITIVE_TYPE_ROUND_QUADRATIC_BSPLINE:
-        return normalQuadratic( primitiveIndex );
-    break;
+      return normalQuadratic( primitiveIndex );
   case OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BSPLINE:
-        return  normalCubic( primitiveIndex );
-    break;
+      return  normalCubic( primitiveIndex );
   case OPTIX_PRIMITIVE_TYPE_ROUND_CATMULLROM:
-        return  normalCatrom( primitiveIndex );
-    break;
+      return  normalCatrom( primitiveIndex );
   }
   return make_float3(0.0f);
 }

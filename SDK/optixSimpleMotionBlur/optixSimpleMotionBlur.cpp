@@ -751,7 +751,7 @@ void createModule( SimpleMotionBlurState& state )
 
     size_t      inputSize = 0;
     const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixSimpleMotionBlur.cu", inputSize );
-    OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
+    OPTIX_CHECK_LOG( optixModuleCreate(
                 state.context,
                 &module_compile_options,
                 &state.pipeline_compile_options,
@@ -837,8 +837,7 @@ void createPipeline( SimpleMotionBlurState& state )
     };
 
     OptixPipelineLinkOptions pipeline_link_options = {};
-    pipeline_link_options.maxTraceDepth          = 2;
-    pipeline_link_options.debugLevel             = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+    pipeline_link_options.maxTraceDepth            = 2;
 
     OPTIX_CHECK_LOG( optixPipelineCreate(
                 state.context,
@@ -853,10 +852,10 @@ void createPipeline( SimpleMotionBlurState& state )
     // We need to specify the max traversal depth.  Calculate the stack sizes, so we can specify all
     // parameters to optixPipelineSetStackSize.
     OptixStackSizes stackSizes = {};
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.raygen_prog_group, &stackSizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.miss_group, &stackSizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.sphere_hit_group, &stackSizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.tri_hit_group, &stackSizes ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.raygen_prog_group, &stackSizes, state.pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.miss_group, &stackSizes, state.pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.sphere_hit_group, &stackSizes, state.pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.tri_hit_group, &stackSizes, state.pipeline ) );
 
     unsigned int maxTraceDepth = 1;
     unsigned int maxCCDepth = 0;
@@ -1119,23 +1118,27 @@ int main( int argc, char* argv[] )
                 sutil::initGL();
             }
 
-            sutil::CUDAOutputBuffer<uchar4> output_buffer(
+            {
+                // this scope is for output_buffer, to ensure the destructor is called bfore glfwTerminate()
+
+                sutil::CUDAOutputBuffer<uchar4> output_buffer(
                     output_buffer_type,
                     state.params.width,
                     state.params.height
-                    );
+                );
 
-            handleCameraUpdate( state.params );
-            handleResize( output_buffer, state.params );
-            launchSubframe( output_buffer, state );
+                handleCameraUpdate( state.params );
+                handleResize( output_buffer, state.params );
+                launchSubframe( output_buffer, state );
 
-            sutil::ImageBuffer buffer;
-            buffer.data         = output_buffer.getHostPointer();
-            buffer.width        = output_buffer.width();
-            buffer.height       = output_buffer.height();
-            buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
+                sutil::ImageBuffer buffer;
+                buffer.data         = output_buffer.getHostPointer();
+                buffer.width        = output_buffer.width();
+                buffer.height       = output_buffer.height();
+                buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
 
-            sutil::saveImage( outfile.c_str(), buffer, false );
+                sutil::saveImage( outfile.c_str(), buffer, false );
+            }
 
             if( output_buffer_type == sutil::CUDAOutputBufferType::GL_INTEROP )
             {

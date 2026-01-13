@@ -169,10 +169,6 @@ struct QuadraticInterpolator
 struct CubicInterpolator
 {
     __device__ __forceinline__ CubicInterpolator() {}
-    // TODO: Initialize from polynomial weights. Check that sample doesn't rely on
-    // legacy behavior.
-    // __device__ __forceinline__ CubicBSplineSegment( const float4* q ) { initializeFromBSpline( q ); }
-
 
     __device__ __forceinline__ void initializeFromBSpline( const float4* q )
     {

@@ -480,7 +480,7 @@ int main( int argc, char* argv[] )
             size_t      inputSize  = 0;
             const char* input      = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixOpacityMicromap.cu", inputSize );
 
-            OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
+            OPTIX_CHECK_LOG( optixModuleCreate(
                         context,
                         &module_compile_options,
                         &pipeline_compile_options,
@@ -565,7 +565,7 @@ int main( int argc, char* argv[] )
             OptixStackSizes stack_sizes = {};
             for( auto& prog_group : program_groups )
             {
-                OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes ) );
+                OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes, pipeline ) );
             }
 
             uint32_t direct_callable_stack_size_from_traversal;

@@ -799,7 +799,7 @@ void createModule( PathTracerState& state )
 
     size_t      inputSize = 0;
     const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixMultiGPU.cu", inputSize );
-    OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
+    OPTIX_CHECK_LOG( optixModuleCreate(
                 state.context,
                 &module_compile_options,
                 &state.pipeline_compile_options,
@@ -907,8 +907,7 @@ void createPipeline( PathTracerState& state )
     };
 
     OptixPipelineLinkOptions pipeline_link_options = {};
-    pipeline_link_options.maxTraceDepth          = max_trace_depth;
-    pipeline_link_options.debugLevel             = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+    pipeline_link_options.maxTraceDepth            = max_trace_depth;
 
     OPTIX_CHECK_LOG( optixPipelineCreate(
                 state.context,
@@ -923,7 +922,7 @@ void createPipeline( PathTracerState& state )
     OptixStackSizes stack_sizes = {};
     for( auto& prog_group : program_groups )
     {
-        OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes ) );
+        OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes, state.pipeline ) );
     }
 
     uint32_t direct_callable_stack_size_from_traversal;

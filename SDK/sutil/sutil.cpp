@@ -893,12 +893,12 @@ static void getCuStringFromFile( std::string& cu, std::string& location, const c
 
 static std::string g_nvrtcLog;
 
-static void getPtxFromCuString( std::string&                    ptx,
-                                const char*                     sample_directory,
-                                const char*                     cu_source,
-                                const char*                     name,
-                                const char**                    log_string,
-                                const std::vector<const char*>& compiler_options )
+static void getInputFromCuString( std::string&                    input,
+                                  const char*                     sample_directory,
+                                  const char*                     cu_source,
+                                  const char*                     name,
+                                  const char**                    log_string,
+                                  const std::vector<const char*>& compiler_options )
 {
     // Create program
     nvrtcProgram prog = 0;
@@ -935,10 +935,14 @@ static void getPtxFromCuString( std::string&                    ptx,
         options.push_back( dir.c_str() );
     }
 
+    bool optixir = fileExtensionForLoading() == ".optixir";
+    if( optixir )
+        options.push_back( "--optix-ir" );
+
     // Collect NVRTC options
     std::copy( std::begin( compiler_options ), std::end( compiler_options ), std::back_inserter( options ) );
 
-    // JIT compile CU to PTX
+    // JIT compile CU to OPTIXIR/PTX
     const nvrtcResult compileRes = nvrtcCompileProgram( prog, (int)options.size(), options.data() );
 
     // Retrieve log output
@@ -954,11 +958,24 @@ static void getPtxFromCuString( std::string&                    ptx,
     if( compileRes != NVRTC_SUCCESS )
         throw std::runtime_error( "NVRTC Compilation failed.\n" + g_nvrtcLog );
 
-    // Retrieve PTX code
-    size_t ptx_size = 0;
-    NVRTC_CHECK_ERROR( nvrtcGetPTXSize( prog, &ptx_size ) );
-    ptx.resize( ptx_size );
-    NVRTC_CHECK_ERROR( nvrtcGetPTX( prog, &ptx[0] ) );
+    // Retrieve OPTIXIR/PTX code
+    size_t input_size = 0;
+    if( optixir )
+    {
+#if CUDA_VERSION >= 12000
+        NVRTC_CHECK_ERROR( nvrtcGetOptiXIRSize( prog, &input_size ) );
+        input.resize( input_size );
+        NVRTC_CHECK_ERROR( nvrtcGetOptiXIR( prog, &input[0] ) );
+#else
+        throw std::runtime_error( "OptiX IR support for NVRTC is only available with CUDA 12.0+" );
+#endif
+    }
+    else
+    {
+        NVRTC_CHECK_ERROR( nvrtcGetPTXSize( prog, &input_size ) );
+        input.resize( input_size );
+        NVRTC_CHECK_ERROR( nvrtcGetPTX( prog, &input[0] ) );
+    }
 
     // Cleanup
     NVRTC_CHECK_ERROR( nvrtcDestroyProgram( &prog ) );
@@ -986,6 +1003,7 @@ static std::string sampleInputFilePath( const char* sampleName, const char* file
 
     if( !sampleName )
         sampleName = "sutil";
+    std::vector<std::string> locations;
     for( const char* directory : directories )
     {
         if( directory )
@@ -996,24 +1014,26 @@ static std::string sampleInputFilePath( const char* sampleName, const char* file
             path += "_generated_";
             path += fileName;
             path += extension;
+            locations.push_back( path );
             if( fileExists( path ) )
                 return path;
         }
     }
 
-    std::string error = "sutil::samplePTXFilePath couldn't locate ";
-    error += fileName;
-    error += " for sample ";
-    error += sampleName;
+    std::string error = "sutil::sampleInputFilePath couldn't locate " + std::string( fileName ) + " for sample "
+                        + std::string( sampleName ) + " in the following locations:\n";
+    for( const auto& path : locations )
+        error += "\t" + path + "\n";
+
     throw Exception( error.c_str() );
 }
 
-static void getInputDataFromFile( std::string& ptx, const char* sample_name, const char* filename )
+static void getInputDataFromFile( std::string& inputData, const char* sample_name, const char* filename )
 {
     const std::string sourceFilePath = sampleInputFilePath( sample_name, filename );
 
-    // Try to open source PTX file
-    if( !readSourceFile( ptx, sourceFilePath ) )
+    // Try to open source file
+    if( !readSourceFile( inputData, sourceFilePath ) )
     {
         std::string err = "Couldn't open source file " + sourceFilePath;
         throw std::runtime_error( err.c_str() );
@@ -1022,16 +1042,16 @@ static void getInputDataFromFile( std::string& ptx, const char* sample_name, con
 
 #endif  // CUDA_NVRTC_ENABLED
 
-struct PtxSourceCache
+struct SourceCache
 {
     std::map<std::string, std::string*> map;
-    ~PtxSourceCache()
+    ~SourceCache()
     {
         for( std::map<std::string, std::string*>::const_iterator it = map.begin(); it != map.end(); ++it )
             delete it->second;
     }
 };
-static PtxSourceCache g_ptxSourceCache;
+static SourceCache g_sourceCache;
 
 const char* getInputData( const char*                     sample,
                           const char*                     sampleDir,
@@ -1043,29 +1063,28 @@ const char* getInputData( const char*                     sample,
     if( log )
         *log = NULL;
 
-    std::string *                                 ptx, cu;
+    std::string *                                 inputData, cu;
     std::string                                   key  = std::string( filename ) + ";" + ( sample ? sample : "" );
-    std::map<std::string, std::string*>::iterator elem = g_ptxSourceCache.map.find( key );
+    std::map<std::string, std::string*>::iterator elem = g_sourceCache.map.find( key );
 
-    if( elem == g_ptxSourceCache.map.end() )
+    if( elem == g_sourceCache.map.end() )
     {
-        ptx = new std::string();
+        inputData = new std::string();
 #if CUDA_NVRTC_ENABLED
-        SUTIL_ASSERT( fileExtensionForLoading() == ".ptx" );
         std::string location;
         getCuStringFromFile( cu, location, sampleDir, filename );
-        getPtxFromCuString( *ptx, sampleDir, cu.c_str(), location.c_str(), log, compilerOptions );
+        getInputFromCuString( *inputData, sampleDir, cu.c_str(), location.c_str(), log, compilerOptions );
 #else
-        getInputDataFromFile( *ptx, sample, filename );
+        getInputDataFromFile( *inputData, sample, filename );
 #endif
-        g_ptxSourceCache.map[key] = ptx;
+        g_sourceCache.map[key] = inputData;
     }
     else
     {
-        ptx = elem->second;
+        inputData = elem->second;
     }
-    dataSize = ptx->size();
-    return ptx->c_str();
+    dataSize = inputData->size();
+    return inputData->c_str();
 }
 
 void ensureMinimumSize( int& w, int& h )

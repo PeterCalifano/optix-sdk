@@ -186,7 +186,14 @@ inline void optixCheckNoThrow( OptixResult res, const char* call, const char* fi
 {
     if( res != OPTIX_SUCCESS )
     {
-        std::cerr << "Optix call '" << call << "' failed: " << file << ':' << line << ")\n";
+        try
+        {
+            std::cerr << "Optix call '" << call << "' failed: " << file << ':'
+                      << line << ")\n";
+        }
+        catch( ... )
+        {
+        }
         std::terminate();
     }
 }
@@ -219,8 +226,15 @@ inline void cudaCheckNoThrow( cudaError_t error, const char* call, const char* f
 {
     if( error != cudaSuccess )
     {
-        std::cerr << "CUDA call (" << call << " ) failed with error: '"
-                  << cudaGetErrorString( error ) << "' (" << file << ":" << line << ")\n";
+        try
+        {
+            std::cerr << "CUDA call (" << call << " ) failed with error: '"
+                      << cudaGetErrorString( error ) << "' (" << file << ":"
+                      << line << ")\n";
+        }
+        catch( ... )
+        {
+        }
         std::terminate();
     }
 }

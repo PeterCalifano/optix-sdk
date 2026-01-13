@@ -1,5 +1,5 @@
 //
-// Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
+// Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions
@@ -28,24 +28,36 @@
 
 #pragma once
 
-#define SAMPLES_DIR "@SAMPLES_DIR@"
-#define SAMPLES_PTX_DIR "@SAMPLES_PTX_DIR@"
-#define SAMPLES_CUDA_DIR "@SAMPLES_CUDA_DIR@"
+#include <optix.h>
+#include <sutil/CuBuffer.h>
+#include <sutil/Aabb.h>
 
-// Include directories
-#define SAMPLES_RELATIVE_INCLUDE_DIRS @SAMPLES_RELATIVE_INCLUDE_DIRS@
-#define SAMPLES_ABSOLUTE_INCLUDE_DIRS @SAMPLES_ABSOLUTE_INCLUDE_DIRS@
+struct Globals
+{
+    float4*                accum_buffer;
+    uchar4*                frame_buffer;
+    unsigned int           width;
+    unsigned int           height;
+    unsigned int           spp;
+    float3                 eye, U, V, W;
+    OptixTraversableHandle handle;
+    int                    subframe_index;
+    bool                   ao;
+};
 
-// Signal whether to use NVRTC or not
-#cmakedefine01 CUDA_NVRTC_ENABLED
+struct RayGenData
+{
+    float3 cam_eye;
+    float3 camera_u, camera_v, camera_w;
+};
 
-// NVRTC compiler options
-#if defined( NDEBUG )
-#define CUDA_NVRTC_OPTIONS @CUDA_NVRTC_OPTIONS@
-#else
-#define CUDA_NVRTC_OPTIONS @CUDA_NVRTC_OPTIONS_DEBUG@
-#endif
 
-// Indicate what input we are generating
-#cmakedefine01 SAMPLES_INPUT_GENERATE_OPTIXIR
-#cmakedefine01 SAMPLES_INPUT_GENERATE_PTX
+struct MissData
+{
+    float4 bg_color;
+};
+
+struct HitGroupData
+{
+    float3 color;
+};

@@ -159,10 +159,12 @@ macro(cuda_execute_process status command)
   if(NOT "x${_command}" STREQUAL "xCOMMAND")
     message(FATAL_ERROR "Malformed call to cuda_execute_process.  Missing COMMAND as second argument. (command = ${command})")
   endif()
+  # ARGN isn't like a normal variable in macros, so use a proxy variable that we can use instead.
+  set(_arguments ${ARGN})
   # nvcc warns when specifying -G and --lineinfo, which is annoying.
-  if("-G" IN_LIST ARGN)
-    list(REMOVE_ITEM ARGN "-lineinfo")
-    list(REMOVE_ITEM ARGN "--lineinfo")
+  if("-G" IN_LIST _arguments)
+    list(REMOVE_ITEM _arguments "-lineinfo")
+    list(REMOVE_ITEM _arguments "--lineinfo")
   endif()
   if(verbose)
     execute_process(COMMAND "${CMAKE_COMMAND}" -E echo -- ${status})
@@ -170,7 +172,7 @@ macro(cuda_execute_process status command)
     # and spaces, anything else is left up to the user to fix if they want to
     # copy and paste a runnable command line.
     set(cuda_execute_process_string)
-    foreach(arg ${ARGN})
+    foreach(arg ${_arguments})
       # If there are quotes, excape them, so they come through.
       string(REPLACE "\"" "\\\"" arg ${arg})
       # Args with spaces need quotes around them to get them to be parsed as a single argument.
@@ -184,7 +186,7 @@ macro(cuda_execute_process status command)
     execute_process(COMMAND ${CMAKE_COMMAND} -E echo ${cuda_execute_process_string})
   endif()
   # Run the command
-  execute_process(COMMAND ${ARGN} RESULT_VARIABLE CUDA_result )
+  execute_process(COMMAND ${_arguments} RESULT_VARIABLE CUDA_result )
 endmacro()
 
 # For CUDA 2.3 and below, -G -M doesn't work, so remove the -G flag

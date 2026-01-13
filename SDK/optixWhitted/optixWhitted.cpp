@@ -456,7 +456,7 @@ void createModules( WhittedState &state )
     {
         size_t      inputSize = 0;
         const char* input     = sutil::getInputData( nullptr, nullptr, "geometry.cu", inputSize );
-        OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
+        OPTIX_CHECK_LOG( optixModuleCreate(
             state.context,
             &module_compile_options,
             &state.pipeline_compile_options,
@@ -469,7 +469,7 @@ void createModules( WhittedState &state )
     {
         size_t      inputSize = 0;
         const char* input     = sutil::getInputData( nullptr, nullptr, "camera.cu", inputSize );
-        OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
+        OPTIX_CHECK_LOG( optixModuleCreate(
             state.context,
             &module_compile_options,
             &state.pipeline_compile_options,
@@ -482,7 +482,7 @@ void createModules( WhittedState &state )
     {
         size_t      inputSize = 0;
         const char* input     = sutil::getInputData( nullptr, nullptr, "shading.cu", inputSize );
-        OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
+        OPTIX_CHECK_LOG( optixModuleCreate(
             state.context,
             &module_compile_options,
             &state.pipeline_compile_options,
@@ -495,7 +495,7 @@ void createModules( WhittedState &state )
     {
         size_t      inputSize = 0;
         const char* input     = sutil::getInputData( nullptr, nullptr, "sphere.cu", inputSize );
-        OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
+        OPTIX_CHECK_LOG( optixModuleCreate(
             state.context,
             &module_compile_options,
             &state.pipeline_compile_options,
@@ -723,10 +723,8 @@ void createPipeline( WhittedState &state )
     createMissProgram( state, program_groups );
 
     // Link program groups to pipeline
-    OptixPipelineLinkOptions pipeline_link_options = {
-        max_trace,                          // maxTraceDepth
-        OPTIX_COMPILE_DEBUG_LEVEL_FULL      // debugLevel
-    };
+    OptixPipelineLinkOptions pipeline_link_options = {};
+    pipeline_link_options.maxTraceDepth            = max_trace;
     OPTIX_CHECK_LOG( optixPipelineCreate(
         state.context,
         &state.pipeline_compile_options,
@@ -739,7 +737,7 @@ void createPipeline( WhittedState &state )
     OptixStackSizes stack_sizes = {};
     for( auto& prog_group : program_groups )
     {
-        OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes ) );
+        OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes, state.pipeline ) );
     }
 
     uint32_t direct_callable_stack_size_from_traversal;
@@ -1180,22 +1178,26 @@ int main( int argc, char* argv[] )
                 sutil::initGL();
             }
 
-            sutil::CUDAOutputBuffer<uchar4> output_buffer(
+            {
+                // this scope is for output_buffer, to ensure the destructor is called bfore glfwTerminate()
+
+                sutil::CUDAOutputBuffer<uchar4> output_buffer(
                     output_buffer_type,
                     state.params.width,
                     state.params.height
                     );
 
-            handleCameraUpdate( state );
-            handleResize( output_buffer, state.params );
-            launchSubframe( output_buffer, state );
+                handleCameraUpdate( state );
+                handleResize( output_buffer, state.params );
+                launchSubframe( output_buffer, state );
 
-            sutil::ImageBuffer buffer;
-            buffer.data         = output_buffer.getHostPointer();
-            buffer.width        = output_buffer.width();
-            buffer.height       = output_buffer.height();
-            buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
-            sutil::saveImage( outfile.c_str(), buffer, false );
+                sutil::ImageBuffer buffer;
+                buffer.data         = output_buffer.getHostPointer();
+                buffer.width        = output_buffer.width();
+                buffer.height       = output_buffer.height();
+                buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
+                sutil::saveImage( outfile.c_str(), buffer, false );
+            }
 
             if( output_buffer_type == sutil::CUDAOutputBufferType::GL_INTEROP )
             {

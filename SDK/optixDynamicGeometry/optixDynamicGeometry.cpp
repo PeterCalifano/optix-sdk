@@ -709,7 +709,7 @@ void createModule( DynamicGeometryState& state )
     size_t      inputSize = 0;
     const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixDynamicGeometry.cu", inputSize );
 
-    OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
+    OPTIX_CHECK_LOG( optixModuleCreate(
         state.context,
         &module_compile_options,
         &state.pipeline_compile_options,
@@ -781,8 +781,7 @@ void createPipeline( DynamicGeometryState& state )
     };
 
     OptixPipelineLinkOptions pipeline_link_options = {};
-    pipeline_link_options.maxTraceDepth = 1;
-    pipeline_link_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+    pipeline_link_options.maxTraceDepth            = 1;
 
     OPTIX_CHECK_LOG( optixPipelineCreate(
         state.context,
@@ -797,9 +796,9 @@ void createPipeline( DynamicGeometryState& state )
     // We need to specify the max traversal depth.  Calculate the stack sizes, so we can specify all
     // parameters to optixPipelineSetStackSize.
     OptixStackSizes stack_sizes = {};
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.raygen_prog_group, &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.miss_group, &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.hit_group, &stack_sizes ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.raygen_prog_group, &stack_sizes, state.pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.miss_group, &stack_sizes, state.pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.hit_group, &stack_sizes, state.pipeline ) );
 
     uint32_t max_trace_depth = 1;
     uint32_t max_cc_depth = 0;
@@ -1080,30 +1079,34 @@ int main( int argc, char* argv[] )
 
             state.last_exploding_sphere_rebuild_time = 0.f;
 
-            sutil::CUDAOutputBuffer<uchar4> output_buffer(
-                output_buffer_type,
-                state.params.width,
-                state.params.height
-            );
-
-            handleCameraUpdate( state.params );
-            handleResize( output_buffer, state.params );
-
-            // run animation frames
-            for( unsigned int i = 0; i < static_cast<unsigned int>( num_frames ); ++i )
             {
-                state.time = i * ( animation_time / ( num_frames - 1 ) );
-                updateMeshAccel( state );
-                launchSubframe( output_buffer, state );
+                // this scope is for output_buffer, to ensure the destructor is called bfore glfwTerminate()
+
+                sutil::CUDAOutputBuffer<uchar4> output_buffer(
+                    output_buffer_type,
+                    state.params.width,
+                    state.params.height
+                );
+
+                handleCameraUpdate( state.params );
+                handleResize( output_buffer, state.params );
+
+                // run animation frames
+                for( unsigned int i = 0; i < static_cast<unsigned int>( num_frames ); ++i )
+                {
+                    state.time = i * ( animation_time / ( num_frames - 1 ) );
+                    updateMeshAccel( state );
+                    launchSubframe( output_buffer, state );
+                }
+
+                sutil::ImageBuffer buffer;
+                buffer.data = output_buffer.getHostPointer();
+                buffer.width = output_buffer.width();
+                buffer.height = output_buffer.height();
+                buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
+
+                sutil::saveImage( outfile.c_str(), buffer, false );
             }
-
-            sutil::ImageBuffer buffer;
-            buffer.data = output_buffer.getHostPointer();
-            buffer.width = output_buffer.width();
-            buffer.height = output_buffer.height();
-            buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
-
-            sutil::saveImage( outfile.c_str(), buffer, false );
 
             if( output_buffer_type == sutil::CUDAOutputBufferType::GL_INTEROP )
             {

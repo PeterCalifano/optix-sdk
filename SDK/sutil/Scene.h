@@ -71,7 +71,7 @@ public:
         std::vector<GenericBufferView>    indices;
         std::vector<BufferView<float3> >  positions;
         std::vector<BufferView<float3> >  normals;
-        std::vector<BufferView<Vec2f> >   texcoords[GeometryData::num_textcoords];
+        std::vector<BufferView<Vec2f> >   texcoords[GeometryData::num_texcoords];
         std::vector<BufferView<Vec4f> >   colors;
 
         std::vector<int32_t>              material_idx;

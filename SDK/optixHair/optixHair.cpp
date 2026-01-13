@@ -460,7 +460,6 @@ void makePipeline( HairState* pState )
     OptixPipelineCompileOptions pipelineCompileOptions = defaultPipelineCompileOptions( pState );
     OptixPipelineLinkOptions    pipelineLinkOptions    = {};
     pipelineLinkOptions.maxTraceDepth                  = max_trace_depth;
-    pipelineLinkOptions.debugLevel                     = OPTIX_COMPILE_DEBUG_LEVEL_NONE;
     OPTIX_CHECK_LOG( optixPipelineCreate( pState->context,
                                           &pipelineCompileOptions,
                                           &pipelineLinkOptions,
@@ -473,7 +472,7 @@ void makePipeline( HairState* pState )
     OptixStackSizes stack_sizes = {};
     for( unsigned int i = 0; i < pState->pProgramGroups->size(); ++i )
     {
-        OPTIX_CHECK( optixUtilAccumulateStackSizes( pState->pProgramGroups->data()[i], &stack_sizes ) );
+        OPTIX_CHECK( optixUtilAccumulateStackSizes( pState->pProgramGroups->data()[i], &stack_sizes, pState->pipeline ) );
     }
 
     uint32_t direct_callable_stack_size_from_traversal;

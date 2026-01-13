@@ -1254,7 +1254,7 @@ void createModule( OptixModule& module, const OptixDeviceContext& context )
     size_t      inputSize = 0;
     const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "volume.cu", inputSize );
     module = {};
-    OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
+    OPTIX_CHECK_LOG( optixModuleCreate(
         context,
         &module_compile_options,
         &pipeline_compile_options,
@@ -1422,8 +1422,7 @@ void createPipeline( OptixPipeline& pipeline, const ProgramGroups& programs, con
     pipeline_compile_options.pipelineLaunchParamsVariableName = "params";
 
     OptixPipelineLinkOptions pipeline_link_options = {};
-    pipeline_link_options.maxTraceDepth          = 4;
-    pipeline_link_options.debugLevel             = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+    pipeline_link_options.maxTraceDepth            = 4;
 
     OPTIX_CHECK_LOG( optixPipelineCreate(
                 context,
@@ -1438,13 +1437,13 @@ void createPipeline( OptixPipeline& pipeline, const ProgramGroups& programs, con
 	// We need to specify the max traversal depth.  Calculate the stack sizes, so we can specify all
     // parameters to optixPipelineSetStackSize.
     OptixStackSizes stack_sizes = {};
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.raygen,          &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.miss_radiance,   &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.miss_occlusion,  &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.mesh_radiance,  &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.mesh_occlusion, &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.volume_radiance, &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.volume_occlusion, &stack_sizes ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.raygen,          &stack_sizes, pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.miss_radiance,   &stack_sizes, pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.miss_occlusion,  &stack_sizes, pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.mesh_radiance,  &stack_sizes, pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.mesh_occlusion, &stack_sizes, pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.volume_radiance, &stack_sizes, pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( programs.volume_occlusion, &stack_sizes, pipeline ) );
 
     uint32_t max_trace_depth = 4;
     uint32_t max_cc_depth = 0;
@@ -1740,18 +1739,22 @@ int main( int argc, char* argv[] )
 				sutil::initGL();
 			}
 
-			sutil::CUDAOutputBuffer<uchar4> output_buffer( output_buffer_type, width, height );
-			handleCameraUpdate( launch_params.params);
-			handleResize( output_buffer );
-			launchSubframe( output_buffer );
+            {
+                // this scope is for output_buffer, to ensure the destructor is called bfore glfwTerminate()
 
-			sutil::ImageBuffer buffer;
-			buffer.data = output_buffer.getHostPointer();
-			buffer.width = output_buffer.width();
-			buffer.height = output_buffer.height();
-			buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
+                sutil::CUDAOutputBuffer<uchar4> output_buffer( output_buffer_type, width, height );
+                handleCameraUpdate( launch_params.params );
+                handleResize( output_buffer );
+                launchSubframe( output_buffer );
 
-			sutil::saveImage( outfile.c_str(), buffer, false );
+                sutil::ImageBuffer buffer;
+                buffer.data         = output_buffer.getHostPointer();
+                buffer.width        = output_buffer.width();
+                buffer.height       = output_buffer.height();
+                buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
+
+                sutil::saveImage( outfile.c_str(), buffer, false );
+            }
 
             if( output_buffer_type == sutil::CUDAOutputBufferType::GL_INTEROP )
             {

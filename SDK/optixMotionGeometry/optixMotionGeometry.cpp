@@ -902,7 +902,7 @@ void buildMergedGAS( MotionGeometryState& state, const sutil::Scene& scene, CUde
 
         assert( mesh->positions.size() == num_subMeshes && mesh->normals.size() == num_subMeshes && mesh->colors.size() == num_subMeshes );
 
-        for( size_t j = 0; j < GeometryData::num_textcoords; ++j )
+        for( size_t j = 0; j < GeometryData::num_texcoords; ++j )
             assert( mesh->texcoords[j].size() == num_subMeshes );
 
         for( size_t j = 0; j < num_subMeshes; ++j )
@@ -1323,7 +1323,7 @@ void createModule( MotionGeometryState& state )
     size_t      inputSize = 0;
     const char* input = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixMotionGeometry.cu", inputSize );
 
-    OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
+    OPTIX_CHECK_LOG( optixModuleCreate(
         state.context,
         &module_compile_options,
         &state.pipeline_compile_options,
@@ -1406,8 +1406,7 @@ void createPipeline( MotionGeometryState& state )
     };
 
     OptixPipelineLinkOptions pipeline_link_options = {};
-    pipeline_link_options.maxTraceDepth = 20;
-    pipeline_link_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+    pipeline_link_options.maxTraceDepth            = 20;
 
     OPTIX_CHECK_LOG( optixPipelineCreate(
         state.context,
@@ -1422,10 +1421,10 @@ void createPipeline( MotionGeometryState& state )
     // We need to specify the max traversal depth.  Calculate the stack sizes, so we can specify all
     // parameters to optixPipelineSetStackSize.
     OptixStackSizes stack_sizes = {};
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.raygen_prog_group, &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.miss_group, &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.miss_group_occlusion, &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.hit_group, &stack_sizes ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.raygen_prog_group, &stack_sizes, state.pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.miss_group, &stack_sizes, state.pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.miss_group_occlusion, &stack_sizes, state.pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.hit_group, &stack_sizes, state.pipeline ) );
 
     uint32_t max_trace_depth = pipeline_link_options.maxTraceDepth;
     uint32_t max_cc_depth = 0;
@@ -1757,38 +1756,42 @@ int main( int argc, char* argv[] )
                 sutil::initGL();
             }
 
-            sutil::CUDAOutputBuffer<uchar4> output_buffer(
-                output_buffer_type,
-                state.params.width,
-                state.params.height
-            );
-
-            handleCameraUpdate( state );
-            handleResize( output_buffer, state.params );
-
-            // run animation frames
-            for( unsigned int i = 0; i < static_cast<unsigned int>( num_frames ); ++i )
             {
-                state.time_last_frame = state.time;
-                state.time = i * ( animation_time / ( num_frames - 1 ) );
+                // this scope is for output_buffer, to ensure the destructor is called bfore glfwTerminate()
 
-                if( state.time - state.time_last_fume > 0.4f )
+                sutil::CUDAOutputBuffer<uchar4> output_buffer(
+                    output_buffer_type,
+                    state.params.width,
+                    state.params.height
+                );
+
+                handleCameraUpdate( state );
+                handleResize( output_buffer, state.params );
+
+                // run animation frames
+                for( unsigned int i = 0; i < static_cast<unsigned int>( num_frames ); ++i )
                 {
-                    addFume( state );
-                    state.time_last_fume = state.time;
+                    state.time_last_frame = state.time;
+                    state.time            = i * ( animation_time / ( num_frames - 1 ) );
+
+                    if( state.time - state.time_last_fume > 0.4f )
+                    {
+                        addFume( state );
+                        state.time_last_fume = state.time;
+                    }
+
+                    updateMeshAccel( state );
+                    launchSubframe( output_buffer, state );
                 }
 
-                updateMeshAccel( state );
-                launchSubframe( output_buffer, state );
+                sutil::ImageBuffer buffer;
+                buffer.data         = output_buffer.getHostPointer();
+                buffer.width        = output_buffer.width();
+                buffer.height       = output_buffer.height();
+                buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
+
+                sutil::saveImage( outfile.c_str(), buffer, false );
             }
-
-            sutil::ImageBuffer buffer;
-            buffer.data = output_buffer.getHostPointer();
-            buffer.width = output_buffer.width();
-            buffer.height = output_buffer.height();
-            buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
-
-            sutil::saveImage( outfile.c_str(), buffer, false );
 
             if( output_buffer_type == sutil::CUDAOutputBufferType::GL_INTEROP )
             {

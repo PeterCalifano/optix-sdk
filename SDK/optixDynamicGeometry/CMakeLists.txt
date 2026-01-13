@@ -27,7 +27,7 @@
 #
 
 # Tag the following kernel to be compiled to OBJ intead of PTX (which is the default for
-# OPTIX_add_sample_executable). Do must be called before OPTIX_add_sample_executable.
+# OPTIX_add_sample_executable). Must be called before OPTIX_add_sample_executable.
 set_source_files_properties(
   ${CMAKE_CURRENT_SOURCE_DIR}/vertices.cu
   PROPERTIES CUDA_SOURCE_PROPERTY_FORMAT OBJ

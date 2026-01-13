@@ -483,18 +483,22 @@ int main( int argc, char* argv[] )
 				sutil::initGL();
 			}
 
-			sutil::CUDAOutputBuffer<uchar4> output_buffer(output_buffer_type, width, height);
-			handleCameraUpdate( params);
-			handleResize( output_buffer );
-			launchSubframe( output_buffer, scene );
+            {
+                // this scope is for output_buffer, to ensure the destructor is called bfore glfwTerminate()
 
-			sutil::ImageBuffer buffer;
-			buffer.data = output_buffer.getHostPointer();
-			buffer.width = output_buffer.width();
-			buffer.height = output_buffer.height();
-			buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
+                sutil::CUDAOutputBuffer<uchar4> output_buffer( output_buffer_type, width, height );
+                handleCameraUpdate( params );
+                handleResize( output_buffer );
+                launchSubframe( output_buffer, scene );
 
-			sutil::saveImage(outfile.c_str(), buffer, false);
+                sutil::ImageBuffer buffer;
+                buffer.data         = output_buffer.getHostPointer();
+                buffer.width        = output_buffer.width();
+                buffer.height       = output_buffer.height();
+                buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
+
+                sutil::saveImage( outfile.c_str(), buffer, false );
+            }
 
             if( output_buffer_type == sutil::CUDAOutputBufferType::GL_INTEROP )
             {

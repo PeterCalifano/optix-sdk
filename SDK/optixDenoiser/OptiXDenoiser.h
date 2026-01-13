@@ -88,12 +88,13 @@ class OptiXDenoiser
 public:
     struct Data
     {
-        uint32_t  width    = 0;
-        uint32_t  height   = 0;
-        float*    color    = nullptr;
-        float*    albedo   = nullptr;
-        float*    normal   = nullptr;
-        float*    flow     = nullptr;
+        uint32_t  width     = 0;
+        uint32_t  height    = 0;
+        float*    color     = nullptr;
+        float*    albedo    = nullptr;
+        float*    normal    = nullptr;
+        float*    flow      = nullptr;
+        float*    flowtrust = nullptr;
         std::vector< float* > aovs;     // input AOVs
         std::vector< float* > outputs;  // denoised beauty, followed by denoised AOVs
     };
@@ -110,7 +111,8 @@ public:
                bool         temporalMode  = false,
                bool         applyFlowMode = false,
                bool         upscale2xMode = false,
-               unsigned int alphaMode     = 0 );
+               unsigned int alphaMode     = 0,
+               bool         specularMode  = false );
 
     // Execute the denoiser. In interactive sessions, this would be done once per frame/subframe.
     void exec();
@@ -163,7 +165,8 @@ void OptiXDenoiser::init( const Data&  data,
                           bool         temporalMode,
                           bool         applyFlowMode,
                           bool         upscale2xMode,
-                          unsigned int alphaMode )
+                          unsigned int alphaMode,
+                          bool         specularMode )
 {
     SUTIL_ASSERT( data.color  );
     SUTIL_ASSERT( data.outputs.size() >= 1 );
@@ -319,6 +322,14 @@ void OptiXDenoiser::init( const Data&  data,
 
             m_guideLayer.outputInternalGuideLayer = m_guideLayer.previousOutputInternalGuideLayer;
             m_guideLayer.outputInternalGuideLayer.data = (CUdeviceptr)internalMemOut;
+
+            if( data.flowtrust )
+            {
+                void* ftmem;
+                CUDA_CHECK( cudaMalloc( &ftmem, data.width * data.height * sizeof( float4 ) ) );
+                CUDA_CHECK( cudaMemset( ftmem, 0, data.width * data.height * sizeof( float4 ) ) );
+                m_guideLayer.flowTrustworthiness = {(CUdeviceptr)ftmem, data.width, data.height, (unsigned int)(data.width * sizeof( float4 )), (unsigned int)sizeof( float4 ), OPTIX_PIXEL_FORMAT_FLOAT4 };
+            }
         }
         m_layers.push_back( layer );
 
@@ -329,6 +340,7 @@ void OptiXDenoiser::init( const Data&  data,
 
         for( size_t i=0; i < data.aovs.size(); i++ )
         {
+            layer = {};
             layer.input  = createOptixImage2D( data.width, data.height, data.aovs[i] );
             layer.output = createOptixImage2D( outScale * data.width, outScale * data.height );
             if( m_temporalMode )
@@ -337,6 +349,8 @@ void OptiXDenoiser::init( const Data&  data,
                 layer.previousOutput = createOptixImage2D( outScale * data.width, outScale * data.height );
                 if( !upscale2xMode )
                     copyOptixImage2D( layer.previousOutput, layer.input );
+                if( specularMode )
+                    layer.type = OPTIX_DENOISER_AOV_TYPE_SPECULAR;
             }
             m_layers.push_back( layer );
         }
@@ -387,8 +401,11 @@ void OptiXDenoiser::update( const Data& data )
     if( data.normal )
         CUDA_CHECK( cudaMemcpy( (void*)m_guideLayer.normal.data, data.normal, data.width * data.height * sizeof( float4 ), cudaMemcpyHostToDevice ) );
 
+    if( data.flowtrust )
+        CUDA_CHECK( cudaMemcpy( (void*)m_guideLayer.flowTrustworthiness.data, data.flowtrust, data.width * data.height * sizeof( float4 ), cudaMemcpyHostToDevice ) );
+
     for( size_t i=0; i < data.aovs.size(); i++ )
-        CUDA_CHECK( cudaMemcpy( (void*)m_layers[i].input.data, data.aovs[i], data.width * data.height * sizeof( float4 ), cudaMemcpyHostToDevice ) );
+        CUDA_CHECK( cudaMemcpy( (void*)m_layers[1+i].input.data, data.aovs[i], data.width * data.height * sizeof( float4 ), cudaMemcpyHostToDevice ) );
 
     if( m_temporalMode )
     {
@@ -550,16 +567,17 @@ void OptiXDenoiser::applyFlow()
     if( m_layers.size() == 0 )
         return;
 
-    const uint64_t frame_byte_size = m_layers[0].output.width*m_layers[0].output.height*sizeof(float4);
+    const uint64_t frame_size = m_layers[0].output.width * m_layers[0].output.height;
+    const uint64_t frame_byte_size = frame_size * sizeof(float4);
 
     const float4* device_flow = (float4*)m_guideLayer.flow.data;
     if( !device_flow )
         return;
-    float4* flow = new float4[ frame_byte_size ];
+    float4* flow = new float4[ frame_size ];
     CUDA_CHECK( cudaMemcpy( flow, device_flow, frame_byte_size, cudaMemcpyDeviceToHost ) );
 
-    float4* image = new float4[ frame_byte_size ];
-    float4* result = new float4[frame_byte_size];
+    float4* image = new float4[ frame_size ];
+    float4* result = new float4[frame_size];
 
     for( size_t i=0; i < m_layers.size(); i++ )
     {
@@ -621,6 +639,7 @@ void OptiXDenoiser::finish()
     CUDA_CHECK( cudaFree(reinterpret_cast<void*>(m_guideLayer.albedo.data)) );
     CUDA_CHECK( cudaFree(reinterpret_cast<void*>(m_guideLayer.normal.data)) );
     CUDA_CHECK( cudaFree(reinterpret_cast<void*>(m_guideLayer.flow.data)) );
+    CUDA_CHECK( cudaFree(reinterpret_cast<void*>(m_guideLayer.flowTrustworthiness.data)) );
     CUDA_CHECK( cudaFree(reinterpret_cast<void*>(m_guideLayer.previousOutputInternalGuideLayer.data)) );
     CUDA_CHECK( cudaFree(reinterpret_cast<void*>(m_guideLayer.outputInternalGuideLayer.data)) );
     for( size_t i=0; i < m_layers.size(); i++ )

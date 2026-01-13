@@ -101,6 +101,11 @@ static OptixImage2D createOptixImage2D( unsigned int width, unsigned int height,
     return oi;
 }
 
+static void destroyOptixImage2D( OptixImage2D& image )
+{
+    CUDA_CHECK( cudaFree( reinterpret_cast<void*> ( image.data ) ) );
+}
+
 // Copy host memory to device memory
 
 static void initOptixImage2D( OptixImage2D& result, const float* hmem )
@@ -259,6 +264,10 @@ int32_t main( int32_t argc, char** argv )
             }
         }
         CUDA_CHECK( (cudaError_t)cuMemFreeHost( hflow ) );
+
+        destroyOptixImage2D( images[0] );
+        destroyOptixImage2D( images[1] );
+        destroyOptixImage2D( flow );
 
         oflow.destroy();
     }

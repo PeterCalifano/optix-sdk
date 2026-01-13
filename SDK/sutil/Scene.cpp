@@ -31,6 +31,7 @@
 #include <optix_stubs.h>
 
 #include <cuda/whitted.h>
+#include <sutil/CuBuffer.h>
 #include <sutil/Exception.h>
 #include <sutil/Matrix.h>
 #include <sutil/Quaternion.h>
@@ -250,9 +251,9 @@ void parseTextureInfo( const Scene& scene, const TextureInfo &inTex, MaterialDat
         outTex.texcoord_scale = scale;
         outTex.texcoord_rotation = make_float2( ( float )sinf( rotation ), ( float )cosf( rotation ) );
 
-        if( outTex.texcoord >= ( int )GeometryData::num_textcoords )
+        if( outTex.texcoord >= ( int )GeometryData::num_texcoords )
         {
-            std::cerr << "\tMaximum supported textcoords exceded.\n";
+            std::cerr << "\tMaximum supported texcoords exceded.\n";
             outTex.texcoord = 0;
         }
     }
@@ -499,7 +500,7 @@ void loadScene( const std::string& filename, Scene& scene )
                 mesh->normals.push_back( bufferViewFromGLTF<float3>( model, scene, -1 ) );
             }
 
-            for( size_t j = 0; j < GeometryData::num_textcoords; ++j )
+            for( size_t j = 0; j < GeometryData::num_texcoords; ++j )
             {
                 char texcoord_str[128];
                 snprintf( texcoord_str, 128, "TEXCOORD_%i", (int)j );
@@ -680,7 +681,7 @@ void Scene::finalize()
     createSBT();
 
     m_scene_aabb.invalidate();
-    for( const auto instance: m_instances )
+    for( const auto& instance : m_instances )
         m_scene_aabb.include( instance->world_aabb );
 
     if( !m_cameras.empty() )
@@ -809,73 +810,6 @@ void Scene::createContext()
     OPTIX_CHECK( optixDeviceContextCreate( cuCtx, &options, &m_context ) );
 }
 
-namespace {
-template <typename T = char>
-class CuBuffer
-{
-  public:
-    CuBuffer( size_t count = 0 ) { alloc( count ); }
-    ~CuBuffer() { free(); }
-    void alloc( size_t count )
-    {
-        free();
-        m_allocCount = m_count = count;
-        if( m_count )
-        {
-            CUDA_CHECK( cudaMalloc( &m_ptr, m_allocCount * sizeof( T ) ) );
-        }
-    }
-    void allocIfRequired( size_t count )
-    {
-        if( count <= m_allocCount )
-        {
-            m_count = count;
-            return;
-        }
-        alloc( count );
-    }
-    CUdeviceptr get() const { return reinterpret_cast<CUdeviceptr>( m_ptr ); }
-    CUdeviceptr get( size_t index ) const { return reinterpret_cast<CUdeviceptr>( m_ptr + index ); }
-    void        free()
-    {
-        m_count      = 0;
-        m_allocCount = 0;
-        CUDA_CHECK( cudaFree( m_ptr ) );
-        m_ptr = nullptr;
-    }
-    CUdeviceptr release()
-    {
-        m_count             = 0;
-        m_allocCount        = 0;
-        CUdeviceptr current = reinterpret_cast<CUdeviceptr>( m_ptr );
-        m_ptr               = nullptr;
-        return current;
-    }
-    void upload( const T* data )
-    {
-        CUDA_CHECK( cudaMemcpy( m_ptr, data, m_count * sizeof( T ), cudaMemcpyHostToDevice ) );
-    }
-
-    void download( T* data ) const
-    {
-        CUDA_CHECK( cudaMemcpy( data, m_ptr, m_count * sizeof( T ), cudaMemcpyDeviceToHost ) );
-    }
-    void downloadSub( size_t count, size_t offset, T* data ) const
-    {
-        assert( count + offset <= m_allocCount );
-        CUDA_CHECK( cudaMemcpy( data, m_ptr + offset, count * sizeof( T ), cudaMemcpyDeviceToHost ) );
-    }
-    size_t count() const { return m_count; }
-    size_t reservedCount() const { return m_allocCount; }
-    size_t byteSize() const { return m_allocCount * sizeof( T ); }
-
-  private:
-    size_t m_count      = 0;
-    size_t m_allocCount = 0;
-    T*     m_ptr        = nullptr;
-};
-}  // namespace
-
 void Scene::buildMeshAccels()
 {
     // Problem:
@@ -978,7 +912,7 @@ void Scene::buildMeshAccels()
             mesh->normals.size() == num_subMeshes &&
             mesh->colors.size() == num_subMeshes );
 
-        for( size_t j = 0; j < GeometryData::num_textcoords; ++j )
+        for( size_t j = 0; j < GeometryData::num_texcoords; ++j )
             assert( mesh->texcoords[j].size() == num_subMeshes );
 
         for(size_t j = 0; j < num_subMeshes; ++j)
@@ -1086,29 +1020,29 @@ void Scene::buildMeshAccels()
 
         // trash existing buffer if it is more than 10% bigger than what we need
         // if it is roughly the same, we keep it
-        if( d_temp_output.byteSize() > batchBuildOutputRequirement * 1.1 )
+        if( d_temp_output.capacityByteSize() > batchBuildOutputRequirement * 1.1 )
             d_temp_output.free();
         d_temp_output.allocIfRequired( batchBuildOutputRequirement );
 
         // this buffer is assumed to be very small
         // trash d_temp_compactedSizes if it is at least 20MB in size and at least double the size than required for the next run
-        if( d_temp_compactedSizes.reservedCount() > batchNGASes * 2 && d_temp_compactedSizes.byteSize() > 20 * 1024 * 1024 )
+        if( d_temp_compactedSizes.capacity() > batchNGASes * 2 && d_temp_compactedSizes.capacityByteSize() > 20 * 1024 * 1024 )
             d_temp_compactedSizes.free();
         d_temp_compactedSizes.allocIfRequired( batchNGASes );
 
         auto it = gases.rbegin();
         for( size_t i = 0, tempOutputAlignmentOffset = 0; i < batchNGASes; ++i )
         {
-            emitProperty.result = d_temp_compactedSizes.get( i );
+            emitProperty.result = d_temp_compactedSizes.getCU( i );
             GASInfo& info = it->second;
 
             OPTIX_CHECK( optixAccelBuild( m_context, 0,   // CUDA stream
                                             &accel_options,
                                             info.buildInputs.data(),
                                             static_cast<unsigned int>( info.buildInputs.size() ),
-                                            d_temp.get(),
+                                            d_temp.getCU(),
                                             d_temp.byteSize(),
-                                            d_temp_output.get( tempOutputAlignmentOffset ),
+                                            d_temp_output.getCU( tempOutputAlignmentOffset ),
                                             info.gas_buffer_sizes.outputSizeInBytes,
                                             &info.mesh->gas_handle,
                                             &emitProperty,  // emitted property list
@@ -1120,7 +1054,7 @@ void Scene::buildMeshAccels()
         }
 
         // trash d_temp if it is at least 20MB in size
-        if( d_temp.byteSize() > 20 * 1024 * 1024 )
+        if( d_temp.capacityByteSize() > 20 * 1024 * 1024 )
             d_temp.free();
 
         // download all compacted sizes to allocate final output buffers for these GASes
@@ -1176,7 +1110,7 @@ void Scene::buildMeshAccels()
             for( size_t i = 0, tempOutputAlignmentOffset = 0; i < batchNGASes; ++i )
             {
                 GASInfo& info = it->second;
-                info.mesh->d_gas_output = d_temp_output.get( tempOutputAlignmentOffset );
+                info.mesh->d_gas_output = d_temp_output.getCU( tempOutputAlignmentOffset );
                 batchCompactedSize += h_compactedSizes[i];
                 totalTempOutputProcessedSize += info.gas_buffer_sizes.outputSizeInBytes;
 
@@ -1294,7 +1228,7 @@ void Scene::createPTXModule()
     const char* input     = sutil::getInputData( nullptr, nullptr, "whitted.cu", inputSize );
 
     m_ptx_module  = {};
-    OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
+    OPTIX_CHECK_LOG( optixModuleCreate(
                 m_context,
                 &module_compile_options,
                 &m_pipeline_compile_options,
@@ -1413,8 +1347,7 @@ void Scene::createPipeline()
     };
 
     OptixPipelineLinkOptions pipeline_link_options = {};
-    pipeline_link_options.maxTraceDepth          = whitted::MAX_TRACE_DEPTH;
-    pipeline_link_options.debugLevel             = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+    pipeline_link_options.maxTraceDepth            = whitted::MAX_TRACE_DEPTH;
 
     OPTIX_CHECK_LOG( optixPipelineCreate(
                 m_context,
@@ -1467,7 +1400,7 @@ void Scene::createSBT()
 
     {
         std::vector<HitGroupRecord> hitgroup_records;
-        for( const auto instance : m_instances )
+        for( const auto& instance : m_instances )
         {
             const auto mesh = m_meshes[instance->mesh_idx];
             for( size_t i = 0; i < mesh->material_idx.size(); ++i )
@@ -1477,7 +1410,7 @@ void Scene::createSBT()
                 GeometryData::TriangleMesh triangle_mesh = {};
                 triangle_mesh.normals   = mesh->normals[i];
                 triangle_mesh.positions = mesh->positions[i];
-                for( size_t j = 0; j < GeometryData::num_textcoords; ++j )
+                for( size_t j = 0; j < GeometryData::num_texcoords; ++j )
                     triangle_mesh.texcoords[j] = mesh->texcoords[j][i];
                 triangle_mesh.colors    = mesh->colors[i];
                 triangle_mesh.indices   = mesh->indices[i];

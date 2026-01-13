@@ -373,21 +373,21 @@ void createModules( CallableProgramsState& state )
     {
         size_t      inputSize = 0;
         const char* input     = sutil::getInputData( nullptr, nullptr, "whitted.cu", inputSize );
-        OPTIX_CHECK_LOG( optixModuleCreateFromPTX( state.context, &module_compile_options, &state.pipeline_compile_options,
+        OPTIX_CHECK_LOG( optixModuleCreate( state.context, &module_compile_options, &state.pipeline_compile_options,
                                                    input, inputSize, LOG, &LOG_SIZE, &state.camera_module ) );
     }
 
     {
         size_t      inputSize = 0;
         const char* input     = sutil::getInputData( nullptr, nullptr, "sphere.cu", inputSize );
-        OPTIX_CHECK_LOG( optixModuleCreateFromPTX( state.context, &module_compile_options, &state.pipeline_compile_options,
+        OPTIX_CHECK_LOG( optixModuleCreate( state.context, &module_compile_options, &state.pipeline_compile_options,
                                                    input, inputSize, LOG, &LOG_SIZE, &state.geometry_module ) );
     }
 
     {
         size_t      inputSize = 0;
         const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixCallablePrograms.cu", inputSize );
-        OPTIX_CHECK_LOG( optixModuleCreateFromPTX( state.context, &module_compile_options, &state.pipeline_compile_options,
+        OPTIX_CHECK_LOG( optixModuleCreate( state.context, &module_compile_options, &state.pipeline_compile_options,
                                                    input, inputSize, LOG, &LOG_SIZE, &state.shading_module ) );
     }
 }
@@ -492,10 +492,8 @@ void createPipeline( CallableProgramsState& state )
     createMissProgram( state, program_groups );
 
     // Link program groups to pipeline
-    OptixPipelineLinkOptions pipeline_link_options = {
-        max_trace_depth,                // maxTraceDepth
-        OPTIX_COMPILE_DEBUG_LEVEL_FULL  // debugLevel
-    };
+    OptixPipelineLinkOptions pipeline_link_options = {};
+    pipeline_link_options.maxTraceDepth            = max_trace_depth;
     OPTIX_CHECK_LOG( optixPipelineCreate( state.context, &state.pipeline_compile_options, &pipeline_link_options,
                                          program_groups.data(), static_cast<unsigned int>( program_groups.size() ),
                                          LOG, &LOG_SIZE, &state.pipeline ) );
@@ -503,7 +501,7 @@ void createPipeline( CallableProgramsState& state )
     OptixStackSizes stack_sizes = {};
     for( auto& prog_group : program_groups )
     {
-        OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes ) );
+        OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes, state.pipeline ) );
     }
 
     uint32_t direct_callable_stack_size_from_traversal;
@@ -852,19 +850,23 @@ int main( int argc, char* argv[] )
                 sutil::initGL();
             }
 
-            sutil::CUDAOutputBuffer<uchar4> output_buffer( output_buffer_type, state.params.width, state.params.height );
+            {
+                // this scope is for output_buffer, to ensure the destructor is called bfore glfwTerminate()
 
-            handleCameraUpdate( state );
-            handleResize( output_buffer, state.params );
-            handleShading( state );
-            launchSubframe( output_buffer, state );
+                sutil::CUDAOutputBuffer<uchar4> output_buffer( output_buffer_type, state.params.width, state.params.height );
 
-            sutil::ImageBuffer buffer;
-            buffer.data         = output_buffer.getHostPointer();
-            buffer.width        = output_buffer.width();
-            buffer.height       = output_buffer.height();
-            buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
-            sutil::saveImage( outfile.c_str(), buffer, false );
+                handleCameraUpdate( state );
+                handleResize( output_buffer, state.params );
+                handleShading( state );
+                launchSubframe( output_buffer, state );
+
+                sutil::ImageBuffer buffer;
+                buffer.data         = output_buffer.getHostPointer();
+                buffer.width        = output_buffer.width();
+                buffer.height       = output_buffer.height();
+                buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
+                sutil::saveImage( outfile.c_str(), buffer, false );
+            }
 
             if( output_buffer_type == sutil::CUDAOutputBufferType::GL_INTEROP )
             {

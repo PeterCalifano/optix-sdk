@@ -52,6 +52,9 @@ void printUsageAndExit( const std::string& argv0 )
               << "Options: -n | --normal <normal.exr>\n"
               << "         -a | --albedo <albedo.exr>\n"
               << "         -f | --flow   <flow.exr>\n"
+              << "         -A | --AOV    <aov.exr>\n"
+              << "         -S            <specular aov.exr>\n"
+              << "         -T            <flowTrustworthiness.exr>\n"
               << "         -o | --out    <out.exr> Defaults to 'denoised.exr'\n"
               << "         -F | --Frames <int-int> first-last frame number in sequence\n"
               << "         -e | --exposure <float> apply exposure on output images\n"
@@ -107,6 +110,7 @@ int32_t main( int32_t argc, char** argv )
     std::string              normal_filename;
     std::string              albedo_filename;
     std::string              flow_filename;
+    std::string              flowtrust_filename;
     std::string              output_filename = "denoised.exr";
     std::vector<std::string> aov_filenames;
     bool                     kpMode     = false;
@@ -116,6 +120,7 @@ int32_t main( int32_t argc, char** argv )
     unsigned int             tileWidth = 0, tileHeight = 0;
     bool                     upscale2x = false;
     unsigned int             alphaMode = 0;
+    bool                     specularMode = 0;
 
     for( int32_t i = 1; i < argc - 1; ++i )
     {
@@ -145,6 +150,12 @@ int32_t main( int32_t argc, char** argv )
                 printUsageAndExit( argv[0] );
             flow_filename = argv[++i];
         }
+        else if( arg == "-T" )
+        {
+            if( i == argc - 2 )
+                printUsageAndExit( argv[0] );
+            flowtrust_filename = argv[++i];
+        }
         else if( arg == "-o" || arg == "--out" )
         {
             if( i == argc - 2 )
@@ -163,6 +174,13 @@ int32_t main( int32_t argc, char** argv )
             if( i == argc - 2 )
                 printUsageAndExit( argv[0] );
             aov_filenames.push_back( std::string( argv[++i] ) );
+        }
+        else if( arg == "-S" )
+        {
+            if( i == argc - 2 )
+                printUsageAndExit( argv[0] );
+            aov_filenames.push_back( std::string( argv[++i] ) );
+            specularMode = true;
         }
         else if( arg == "-k" )
         {
@@ -206,10 +224,11 @@ int32_t main( int32_t argc, char** argv )
 
     bool temporalMode = bool( firstFrame != -1 );
 
-    sutil::ImageBuffer              color  = {};
-    sutil::ImageBuffer              normal = {};
-    sutil::ImageBuffer              albedo = {};
-    sutil::ImageBuffer              flow   = {};
+    sutil::ImageBuffer              color     = {};
+    sutil::ImageBuffer              normal    = {};
+    sutil::ImageBuffer              albedo    = {};
+    sutil::ImageBuffer              flow      = {};
+    sutil::ImageBuffer              flowtrust = {};
 
     unsigned int outScale = upscale2x ? 2 : 1;
 
@@ -273,6 +292,18 @@ int32_t main( int32_t argc, char** argv )
                 std::cout << "\tLoaded flow image " << frame_filename << std::endl;
             }
 
+            if( !flowtrust_filename.empty() )
+            {
+                if( !getFrameFilename( frame_filename, flowtrust_filename, frame ) )
+                {
+                    std::cout << "cannot open flowTrustworthiness file" << std::endl;
+                    exit( 0 );
+                }
+                // allocate four channels. only three channels used.
+                flowtrust = sutil::loadImage( frame_filename.c_str() );
+                std::cout << "\tLoaded flowTrustworthiness image " << frame_filename << std::endl;
+            }
+
             for( size_t i = 0; i < aov_filenames.size(); i++ )
             {
                 if( !getFrameFilename( frame_filename, aov_filenames[i], frame ) )
@@ -296,12 +327,13 @@ int32_t main( int32_t argc, char** argv )
                 SUTIL_ASSERT( aovs[i].pixel_format == sutil::FLOAT4 );
 
             OptiXDenoiser::Data data;
-            data.width  = color.width;
-            data.height = color.height;
-            data.color  = reinterpret_cast<float*>( color.data );
-            data.albedo = reinterpret_cast<float*>( albedo.data );
-            data.normal = reinterpret_cast<float*>( normal.data );
-            data.flow   = reinterpret_cast<float*>( flow.data );
+            data.width     = color.width;
+            data.height    = color.height;
+            data.color     = reinterpret_cast<float*>( color.data );
+            data.albedo    = reinterpret_cast<float*>( albedo.data );
+            data.normal    = reinterpret_cast<float*>( normal.data );
+            data.flow      = reinterpret_cast<float*>( flow.data );
+            data.flowtrust = reinterpret_cast<float*>( flowtrust.data );
 
             // set AOVs
             for( size_t i = 0; i < aovs.size(); i++ )
@@ -316,7 +348,7 @@ int32_t main( int32_t argc, char** argv )
             if( frame == firstFrame )
             {
                 const double t0 = sutil::currentTime();
-                denoiser.init( data, tileWidth, tileHeight, kpMode, temporalMode, applyFlow, upscale2x, alphaMode );
+                denoiser.init( data, tileWidth, tileHeight, kpMode, temporalMode, applyFlow, upscale2x, alphaMode, specularMode );
                 const double t1 = sutil::currentTime();
                 std::cout << "\tAPI Initialization        :" << std::fixed << std::setw( 8 ) << std::setprecision( 2 )
                           << ( t1 - t0 ) * 1000.0 << " ms" << std::endl;
@@ -342,10 +374,14 @@ int32_t main( int32_t argc, char** argv )
                           << ( t1 - t0 ) * 1000.0 << " ms" << std::endl;
             }
 
+            // AOVs are not written when speclarMode is set. A single specular AOV is expected in this mode,
+            // to keep the sample code simple.
+            size_t numOut = specularMode ? 1 : 1 + aovs.size();
+
             {
                 const double t0 = sutil::currentTime();
 
-                for( size_t i = 0; i < 1 + aovs.size(); i++ )
+                for( size_t i = 0; i < numOut; i++ )
                 {
                     sutil::ImageBuffer output_image;
                     output_image.width        = outScale * color.width;
@@ -385,6 +421,7 @@ int32_t main( int32_t argc, char** argv )
             albedo.destroy();
             normal.destroy();
             flow.destroy();
+            flowtrust.destroy();
             for( size_t i = 0; i < aovs.size(); i++ )
                 aovs[i].destroy();
             for( size_t i = 0; i < 1 + aovs.size(); i++ )

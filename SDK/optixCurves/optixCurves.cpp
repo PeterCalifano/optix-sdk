@@ -44,10 +44,10 @@
 
 #include <array>
 #include <cassert>
+#include <cmath>
 #include <iomanip>
 #include <iostream>
 #include <string>
-#include <cmath>
 
 #include <sutil/Camera.h>
 #include <sutil/Trackball.h>
@@ -64,11 +64,25 @@ typedef SbtRecord<RayGenData>   RayGenSbtRecord;
 typedef SbtRecord<MissData>     MissSbtRecord;
 typedef SbtRecord<HitGroupData> HitGroupSbtRecord;
 
-
-void configureCamera( sutil::Camera& cam, const uint32_t width, const uint32_t height )
+enum BasisType
 {
-    cam.setEye( {0.0f, 0.0f, 2.0f} );
-    cam.setLookat( {0.0f, 0.0f, 0.0f} );
+    BSPLINE,
+    BEZIER,
+    CATROM
+};
+
+void configureCamera( sutil::Camera& cam, const uint32_t width, const uint32_t height, int degree )
+{
+    if( degree < 3)
+    {
+        cam.setEye( {0.0f, 0.0f, 2.0f} );
+        cam.setLookat( {0.0f, 0.0f, 0.0f} );
+    }
+    else
+    {
+        cam.setEye( {0.0f, 0.0f, 3.0f} );
+        cam.setLookat( {0.0f, -0.3f, 0.0f} );
+    }
     cam.setUp( {0.0f, 1.0f, 3.0f} );
     cam.setFovY( 45.0f );
     cam.setAspectRatio( (float)width / (float)height );
@@ -84,16 +98,22 @@ static void context_log_cb( unsigned int level, const char* tag, const char* mes
 void printUsageAndExit( const char* argv0 )
 {
     std::cerr << "Usage  : " << argv0 << " [options]\n";
-    std::cerr << "Options: --file | -f <filename>      Specify file for image output\n";
-    std::cerr << "         --help | -h                 Print this usage message\n";
+    std::cerr << "Options: --file  | -f <filename>     Specify file for image output\n";
+    std::cerr << "         --help  | -h                Print this usage message\n";
     std::cerr << "         --dim=<width>x<height>      Set image dimensions; defaults to 512x384\n";
-    std::cerr << "         --deg  | -d <deg>           Specify polynomial degree of curve (default 3)\n";
+    std::cerr << "         --ribbon                    Render quadratic Bsplines as oriented flat ribbons.\n";
+    std::cerr << "                                     Either deriving the orientation from the curve axis shape, or\n";
+    std::cerr << "                                     from specified normals by using option --normals.\n";
+    std::cerr << "         --normals                   Use given normals as ribbon orientations.\n";
+    std::cerr << "         --deg   | -d <deg>          Specify polynomial degree of b-spline curve (default 3)\n";
     std::cerr << "                                     Valid options:\n";
     std::cerr << "                                       1 - Linear curve segments/round caps,\n";
-    std::cerr << "                                       2 - Quadratic b-spline/flat caps,\n";
-    std::cerr << "                                       3 - Cubic b-spline/flat. caps\n";
-    std::cerr << "         --rad  | -r <rad>           Specify radius of curve (default 0.4)\n";
-    std::cerr << "         --mot  | -m                 Render with motion blur\n";
+    std::cerr << "                                       2 - Quadratic b-spline/no caps,\n";
+    std::cerr << "                                       3 - Cubic b-spline/no caps\n";
+    std::cerr << "                                     For bezier and catmullrom the only option is 3.\n";
+    std::cerr << "         --basis | -b <basis type>   Set basis to bspline, bezier, catmullrom (default bspline);\n"; 
+    std::cerr << "         --rad   | -r <rad>          Specify radius of curve (default 0.4)\n";
+    std::cerr << "         --mot   | -m                Render with motion blur\n";
     exit( 1 );
 }
 
@@ -105,11 +125,14 @@ int main( int argc, char* argv[] )
     //
 
     std::string outfile;
-    int    width  = 1024;
-    int    height = 768;
-    int    degree = 3;
-    float  radius = 0.4f;
-    bool   motion_blur = false;
+    int       width  = 1024;
+    int       height = 768;
+    BasisType basis  = BSPLINE;
+    int       degree = 3;
+    float     radius = 0.4f;
+    bool      motion_blur = false;
+    bool      ribbon = false;
+    bool      ribbon_normals = false;
 
     for( int i = 1; i < argc; ++i )
     {
@@ -134,15 +157,60 @@ int main( int argc, char* argv[] )
             const std::string dims_arg = arg.substr( 6 );
             sutil::parseDimensions( dims_arg.c_str(), width, height );
         }
+        else if( arg == "--ribbon" )
+        {
+            ribbon = true;
+            basis  = BSPLINE;
+            degree = 2;
+        }
+        else if( arg == "--normals" )
+        {
+            if( ribbon )
+                ribbon_normals = true;
+            else
+                std::cerr << "Ignored normals, they can only be used as ribbon orientations.\n";
+        }
+        else if( arg == "-b" || arg == "--basis" )
+        {
+            if( i < argc - 1 )
+            {
+                std::string basis_name = argv[++i];
+                if( basis_name == "bezier" )
+                    basis = BEZIER;
+                else if( basis_name == "catmullrom" )
+                    basis = CATROM;
+                else
+                    basis = BSPLINE;
+                if( ribbon && basis != BSPLINE )
+                {
+                    std::cerr << "Ribbons are based on quadratic Bsplines. Switched basis to Bspline.\n";
+                    basis = BSPLINE;
+                }
+            }
+            else
+            {
+                printUsageAndExit( argv[0] );
+            }
+        }
         else if( arg == "-d" || arg == "--deg" )
         {
             if( i < argc - 1 )
             {
                 degree = atoi( argv[++i] );
+                if( basis == BEZIER || basis == CATROM )
+                {
+                    std::cerr << "Switched degree to 3 for Catmull-Rom or Bezier curves.\n";
+                    degree = 3;
+                }
                 if( 0 >= degree || degree > 3 )
                 {
                     std::cerr << "Curve degree must be in {1, 2, 3}.\n\n";
                     printUsageAndExit( argv[0] );
+                }
+                else if( ribbon && degree != 2 )
+                {
+                    std::cerr << "Ribbons are based on quadratic Bsplines. Switched degree to 2.\n";
+                    degree = 2;
                 }
             }
             else
@@ -210,7 +278,7 @@ int main( int argc, char* argv[] )
             OptixAccelBuildOptions accel_options  = {};
             accel_options.buildFlags              = buildFlags;
             accel_options.operation               = OPTIX_BUILD_OPERATION_BUILD;
-            if( motion_blur) {
+            if( motion_blur ) {
                 accel_options.motionOptions.numKeys   = NUM_KEYS;
                 accel_options.motionOptions.timeBegin = 0.0f;
                 accel_options.motionOptions.timeEnd   = 1.0f;
@@ -220,6 +288,7 @@ int main( int argc, char* argv[] )
             // Curve build input: simple list of three/four vertices
             std::vector<float3> vertices;
             std::vector<float>  widths;
+            std::vector<float3> normals;
             SUTIL_ASSERT( radius > 0.0 );
             for( int i = 0; i < NUM_KEYS; ++i ) {
                 // move the y-coordinates based on cosine
@@ -238,15 +307,25 @@ int main( int argc, char* argv[] )
                     widths.push_back( radius );
                     vertices.push_back( make_float3( 1.5f, -2.0f * c, 0.0f ) );
                     widths.push_back( .01f );
+                    if( ribbon_normals )
+                    {
+                        // For a ribbon segment two normals can be specified, the orientation along the
+                        // ribbon segment is computed as a linear interpolation between these two normals.
+                        // The two normals are stored inside the normal buffer at positions vert_idx and vert_idx+1,
+                        // where vert_idx is the index of the first vertex of the segment.
+                        normals.push_back( make_float3( -1.f, 0.f, 0.f ) );
+                        normals.push_back( make_float3( 0.0f, 0.0f, 1.f ) );
+                        normals.push_back( make_float3( 0.f, 0.f, 0.f ) ); // dummy
+                    }
                 } break;
                 case 3: {
-                    vertices.push_back( make_float3( -1.5f, -3.5f * c, 0.0f ) );
+                    vertices.push_back( make_float3( -1.0f, -1.5f * c, 0.0f ) );
                     widths.push_back( .01f );
-                    vertices.push_back( make_float3( -1.0f, 0.5f * c, 0.0f ) );
+                    vertices.push_back( make_float3( -1.0f, 0.2f * c, 0.0f ) );
                     widths.push_back( radius );
-                    vertices.push_back( make_float3( 1.0f, 0.5f * c, 0.0f ) );
+                    vertices.push_back( make_float3( 1.0f, 0.2f * c, 0.0f ) );
                     widths.push_back( radius );
-                    vertices.push_back( make_float3( 1.5f, -3.5f * c, 0.0f ) );
+                    vertices.push_back( make_float3( 1.0f, -1.5f * c, 0.0f ) );
                     widths.push_back( .01f );
                 } break;
                 default:
@@ -264,11 +343,22 @@ int main( int argc, char* argv[] )
             CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_widths ), widthsSize ) );
             CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>( d_widths ), widths.data(), widthsSize, cudaMemcpyHostToDevice ) );
 
+            CUdeviceptr d_normals = 0;
+            if( ribbon_normals )
+            {
+                const size_t normals_size = sizeof( float3 ) * normals.size();
+                CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>(&d_normals), normals_size ) );
+                CUDA_CHECK( cudaMemcpy( reinterpret_cast<void*>(d_normals), normals.data(), normals_size, cudaMemcpyHostToDevice ) );
+            }
+
             CUdeviceptr vertexBufferPointers[NUM_KEYS];
             CUdeviceptr widthBufferPointers[NUM_KEYS];
+            CUdeviceptr normalBufferPointers[NUM_KEYS];
             for( int i = 0; i < NUM_KEYS; ++i ) {
                 vertexBufferPointers[i] = d_vertices + i * (degree + 1) * sizeof(float3);
                 widthBufferPointers[i] = d_widths + i * (degree + 1) * sizeof(float);
+                if( ribbon_normals )
+                    normalBufferPointers[i] = d_normals + i * (degree + 1) * sizeof( float3 );
             }
 
             // Curve build intput: with a single segment the index array
@@ -289,10 +379,18 @@ int main( int argc, char* argv[] )
                 curve_input.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_LINEAR;
                 break;
             case 2:
-                curve_input.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_QUADRATIC_BSPLINE;
+                if( ribbon )
+                    curve_input.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_FLAT_QUADRATIC_BSPLINE;
+                else
+                    curve_input.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_QUADRATIC_BSPLINE;
                 break;
             case 3:
-                curve_input.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BSPLINE;
+                if( basis == BEZIER )
+                    curve_input.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BEZIER;
+                else if( basis == CATROM )
+                    curve_input.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_CATMULLROM;
+                else
+                    curve_input.curveArray.curveType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BSPLINE;
                 break;
             }
 
@@ -302,8 +400,8 @@ int main( int argc, char* argv[] )
             curve_input.curveArray.vertexStrideInBytes  = sizeof( float3 );
             curve_input.curveArray.widthBuffers         = widthBufferPointers;
             curve_input.curveArray.widthStrideInBytes   = sizeof( float );
-            curve_input.curveArray.normalBuffers        = 0;
-            curve_input.curveArray.normalStrideInBytes  = 0;
+            curve_input.curveArray.normalBuffers        = ribbon_normals ? normalBufferPointers : 0;
+            curve_input.curveArray.normalStrideInBytes  = ribbon_normals ? sizeof( float3 ) : 0;
             curve_input.curveArray.indexBuffer          = d_segmentIndices;
             curve_input.curveArray.indexStrideInBytes   = sizeof( int );
             curve_input.curveArray.flag                 = OPTIX_GEOMETRY_FLAG_NONE;
@@ -331,8 +429,9 @@ int main( int argc, char* argv[] )
             CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_temp_buffer_gas ) ) );
             CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_vertices ) ) );
             CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_widths ) ) );
+            if( ribbon_normals )
+                CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_normals ) ) );
             CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_segmentIndices ) ) );
-
         }
 
         //
@@ -365,16 +464,24 @@ int main( int argc, char* argv[] )
                     pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_LINEAR;
                     break;
                 case 2:
-                    pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_QUADRATIC_BSPLINE;
+                    if( ribbon )
+                        pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_FLAT_QUADRATIC_BSPLINE;
+                    else
+                        pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_QUADRATIC_BSPLINE;
                     break;
                 case 3:
-                    pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CUBIC_BSPLINE;
+                    if( basis == BEZIER )
+                        pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CUBIC_BEZIER;
+                    else if( basis == CATROM )
+                        pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CATMULLROM;
+                    else
+                        pipeline_compile_options.usesPrimitiveTypeFlags = OPTIX_PRIMITIVE_TYPE_FLAGS_ROUND_CUBIC_BSPLINE;
                     break;
             }
             size_t      inputSize  = 0;
             const char* input      = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixCurves.cu", inputSize );
-            OPTIX_CHECK_LOG( optixModuleCreateFromPTX( context, &module_compile_options, &pipeline_compile_options,
-                                                       input, inputSize, LOG, &LOG_SIZE, &shading_module ) );
+            OPTIX_CHECK_LOG( optixModuleCreate( context, &module_compile_options, &pipeline_compile_options, input,
+                                                inputSize, LOG, &LOG_SIZE, &shading_module ) );
 
             OptixBuiltinISOptions builtinISOptions = {};
             switch( degree )
@@ -383,10 +490,18 @@ int main( int argc, char* argv[] )
                     builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_LINEAR;
                     break;
                 case 2:
-                    builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_QUADRATIC_BSPLINE;
+                    if( ribbon )
+                        builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_FLAT_QUADRATIC_BSPLINE;
+                    else
+                        builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_QUADRATIC_BSPLINE;
                     break;
                 case 3:
-                    builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BSPLINE;
+                    if( basis == BEZIER )
+                        builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BEZIER;
+                    else if( basis == CATROM )
+                        builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_CATMULLROM;
+                    else
+                        builtinISOptions.builtinISModuleType = OPTIX_PRIMITIVE_TYPE_ROUND_CUBIC_BSPLINE;
                     break;
             }
             builtinISOptions.usesMotionBlur = motion_blur;  // enable motion-blur for built-in intersector
@@ -448,7 +563,6 @@ int main( int argc, char* argv[] )
 
             OptixPipelineLinkOptions pipeline_link_options = {};
             pipeline_link_options.maxTraceDepth            = max_trace_depth;
-            pipeline_link_options.debugLevel               = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
             OPTIX_CHECK_LOG( optixPipelineCreate( context, &pipeline_compile_options, &pipeline_link_options,
                                                   program_groups, sizeof( program_groups ) / sizeof( program_groups[0] ),
                                                   LOG, &LOG_SIZE, &pipeline ) );
@@ -456,7 +570,7 @@ int main( int argc, char* argv[] )
             OptixStackSizes stack_sizes = {};
             for( auto& prog_group : program_groups )
             {
-                OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes ) );
+                OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes, pipeline ) );
             }
 
             uint32_t direct_callable_stack_size_from_traversal;
@@ -519,7 +633,7 @@ int main( int argc, char* argv[] )
             CUDA_CHECK( cudaStreamCreate( &stream ) );
 
             sutil::Camera cam;
-            configureCamera( cam, width, height );
+            configureCamera( cam, width, height, degree );
 
             Params params;
             params.image        = output_buffer.map();

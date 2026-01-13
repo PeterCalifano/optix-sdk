@@ -375,8 +375,8 @@ void createModule( SampleState& state )
     size_t      inputSize = 0;
     const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixDynamicMaterials.cu", inputSize );
 
-    OPTIX_CHECK_LOG( optixModuleCreateFromPTX( state.context, &module_compile_options, &state.pipeline_compile_options,
-                                               input, inputSize, LOG, &LOG_SIZE, &state.module ) );
+    OPTIX_CHECK_LOG( optixModuleCreate( state.context, &module_compile_options, &state.pipeline_compile_options, input,
+                                        inputSize, LOG, &LOG_SIZE, &state.module ) );
 }
 
 
@@ -439,9 +439,8 @@ void createPipeline( SampleState& state )
     for( auto g : state.hitgroup_prog_groups )
         program_groups.push_back( g );
 
-    OptixPipelineLinkOptions pipeline_link_options;
-    pipeline_link_options.maxTraceDepth          = max_trace_depth;
-    pipeline_link_options.debugLevel             = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
+    OptixPipelineLinkOptions pipeline_link_options = {};
+    pipeline_link_options.maxTraceDepth            = max_trace_depth;
 
     OPTIX_CHECK_LOG( optixPipelineCreate( state.context, &state.pipeline_compile_options, &pipeline_link_options,
                                           &program_groups[0], static_cast<unsigned int>( program_groups.size() ), LOG,
@@ -450,7 +449,7 @@ void createPipeline( SampleState& state )
     OptixStackSizes stack_sizes = {};
     for( auto& prog_group : program_groups )
     {
-        OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes ) );
+        OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes, state.pipeline ) );
     }
 
     uint32_t direct_callable_stack_size_from_traversal;
@@ -786,51 +785,56 @@ int main( int argc, char* argv[] )
                 sutil::initGL();
             }
 
-            sutil::CUDAOutputBuffer<uchar4> output_buffer( output_buffer_type, state.params.image_width, state.params.image_height );
-            updateState( output_buffer, state );
-            launch( state, output_buffer );
+            {
+                // this scope is for output_buffer, to ensure the destructor is called bfore glfwTerminate()
 
-            // Original setup - R, G, B spheres from left to right.
-            printBuffer( output_buffer, getIndexedFilename( outfile ) );
+                sutil::CUDAOutputBuffer<uchar4> output_buffer( output_buffer_type, state.params.image_width,
+                                                               state.params.image_height );
+                updateState( output_buffer, state );
+                launch( state, output_buffer );
 
-            // Now add "dynamism" - first cycle through three colors of sphere 0
-            g_hasDataChanged = true;
-            updateState( output_buffer, state );
-            launch( state, output_buffer );
-            printBuffer( output_buffer, getIndexedFilename( outfile ) );
+                // Original setup - R, G, B spheres from left to right.
+                printBuffer( output_buffer, getIndexedFilename( outfile ) );
 
-            g_hasDataChanged = true;
-            updateState( output_buffer, state );
-            launch( state, output_buffer );
-            printBuffer( output_buffer, getIndexedFilename( outfile ) );
+                // Now add "dynamism" - first cycle through three colors of sphere 0
+                g_hasDataChanged = true;
+                updateState( output_buffer, state );
+                launch( state, output_buffer );
+                printBuffer( output_buffer, getIndexedFilename( outfile ) );
 
-            g_hasDataChanged = true;
-            updateState( output_buffer, state );
-            launch( state, output_buffer );
-            printBuffer( output_buffer, getIndexedFilename( outfile ) );
+                g_hasDataChanged = true;
+                updateState( output_buffer, state );
+                launch( state, output_buffer );
+                printBuffer( output_buffer, getIndexedFilename( outfile ) );
 
-            // Now cycle through three SBT entries for sphere 2
-            g_hasSbtChanged = true;
-            updateState( output_buffer, state );
-            launch( state, output_buffer );
-            printBuffer( output_buffer, getIndexedFilename( outfile ) );
+                g_hasDataChanged = true;
+                updateState( output_buffer, state );
+                launch( state, output_buffer );
+                printBuffer( output_buffer, getIndexedFilename( outfile ) );
 
-            g_hasSbtChanged = true;
-            updateState( output_buffer, state );
-            launch( state, output_buffer );
-            printBuffer( output_buffer, getIndexedFilename( outfile ) );
+                // Now cycle through three SBT entries for sphere 2
+                g_hasSbtChanged = true;
+                updateState( output_buffer, state );
+                launch( state, output_buffer );
+                printBuffer( output_buffer, getIndexedFilename( outfile ) );
 
-            // This should give us an image identical to the original one
-            g_hasSbtChanged = true;
-            updateState( output_buffer, state );
-            launch( state, output_buffer );
-            printBuffer( output_buffer, getIndexedFilename( outfile ) );
+                g_hasSbtChanged = true;
+                updateState( output_buffer, state );
+                launch( state, output_buffer );
+                printBuffer( output_buffer, getIndexedFilename( outfile ) );
 
-            // Toggle the material on the middle sphere
-            g_hasOffsetChanged = true;
-            updateState( output_buffer, state );
-            launch( state, output_buffer );
-            printBuffer( output_buffer, getIndexedFilename( outfile ) );
+                // This should give us an image identical to the original one
+                g_hasSbtChanged = true;
+                updateState( output_buffer, state );
+                launch( state, output_buffer );
+                printBuffer( output_buffer, getIndexedFilename( outfile ) );
+
+                // Toggle the material on the middle sphere
+                g_hasOffsetChanged = true;
+                updateState( output_buffer, state );
+                launch( state, output_buffer );
+                printBuffer( output_buffer, getIndexedFilename( outfile ) );
+            }
 
             if( output_buffer_type == sutil::CUDAOutputBufferType::GL_INTEROP )
             {

@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2019, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -26,21 +26,13 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-# Tag the following kernel to be compiled to OBJ intead of PTX (which is the default for
-# OPTIX_add_sample_executable). Must be called before OPTIX_add_sample_executable.
-set_source_files_properties(
-  ${CMAKE_CURRENT_SOURCE_DIR}/vertices.cu
-  PROPERTIES CUDA_SOURCE_PROPERTY_FORMAT OBJ
-)
-
-OPTIX_add_sample_executable( optixMotionGeometry target_name
-  optixMotionGeometry.cu
-  optixMotionGeometry.cpp
-  optixMotionGeometry.h
-  motionHelper.hpp
-  tiny_obj_loader.h
-  vertices.cu
-  # OPTIONS -rdc true
+OPTIX_add_sample_executable( optixRibbons target_name
+  optixRibbons.cpp
+  optixRibbons.h
+  optixRibbons.cu
+  OPTIONS -rdc true
   )
 
-target_link_libraries( ${target_name} ${CUDA_LIBRARIES} )
+target_link_libraries( ${target_name}
+  ${CUDA_LIBRARIES}
+  )

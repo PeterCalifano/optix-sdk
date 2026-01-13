@@ -542,6 +542,7 @@ void printUsageAndExit( const char* argv0 )
     std::cerr << "Usage  : " << argv0 << " [options]\n";
     std::cerr << "Options: --file | -f <filename>      File for image output\n";
     std::cerr << "         --launch-samples | -s       Number of samples per pixel per launch (default 16)\n";
+    std::cerr << "         --launch-frames             Number of frames accumulated when rendering to a file (option -f, default 16)\n";
     std::cerr << "         --no-gl-interop             Disable GL interop for display\n";
     std::cerr << "         --dim=<width>x<height>      Set image dimensions; defaults to 768x768\n";
     std::cerr << "         --help | -h                 Print this usage message\n";
@@ -1288,7 +1289,7 @@ void createModule( CutoutsState& state )
 
     size_t      inputSize = 0;
     const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixCutouts.cu", inputSize );
-    OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
+    OPTIX_CHECK_LOG( optixModuleCreate(
                 state.context,
                 &module_compile_options,
                 &state.pipeline_compile_options,
@@ -1299,7 +1300,7 @@ void createModule( CutoutsState& state )
                 ) );
 
     input = sutil::getInputData( nullptr, nullptr, "sphere.cu", inputSize );
-    OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
+    OPTIX_CHECK_LOG( optixModuleCreate(
                 state.context,
                 &module_compile_options,
                 &state.pipeline_compile_options,
@@ -1385,7 +1386,6 @@ void createPipeline( CutoutsState& state )
 
     OptixPipelineLinkOptions pipeline_link_options = {};
     pipeline_link_options.maxTraceDepth            = max_trace_depth;
-    pipeline_link_options.debugLevel               = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 
     OPTIX_CHECK_LOG( optixPipelineCreate( state.context,
                                           &state.pipeline_compile_options,
@@ -1398,7 +1398,7 @@ void createPipeline( CutoutsState& state )
     OptixStackSizes stack_sizes = {};
     for( auto& prog_group : program_groups )
     {
-        OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes ) );
+        OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes, state.pipeline ) );
     }
 
     uint32_t direct_callable_stack_size_from_traversal;
@@ -1542,6 +1542,7 @@ int main( int argc, char* argv[] )
     // Parse command line options
     //
     std::string outfile;
+    int32_t file_launch_frames = 16;
 
     for( int i = 1; i < argc; ++i )
     {
@@ -1574,6 +1575,12 @@ int main( int argc, char* argv[] )
             if( i >= argc - 1 )
                 printUsageAndExit( argv[0] );
             samples_per_launch = atoi( argv[++i] );
+        }
+        else if( arg == "--launch-frames" )
+        {
+            if( i >= argc - 1 )
+                printUsageAndExit( argv[0] );
+            file_launch_frames = max( 1, atoi( argv[++i] ) );
         }
         else
         {
@@ -1675,20 +1682,32 @@ int main( int argc, char* argv[] )
                 sutil::initGL();
             }
 
-            sutil::CUDAOutputBuffer<uchar4> output_buffer(output_buffer_type, state.params.width, state.params.height);
-            handleCameraUpdate(state.params);
-            handleResize(output_buffer, state.params);
-            launchSubframe(output_buffer, state);
+            {
+                // this scope is for output_buffer, to ensure the destructor is called bfore glfwTerminate()
 
-            sutil::ImageBuffer buffer;
-            buffer.data = output_buffer.getHostPointer();
-            buffer.width = output_buffer.width();
-            buffer.height = output_buffer.height();
-            buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
+                sutil::CUDAOutputBuffer<uchar4> output_buffer( output_buffer_type, state.params.width, state.params.height );
+                handleCameraUpdate( state.params );
+                handleResize( output_buffer, state.params );
+                for( int i = 0; i < file_launch_frames; ++i )
+                {
+                    updateState( output_buffer, state.params );
+                    launchSubframe( output_buffer, state );
+                    ++state.params.subframe_index;
+                }
 
-            sutil::saveImage(outfile.c_str(), buffer, false);
+                sutil::ImageBuffer buffer;
+                buffer.data         = output_buffer.getHostPointer();
+                buffer.width        = output_buffer.width();
+                buffer.height       = output_buffer.height();
+                buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
 
-            glfwTerminate();
+                sutil::saveImage( outfile.c_str(), buffer, false );
+            }
+
+            if (use_pbo)
+            {
+                glfwTerminate();
+            }
         }
 
         cleanupState( state );

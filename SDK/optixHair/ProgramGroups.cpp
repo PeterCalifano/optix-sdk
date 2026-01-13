@@ -95,22 +95,22 @@ HairProgramGroups::HairProgramGroups( const OptixDeviceContext context, OptixPip
 
     size_t      inputSize = 0;
     const char* input = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixHair.cu", inputSize );
-    OPTIX_CHECK_LOG( optixModuleCreateFromPTX( context,
-                                               &defaultOptions,
-                                               &pipeOptions,
-                                               input,
-                                               inputSize,
-                                               LOG, &LOG_SIZE,
-                                               &m_shadingModule ) );
+    OPTIX_CHECK_LOG( optixModuleCreate( context,
+                                        &defaultOptions,
+                                        &pipeOptions,
+                                        input,
+                                        inputSize,
+                                        LOG, &LOG_SIZE,
+                                        &m_shadingModule ) );
 
     input = sutil::getInputData( nullptr, nullptr, "whitted.cu", inputSize );
-    OPTIX_CHECK_LOG( optixModuleCreateFromPTX( context,
-                                               &defaultOptions,
-                                               &pipeOptions,
-                                               input,
-                                               inputSize,
-                                               LOG, &LOG_SIZE,
-                                               &m_whittedModule ) );
+    OPTIX_CHECK_LOG( optixModuleCreate( context,
+                                        &defaultOptions,
+                                        &pipeOptions,
+                                        input,
+                                        inputSize,
+                                        LOG, &LOG_SIZE,
+                                        &m_whittedModule ) );
 
     OptixBuiltinISOptions builtinISOptions = {};
     builtinISOptions.buildFlags = buildFlags;

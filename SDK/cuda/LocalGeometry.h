@@ -50,7 +50,7 @@ struct LocalGeometry
         float3 dndv;
         float3 dpdu;
         float3 dpdv;
-    } texcoord[GeometryData::num_textcoords];
+    } texcoord[GeometryData::num_texcoords];
 
     float4 color;
 };
@@ -129,7 +129,7 @@ __forceinline__ __device__ LocalGeometry getLocalGeometry( const GeometryData& g
             const float3 dn1 = N0 - N2;
             const float3 dn2 = N1 - N2;
 
-            for( size_t j = 0; j < GeometryData::num_textcoords; j++ )
+            for( size_t j = 0; j < GeometryData::num_texcoords; j++ )
             {
                 float2 UV0, UV1, UV2;
                 if( mesh_data.texcoords[j] )

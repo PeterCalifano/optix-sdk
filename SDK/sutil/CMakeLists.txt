@@ -43,6 +43,7 @@ set(sources
     Aabb.h
     Camera.cpp
     Camera.h
+    CuBuffer.h
     CUDAOutputBuffer.h
     Exception.h
     GLDisplay.cpp

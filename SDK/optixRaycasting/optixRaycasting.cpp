@@ -115,8 +115,8 @@ void createModule( RaycastingState& state )
 
     size_t      inputSize = 0;
     const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixRaycasting.cu", inputSize );
-    OPTIX_CHECK_LOG( optixModuleCreateFromPTX( state.context, &module_compile_options, &state.pipeline_compile_options,
-                                               input, inputSize, LOG, &LOG_SIZE, &state.ptx_module ) );
+    OPTIX_CHECK_LOG( optixModuleCreate( state.context, &module_compile_options, &state.pipeline_compile_options, input,
+                                        inputSize, LOG, &LOG_SIZE, &state.ptx_module ) );
 }
 
 void createProgramGroups( RaycastingState& state )
@@ -160,7 +160,6 @@ void createPipelines( RaycastingState& state )
 
     OptixPipelineLinkOptions pipeline_link_options = {};
     pipeline_link_options.maxTraceDepth            = max_trace_depth;
-    pipeline_link_options.debugLevel               = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 
     OPTIX_CHECK_LOG( optixPipelineCreate( state.context, &state.pipeline_compile_options, &pipeline_link_options,
                                           program_groups, sizeof( program_groups ) / sizeof( program_groups[0] ), LOG,
@@ -169,16 +168,18 @@ void createPipelines( RaycastingState& state )
                                           program_groups, sizeof( program_groups ) / sizeof( program_groups[0] ), LOG,
                                           &LOG_SIZE, &state.pipeline_2 ) );
 
-    OptixStackSizes stack_sizes = {};
+    OptixStackSizes stack_sizes_1 = {};
+    OptixStackSizes stack_sizes_2 = {};
     for( auto& prog_group : program_groups )
     {
-        OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes ) );
+        OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes_1, state.pipeline_1 ) );
+        OPTIX_CHECK( optixUtilAccumulateStackSizes( prog_group, &stack_sizes_2, state.pipeline_2 ) );
     }
 
     uint32_t direct_callable_stack_size_from_traversal;
     uint32_t direct_callable_stack_size_from_state;
     uint32_t continuation_stack_size;
-    OPTIX_CHECK( optixUtilComputeStackSizes( &stack_sizes, max_trace_depth,
+    OPTIX_CHECK( optixUtilComputeStackSizes( &stack_sizes_1, max_trace_depth,
                                              0,  // maxCCDepth
                                              0,  // maxDCDEpth
                                              &direct_callable_stack_size_from_traversal,
@@ -187,6 +188,11 @@ void createPipelines( RaycastingState& state )
                                             direct_callable_stack_size_from_state, continuation_stack_size,
                                             2  // maxTraversableDepth
                                             ) );
+    OPTIX_CHECK( optixUtilComputeStackSizes( &stack_sizes_2, max_trace_depth,
+                                             0,  // maxCCDepth
+                                             0,  // maxDCDEpth
+                                             &direct_callable_stack_size_from_traversal,
+                                             &direct_callable_stack_size_from_state, &continuation_stack_size ) );
     OPTIX_CHECK( optixPipelineSetStackSize( state.pipeline_2, direct_callable_stack_size_from_traversal,
                                             direct_callable_stack_size_from_state, continuation_stack_size,
                                             2  // maxTraversableDepth
@@ -216,7 +222,7 @@ void createSBT( RaycastingState& state )
 
     // hit group
     std::vector<HitGroupRecord> hitgroup_records;
-    for( const auto mesh : state.scene.meshes() )
+    for( const auto& mesh : state.scene.meshes() )
     {
         for( size_t i = 0; i < mesh->material_idx.size(); ++i )
         {
@@ -225,7 +231,7 @@ void createSBT( RaycastingState& state )
             GeometryData::TriangleMesh triangle_mesh = {};
             triangle_mesh.positions                  = mesh->positions[i];
             triangle_mesh.normals                    = mesh->normals[i];
-            for( size_t j = 0; j < GeometryData::num_textcoords; ++j )
+            for( size_t j = 0; j < GeometryData::num_texcoords; ++j )
                 triangle_mesh.texcoords[j] = mesh->texcoords[j][i];
             triangle_mesh.indices = mesh->indices[i];
             rec.data.geometry_data.setTriangleMesh( triangle_mesh );
@@ -255,7 +261,7 @@ void bufferRays( RaycastingState& state )
     // Create CUDA buffers for rays and hits
     sutil::Aabb aabb = state.scene.aabb();
     aabb.invalidate();
-    for( const auto instance : state.scene.instances() )
+    for( const auto& instance : state.scene.instances() )
         aabb.include( instance->world_aabb );
     const float3 bbox_span = aabb.extent();
     state.height           = static_cast<int>( state.width * bbox_span.y / bbox_span.x );

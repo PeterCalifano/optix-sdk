@@ -713,7 +713,7 @@ void createModule( PathTracerState& state )
     size_t      inputSize = 0;
     const char* input     = sutil::getInputData( OPTIX_SAMPLE_NAME, OPTIX_SAMPLE_DIR, "optixPathTracer.cu", inputSize );
 
-    OPTIX_CHECK_LOG( optixModuleCreateFromPTX(
+    OPTIX_CHECK_LOG( optixModuleCreate(
                 state.context,
                 &module_compile_options,
                 &state.pipeline_compile_options,
@@ -813,7 +813,6 @@ void createPipeline( PathTracerState& state )
 
     OptixPipelineLinkOptions pipeline_link_options = {};
     pipeline_link_options.maxTraceDepth            = 2;
-    pipeline_link_options.debugLevel               = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 
     OPTIX_CHECK_LOG( optixPipelineCreate(
                 state.context,
@@ -828,11 +827,11 @@ void createPipeline( PathTracerState& state )
     // We need to specify the max traversal depth.  Calculate the stack sizes, so we can specify all
     // parameters to optixPipelineSetStackSize.
     OptixStackSizes stack_sizes = {};
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.raygen_prog_group,    &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.radiance_miss_group,  &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.occlusion_miss_group, &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.radiance_hit_group,   &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.occlusion_hit_group,  &stack_sizes ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.raygen_prog_group,    &stack_sizes, state.pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.radiance_miss_group,  &stack_sizes, state.pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.occlusion_miss_group, &stack_sizes, state.pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.radiance_hit_group,   &stack_sizes, state.pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.occlusion_hit_group,  &stack_sizes, state.pipeline ) );
 
     uint32_t max_trace_depth = 2;
     uint32_t max_cc_depth = 0;
@@ -1099,6 +1098,9 @@ int main( int argc, char* argv[] )
                 sutil::initGL();
             }
 
+            {
+                // this scope is for output_buffer, to ensure the destructor is called bfore glfwTerminate()
+
             sutil::CUDAOutputBuffer<uchar4> output_buffer(
                     output_buffer_type,
                     state.params.width,
@@ -1116,6 +1118,7 @@ int main( int argc, char* argv[] )
             buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
 
             sutil::saveImage( outfile.c_str(), buffer, false );
+            }
 
             if( output_buffer_type == sutil::CUDAOutputBufferType::GL_INTEROP )
             {

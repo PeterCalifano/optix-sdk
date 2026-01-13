@@ -26,7 +26,7 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#include <optix_device.h>
+#include <optix.h>
 #include <vector_types.h>
 
 #include "helpers.h"

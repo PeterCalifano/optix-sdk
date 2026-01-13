@@ -1039,7 +1039,6 @@ void createPipeline( PathTracerState& state )
 
     OptixPipelineLinkOptions pipeline_link_options = {};
     pipeline_link_options.maxTraceDepth            = 2;
-    pipeline_link_options.debugLevel               = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
 
     OPTIX_CHECK_LOG( optixPipelineCreate(
                 state.context,
@@ -1054,11 +1053,11 @@ void createPipeline( PathTracerState& state )
     // We need to specify the max traversal depth.  Calculate the stack sizes, so we can specify all
     // parameters to optixPipelineSetStackSize.
     OptixStackSizes stack_sizes = {};
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.raygen_prog_group,    &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.radiance_miss_group,  &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.occlusion_miss_group, &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.radiance_hit_group,   &stack_sizes ) );
-    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.occlusion_hit_group,  &stack_sizes ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.raygen_prog_group,    &stack_sizes, state.pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.radiance_miss_group,  &stack_sizes, state.pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.occlusion_miss_group, &stack_sizes, state.pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.radiance_hit_group,   &stack_sizes, state.pipeline ) );
+    OPTIX_CHECK( optixUtilAccumulateStackSizes( state.occlusion_hit_group,  &stack_sizes, state.pipeline ) );
 
     uint32_t max_trace_depth = 2;
     uint32_t max_cc_depth = 0;
@@ -1244,7 +1243,7 @@ void updatePipelineWhenChanged( PathTracerState& state )
 
         // The module should be in cache, so simply create it again in this context
         // This API call should now return instantenously (unless caching failed, in which case this would recompile the module again)
-        OPTIX_CHECK( optixModuleCreateFromPTX(
+        OPTIX_CHECK( optixModuleCreate(
             state.context,
             &operation.module_compile_options,
             &operation.pipeline_compile_options,
@@ -1447,24 +1446,28 @@ int main( int argc, char* argv[] )
                 sutil::initGL();
             }
 
-            sutil::CUDAOutputBuffer<uchar4> output_buffer( output_buffer_type, state.params.width, state.params.height );
-            output_buffer.setStream( state.stream );
-            handleCameraUpdate( state.params );
-            handleResize( output_buffer, state.params );
+            {
+                // this scope is for output_buffer, to ensure the destructor is called bfore glfwTerminate()
 
-            // Need to potentially wait on modules to compile since we are not in a render loop. 
-            while( state.ptx_module_radiance == nullptr || state.ptx_module == nullptr )
-                updatePipelineWhenChanged( state );
+                sutil::CUDAOutputBuffer<uchar4> output_buffer( output_buffer_type, state.params.width, state.params.height );
+                output_buffer.setStream( state.stream );
+                handleCameraUpdate( state.params );
+                handleResize( output_buffer, state.params );
 
-            launchSubframe( output_buffer, state );
+                // Need to potentially wait on modules to compile since we are not in a render loop.
+                while( state.ptx_module_radiance == nullptr || state.ptx_module == nullptr )
+                    updatePipelineWhenChanged( state );
 
-            sutil::ImageBuffer buffer;
-            buffer.data = output_buffer.getHostPointer();
-            buffer.width = output_buffer.width();
-            buffer.height = output_buffer.height();
-            buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
+                launchSubframe( output_buffer, state );
 
-            sutil::saveImage( outfile.c_str(), buffer, false );
+                sutil::ImageBuffer buffer;
+                buffer.data         = output_buffer.getHostPointer();
+                buffer.width        = output_buffer.width();
+                buffer.height       = output_buffer.height();
+                buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
+
+                sutil::saveImage( outfile.c_str(), buffer, false );
+            }
 
             if( output_buffer_type == sutil::CUDAOutputBufferType::GL_INTEROP )
             {
