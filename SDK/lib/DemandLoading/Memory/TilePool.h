@@ -27,6 +27,8 @@
 //
 #pragma once
 
+#include "Memory/TileArena.h"
+
 #include <cuda.h>
 
 #include <deque>
@@ -34,9 +36,6 @@
 #include <vector>
 
 namespace demandLoading {
-
-// Fraction of total tiles to keep available
-const float DESIRED_FREE_TILE_FRACTION = 0.1f;
 
 class TileBlockDesc
 {
@@ -102,23 +101,20 @@ class TilePool
     /// Returns the amount of device memory allocated across all arenas.
     size_t getTotalDeviceMemory() const;
 
-    /// Increment (or decrement) the number of pending free tiles
-    void incPendingFreeTiles( int pendingTiles );
+     /// Returns the total number of free tiles in the pool (including those not allocated yet).
+    size_t getTotalFreeTiles() const;
 
-    /// Return the number of tiles that the pool wants free to maintain the size of the free list.
-    unsigned int getDesiredTilesToFree() const;
+    /// Returns the the desired number of free tiles
+    size_t getDesiredFreeTiles() const { return m_desiredFreeTiles; }
 
   private:
-    unsigned int                              m_deviceIndex{};
-    std::vector<CUmemGenericAllocationHandle> m_arenas;
-    size_t                                    m_arenaSize{};
-    mutable std::mutex                        m_mutex;
-    std::deque<TileBlockDesc>                 m_freeTileBlocks;
-    size_t                                    m_maxTexMem{};
-    unsigned int                              m_desiredFreeTiles{};
-    unsigned int                              m_pendingFreeTiles{};
-
-    CUmemGenericAllocationHandle createArena() const;
+    unsigned int              m_deviceIndex{};
+    std::vector<TileArena>    m_arenas;
+    size_t                    m_arenaSize{};
+    mutable std::mutex        m_mutex;
+    std::deque<TileBlockDesc> m_freeTileBlocks;
+    size_t                    m_maxTexMem{};
+    unsigned int              m_desiredFreeTiles{};
 };
 
 }  // namespace demandLoading

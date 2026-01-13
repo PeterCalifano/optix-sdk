@@ -47,3 +47,7 @@ target_link_libraries( optixModuleCreateProcess
   sutil_7_sdk
   ${CUDA_LIBRARIES}
   )
+
+set_property( TARGET optixModuleCreateProcess PROPERTY FOLDER "${OPTIX_IDE_FOLDER}" )
+
+add_dependencies( ${target_name} optixModuleCreateProcess )

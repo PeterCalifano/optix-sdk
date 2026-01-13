@@ -28,6 +28,8 @@
 
 #pragma once
 
+#include <vector_types.h>
+
 #ifndef __CUDACC_RTC__
 #include <cuda.h>
 #else
@@ -36,20 +38,25 @@ using CUtexObject = unsigned long long;
 
 namespace demandLoading {
 
-const unsigned int MAX_TILE_LEVELS = 10;
+const unsigned int MAX_TILE_LEVELS = 9;
 
 /// Device-side texture info.
 struct TextureSampler
 {
     CUtexObject texture;
 
+    // Description for the sampler.  This struct must agree with the
+    // corresponding struct in optix, TextureInfo in TextureFootprint.h
     struct Description
     {
-        unsigned int reserved1 : 3;
+        unsigned int isInitialized : 1;
+        unsigned int reserved1 : 2;
         unsigned int numMipLevels : 5;
         unsigned int logTileWidth : 4;
         unsigned int logTileHeight : 4;
-        unsigned int reserved2 : 6;
+        unsigned int reserved2 : 4;
+        unsigned int isSparseTexture : 1;
+        unsigned int isUdimBaseTexture : 1;
         unsigned int wrapMode0 : 2;
         unsigned int wrapMode1 : 2;
         unsigned int mipmapFilterMode : 1;
@@ -59,7 +66,7 @@ struct TextureSampler
     // Texture dimensions
     unsigned int width;
     unsigned int height;
-    unsigned int mipTailFirstLevel;  // could be 4 bits
+    unsigned int mipTailFirstLevel;
 
     // Virtual addressing
     unsigned int startPage;
@@ -73,6 +80,11 @@ struct TextureSampler
         unsigned short levelHeightInTiles;
     };
     MipLevelSizes mipLevelSizes[MAX_TILE_LEVELS];
+
+    // Udim textures
+    unsigned int udimStartPage;
+    unsigned short udim;
+    unsigned short vdim;
 };
 
 }  // namespace demandLoading

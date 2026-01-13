@@ -96,7 +96,7 @@ inline void checkCudaError( cudaError_t error, const char* expr, const char* fil
 }
 
 // A non-throwing variant for use in destructors.
-inline void checkCudaErrorNoThrow( cudaError_t error, const char* expr, const char* file, unsigned int line )
+inline void checkCudaErrorNoThrow( cudaError_t error, const char* expr, const char* file, unsigned int line ) noexcept
 {
     if( error != cudaSuccess )
     {
@@ -119,7 +119,7 @@ inline void checkCudaError( CUresult result, const char* expr, const char* file,
 }
 
 // A non-throwing variant for use in destructors.
-inline void checkCudaErrorNoThrow( CUresult result, const char* expr, const char* file, unsigned int line )
+inline void checkCudaErrorNoThrow( CUresult result, const char* expr, const char* file, unsigned int line ) noexcept
 {
     if( result != CUDA_SUCCESS )
     {

@@ -84,45 +84,53 @@ static __forceinline__ __device__ void cosine_sample_hemisphere( const float u1,
 }
 
 
+// Use named types for compatibility with nvrtc
+// Otherwise these structs can be defined as unnamed structs directly in 'Payload'
+// to avoid access via p0123.px and directly access px.
+struct t_p0123 {
+    unsigned int p0, p1, p2, p3;
+};
+struct t_cseed {
+    float3 c;
+    unsigned int seed;
+};
+
 struct Payload {
+
     union {
-        struct {
-            unsigned int p0, p1, p2, p3;
-        };
-        struct {
-            float3 c;
-            unsigned int seed;
-        };
+        t_p0123 p0123;
+        t_cseed cseed;
     };
+
     __forceinline__ __device__ void setAll()
     {
-        optixSetPayload_0( p0 );
-        optixSetPayload_1( p1 );
-        optixSetPayload_2( p2 );
-        optixSetPayload_3( p3 );
+        optixSetPayload_0( p0123.p0 );
+        optixSetPayload_1( p0123.p1 );
+        optixSetPayload_2( p0123.p2 );
+        optixSetPayload_3( p0123.p3 );
     }
     __forceinline__ __device__ void getAll()
     {
-        p0 = optixGetPayload_0();
-        p1 = optixGetPayload_1();
-        p2 = optixGetPayload_2();
-        p3 = optixGetPayload_3();
+        p0123.p0 = optixGetPayload_0();
+        p0123.p1 = optixGetPayload_1();
+        p0123.p2 = optixGetPayload_2();
+        p0123.p3 = optixGetPayload_3();
     }
     __forceinline__ __device__ void setC()
     {
-        optixSetPayload_0( p0 );
-        optixSetPayload_1( p1 );
-        optixSetPayload_2( p2 );
+        optixSetPayload_0( p0123.p0 );
+        optixSetPayload_1( p0123.p1 );
+        optixSetPayload_2( p0123.p2 );
     }
     __forceinline__ __device__ void getC()
     {
-        p0 = optixGetPayload_0();
-        p1 = optixGetPayload_1();
-        p2 = optixGetPayload_2();
+        p0123.p0 = optixGetPayload_0();
+        p0123.p1 = optixGetPayload_1();
+        p0123.p2 = optixGetPayload_2();
     }
     __forceinline__ __device__ void getSeed()
     {
-        p3 = optixGetPayload_3();
+        p0123.p3 = optixGetPayload_3();
     }
 };
 
@@ -146,9 +154,9 @@ static __forceinline__ __device__ void trace(
         OptixVisibilityMask( 1 ),
         OPTIX_RAY_FLAG_NONE,
         0,                   // SBT offset, first ray type (only one here)
-        0,                   // SBT stride, forcing a single HitGroup!
-        0,                   // missSBTIndex, matching first ray type
-        prd.p0, prd.p1, prd.p2, prd.p3
+        0,                   // SBT stride, forcing a single HitGroup in combination with an sbt offset set to zero for every instance!
+        0,                   // missSBTIndex, used for camera rays
+        prd.p0123.p0, prd.p0123.p1, prd.p0123.p2, prd.p0123.p3
     );
 }
 
@@ -164,21 +172,21 @@ extern "C" __global__ void __raygen__rg()
     const float3 W = params.W;
 
     Payload payload;
-    payload.seed = tea<4>( idx.y * dim.x + idx.x, 12346789 + params.subframe_index );
+    payload.cseed.seed = tea<4>( idx.y * dim.x + idx.x, 12346789 + params.subframe_index );
 
     float3 final_c = make_float3( 0 );
 #pragma unroll 1
     for( int x = 1; x <= params.spp; ++x )
     {
         const float2 d = 2.0f * make_float2(
-            ( static_cast< float >( idx.x ) + rnd( payload.seed ) ) / static_cast< float >( dim.x ),
-            ( static_cast< float >( idx.y ) + rnd( payload.seed ) ) / static_cast< float >( dim.y )
+            ( static_cast< float >( idx.x ) + rnd( payload.cseed.seed ) ) / static_cast< float >( dim.x ),
+            ( static_cast< float >( idx.y ) + rnd( payload.cseed.seed ) ) / static_cast< float >( dim.y )
         ) - 1.0f;
         float3 direction = normalize( d.x * U + d.y * V + W );
 
-        float time = rnd( payload.seed );
+        float time = rnd( payload.cseed.seed );
 
-        payload.c = make_float3( 0.5f, 0.5f, 0.5f );
+        payload.cseed.c = make_float3( 0.5f, 0.5f, 0.5f );
         trace( params.handle,
             eye,
             direction,
@@ -186,7 +194,7 @@ extern "C" __global__ void __raygen__rg()
             1e16f,  // tmax
             time,
             payload );
-        final_c += payload.c;
+        final_c += payload.cseed.c;
     }
     final_c /= params.spp;
     params.frame_buffer[idx.y * params.width + idx.x] = make_color( final_c );
@@ -197,7 +205,7 @@ extern "C" __global__ void __miss__ms()
 {
     MissData* rt_data = reinterpret_cast< MissData* >( optixGetSbtDataPointer() );
     Payload p;
-    p.c = make_float3( rt_data->bg_color.x, rt_data->bg_color.y, rt_data->bg_color.z );
+    p.cseed.c = make_float3( rt_data->bg_color.x, rt_data->bg_color.y, rt_data->bg_color.z );
     p.setC();
 }
 
@@ -230,8 +238,8 @@ extern "C" __global__ void __closesthit__ch()
     float shade = 1.0f;
     if( params.ao )
     {
-        const float z1 = rnd( p.seed );
-        const float z2 = rnd( p.seed );
+        const float z1 = rnd( p.cseed.seed );
+        const float z2 = rnd( p.cseed.seed );
 
         unsigned int occluded = 1;
         float3 w_in;
@@ -259,7 +267,7 @@ extern "C" __global__ void __closesthit__ch()
 
     HitGroupData* rt_data = reinterpret_cast<HitGroupData*>( optixGetSbtDataPointer() );
     // convert normal to color and store in payload
-    p.c = shade * ( normal * s + make_float3( 0.5f ) ) * rt_data->color;
+    p.cseed.c = shade * ( normal * s + make_float3( 0.5f ) ) * rt_data->color;
 
     p.setAll();
 }

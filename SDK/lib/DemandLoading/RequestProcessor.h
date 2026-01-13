@@ -29,6 +29,7 @@
 #pragma once
 
 #include "RequestQueue.h"
+#include "Util/TraceFile.h"
 
 #include <cuda.h>
 
@@ -38,6 +39,7 @@
 namespace demandLoading {
 
 class PageTableManager;
+class TraceFileWriter;
 
 class RequestProcessor
 {
@@ -57,15 +59,16 @@ class RequestProcessor
     void stop();
 
     /// Add a batch of page requests from the specified device to the request queue.
-    void addRequests( unsigned int deviceIndex, CUstream stream, const unsigned int* pageIds, unsigned int numPageIds, std::shared_ptr<TicketImpl> ticket )
-    {
-        m_requests.push( deviceIndex, stream, pageIds, numPageIds, ticket );
-    }
+    void addRequests( unsigned int deviceIndex, CUstream stream, const unsigned int* pageIds, unsigned int numPageIds, Ticket ticket );
+
+    /// Set the trace file for recording page requests.
+    void setTraceFile( TraceFileWriter* traceFile) { m_traceFile = traceFile; }
 
   private:
     PageTableManager*        m_pageTableManager;
     RequestQueue             m_requests;
     std::vector<std::thread> m_threads;
+    TraceFileWriter*         m_traceFile = nullptr;
 
     // Per-thread worker function.
     void worker();

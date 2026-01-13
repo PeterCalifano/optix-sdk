@@ -27,6 +27,7 @@
 //
 
 #include "RequestQueue.h"
+#include "TicketImpl.h"
 #include "Util/Exception.h"
 
 #include <algorithm>
@@ -51,14 +52,13 @@ bool RequestQueue::popOrWait( PageRequest* requestPtr )
     if( m_isShutDown )
         return false;
 
-    PageRequest request = m_requests.front();
+    *requestPtr = std::move( m_requests.front() );
     m_requests.pop_front();
 
-    *requestPtr = request;
     return true;
 }
 
-void RequestQueue::push( unsigned int deviceIndex, CUstream stream, const unsigned int* pageIds, unsigned int numPageIds, std::shared_ptr<TicketImpl> ticket )
+void RequestQueue::push( unsigned int deviceIndex, CUstream stream, const unsigned int* pageIds, unsigned int numPageIds, Ticket ticket )
 {
     std::unique_lock<std::mutex> lock( m_mutex );
 
@@ -67,14 +67,14 @@ void RequestQueue::push( unsigned int deviceIndex, CUstream stream, const unsign
         numPageIds = 0;
 
     // Update the ticket, now that the number of tasks is known.
-    ticket->update( numPageIds );
+    TicketImpl::getImpl( ticket )->update( numPageIds );
 
     if( numPageIds == 0 )
         return;
 
     for( unsigned int i = 0; i < numPageIds; ++i )
     {
-        m_requests.emplace_back( pageIds[i], deviceIndex, stream, ticket );
+        m_requests.emplace_back( pageIds[i], ticket );
     }
 
     // Notify any threads in popOrWait().

@@ -759,7 +759,7 @@ class CuBuffer
     }
     void downloadSub( size_t count, size_t offset, T* data ) const
     {
-        assert( count + offset < m_allocCount );
+        assert( count + offset <= m_allocCount );
         CUDA_CHECK( cudaMemcpy( data, m_ptr + offset, count * sizeof( T ), cudaMemcpyDeviceToHost ) );
     }
     size_t count() const { return m_count; }
@@ -1153,7 +1153,7 @@ void Scene::createPTXModule()
 
     OptixModuleCompileOptions module_compile_options = {};
     module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_DEFAULT;
-    module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_LINEINFO;
+    module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_MINIMAL;
 
     m_pipeline_compile_options = {};
     m_pipeline_compile_options.usesMotionBlur            = false;

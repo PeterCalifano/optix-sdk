@@ -28,7 +28,7 @@
 
 #pragma once
 
-#include "TicketImpl.h"
+#include <DemandLoading/Ticket.h>
 
 #include <cuda.h>
 
@@ -45,16 +45,12 @@ namespace demandLoading {
 /// the request has been filled.
 struct PageRequest
 {
-    unsigned int                pageId;
-    unsigned int                deviceIndex;
-    CUstream                    stream;
-    std::shared_ptr<TicketImpl> ticket;
+    unsigned int pageId{};
+    Ticket       ticket;
 
     // A constructor is necessary for emplace_back.
-    PageRequest( unsigned int pageId_, unsigned int deviceIndex_, CUstream stream_, std::shared_ptr<TicketImpl> ticket_ )
+    PageRequest( unsigned int pageId_, Ticket ticket_ )
         : pageId( pageId_ )
-        , deviceIndex( deviceIndex_ )
-        , stream( stream_ )
         , ticket( ticket_ )
     {
     }
@@ -76,7 +72,7 @@ class RequestQueue
     /// Push a batch of page requests from the specified device.  Notifies any threads waiting in
     /// popOrWait().  Updates the given Ticket with the number of requests, and retains it for
     /// notifications as requests are filled.
-    void push( unsigned int deviceIndex, CUstream stream, const unsigned int* pageIds, unsigned int numPageIds, std::shared_ptr<TicketImpl> ticket );
+    void push( unsigned int deviceIndex, CUstream stream, const unsigned int* pageIds, unsigned int numPageIds, Ticket ticket );
 
     /// Shut down the queue, signalling any waiting threads to exit.  Clients must call shutDown()
     /// and join with any waiting threads before invoking the RequestQueue destructor.

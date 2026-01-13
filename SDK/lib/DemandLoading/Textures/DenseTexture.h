@@ -27,8 +27,10 @@
 //
 #pragma once
 
-#include <DemandLoading/ImageReader.h>
-#include <DemandLoading/TextureInfo.h>
+#include "Util/Exception.h"
+
+#include <DemandLoading/TextureDescriptor.h>
+#include <ImageReader/TextureInfo.h>
 
 #include <vector_types.h>
 
@@ -36,39 +38,41 @@
 
 namespace demandLoading {
 
-/// If OpenEXR is not available, this test image is used.  It generates a
-/// procedural pattern, rather than loading image data from disk.
-class CheckerBoardImage : public MipTailImageReader
+/// DenseTexture encapsulates a standard CUDA texture and its associated CUDA array.
+class DenseTexture
 {
   public:
-    /// Create a test image with the specified dimensions.
-    CheckerBoardImage( unsigned int width, unsigned int height, unsigned int squaresPerSide, bool useMipmaps = true );
+    /// Construct DenseTexture for the specified device.
+    explicit DenseTexture( unsigned int deviceIndex )
+        : m_deviceIndex( deviceIndex )
+    {
+    }
 
-    /// The destructor is virtual.
-    ~CheckerBoardImage() override {}
+    /// Destroy the dense texture, reclaiming its resources.
+    ~DenseTexture();
 
-    /// The open method simply initializes the given image info struct.
-    bool open( TextureInfo* info ) override;
+    /// Initialize texture from the given descriptor (which specifies clamping/wrapping and
+    /// filtering) and the given texture info (which describes the dimensions, format, etc.)
+    void init( const TextureDescriptor& descriptor, const imageReader::TextureInfo& info );
 
-    /// The close operation is a no-op.
-    void close() override {}
+    /// Check whether the texture has been initialized.
+    bool isInitialized() const { return m_isInitialized; }
 
-    /// Get the image info.  Valid only after calling open().
-    const TextureInfo& getInfo() override { return m_info; }
+    /// Get the dimensions of the specified miplevel.
+    uint2 getMipLevelDims( unsigned int mipLevel ) const;
 
-    /// Read the specified tile or mip level, returning the data in dest.  dest must be large enough
-    /// to hold the tile.  Pixels outside the bounds of the mip level will be filled in with black.
-    bool readTile( char* dest, unsigned int mipLevel, unsigned int tileX, unsigned int tileY, unsigned int tileWidth, unsigned int tileHeight ) override;
+    /// Get the CUDA texture object.
+    CUtexObject getTextureObject() const { return m_texture; }
 
-    /// Read the specified mipLevel.  Returns true for success.
-    bool readMipLevel( char* dest, unsigned int mipLevel, unsigned int width, unsigned int height ) override;
+    /// Fill the texture mip levels on the device with textureData, which contains all mip levels.
+    void fillTexture( CUstream stream, const char* textureData, unsigned int width, unsigned int height ) const;
 
   private:
-    bool isOddChecker( float x, float y, unsigned int squaresPerSide );
-
-    unsigned int        m_squaresPerSide;
-    TextureInfo         m_info;
-    std::vector<float4> m_mipLevelColors;
+    bool                     m_isInitialized = false;
+    unsigned int             m_deviceIndex;
+    imageReader::TextureInfo m_info;
+    CUmipmappedArray         m_array{};
+    CUtexObject              m_texture{};
 };
 
 }  // namespace demandLoading

@@ -46,19 +46,17 @@ add_library( DemandLoading STATIC
   RequestQueue.h
   ResourceRequestHandler.cpp
   ResourceRequestHandler.h
+  Ticket.cpp
   TicketImpl.h
-  include/DemandLoading/CheckerBoardImage.h
   include/DemandLoading/DemandLoader.h
   include/DemandLoading/DemandTexture.h
   include/DemandLoading/DeviceContext.h
-  include/DemandLoading/ImageReader.h
-  include/DemandLoading/MultiCheckerImage.h
   include/DemandLoading/Options.h
   include/DemandLoading/Resource.h
   include/DemandLoading/Statistics.h
   include/DemandLoading/Texture2D.h
+  include/DemandLoading/Texture2DExtended.h
   include/DemandLoading/TextureDescriptor.h
-  include/DemandLoading/TextureInfo.h
   include/DemandLoading/TextureSampler.h
   include/DemandLoading/Ticket.h
   include/DemandLoading/TileIndexing.h
@@ -72,23 +70,27 @@ add_library( DemandLoading STATIC
   Memory/DeviceMemoryManager.h
   Memory/EventPool.h
   Memory/FixedPool.h
+  Memory/ItemPool.h
   Memory/PinnedItemPool.h
   Memory/PinnedMemoryManager.h
   Memory/PinnedRequestContextPool.h
   Memory/SamplerPool.h
+  Memory/TileArena.h
   Memory/TilePool.cpp
   Memory/TilePool.h
-  Textures/CheckerBoardImage.cpp
+  Textures/BaseColorRequestHandler.cpp
+  Textures/BaseColorRequestHandler.h
   Textures/DemandTextureImpl.cpp
   Textures/DemandTextureImpl.h
-  Textures/ImageReader.cpp
+  Textures/DenseTexture.cpp
+  Textures/DenseTexture.h
   Textures/SamplerRequestHandler.cpp
   Textures/SamplerRequestHandler.h
   Textures/SparseTexture.cpp
   Textures/SparseTexture.h
-  Textures/TextureInfo.cpp
   Textures/TextureRequestHandler.cpp
   Textures/TextureRequestHandler.h
+  Util/CudaCallback.h
   Util/DeviceSet.cpp
   Util/DeviceSet.h
   Util/Exception.h
@@ -96,7 +98,8 @@ add_library( DemandLoading STATIC
   Util/MutexArray.h
   Util/NVTXProfiling.h
   Util/Stopwatch.h
-  # EXRReader.cpp is added below if OpenEXR is available.
+  Util/TraceFile.cpp
+  Util/TraceFile.h
   ${generated_files}
   )
 
@@ -122,12 +125,15 @@ source_group( "Header Files\\Implementation" FILES
   Memory/DeviceMemoryManager.h
   Memory/EventPool.h
   Memory/FixedPool.h
+  Memory/ItemPool.h
   Memory/PinnedItemPool.h
   Memory/PinnedMemoryManager.h
   Memory/PinnedRequestContextPool.h
   Memory/SamplerPool.h
   Memory/TilePool.h
+  Textures/BaseColorRequestHandler.h
   Textures/DemandTextureImpl.h
+  Textures/DenseTexture.h
   Textures/SamplerRequestHandler.h
   Textures/SparseTexture.h
   Textures/TextureRequestHandler.h
@@ -137,6 +143,7 @@ source_group( "Header Files\\Implementation" FILES
   Util/MutexArray.h
   Util/NVTXProfiling.h
   Util/Stopwatch.h
+  Util/TraceFile.h
   )
 
 # Not sure why glad include directory must be specified here.  It should come with the library dependency below,
@@ -144,43 +151,27 @@ source_group( "Header Files\\Implementation" FILES
 target_include_directories( DemandLoading PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
   include
+  ../ImageReader/include
   ../../support
   )
 
 target_link_libraries( DemandLoading PUBLIC
+  ImageReader
   ${CUDA_LIBRARIES}
   ${CUDA_CUDA_LIBRARY}
   )
 
-find_package( OpenEXR )
-if( NOT OpenEXR_FOUND )
-  message( WARNING "OpenEXR not found (see OpenEXR_ROOT).  Will use procedural texture in optixDemandTextureAdvanced." )
-endif()
-
-find_package( ZlibStatic )
-if ( NOT ZlibStatic_FOUND )
-  message( WARNING "Zlib not found (see ZlibStatic_ROOT).  Will use procedural texture in optixDemandTextureAdvanced." )
-endif()
-
-if( OpenEXR_FOUND AND ZlibStatic_FOUND )
-  # Build our EXRImage class if OpenEXR is available, adding the necessary include path and libraries.
-  target_sources( DemandLoading PRIVATE
-    Textures/EXRReader.cpp
-    include/DemandLoading/EXRReader.h )
-  target_compile_definitions( DemandLoading PUBLIC OPTIX_SAMPLE_USE_OPEN_EXR )
-  target_link_libraries( DemandLoading PUBLIC OpenEXR::IlmImf Zlib::Static )
-endif()
-
 # NVTX Profiling
 option( DEMAND_LOADING_USE_NVTX "Enable NVTX profiling" OFF )
-
-find_package( NVTX )
-if( DEMAND_LOADING_USE_NVTX AND NVTX_FOUND )
-  message( "-- Found NVTX: Enabling NVTX profiling in the DemandLoading library" )
-  include_directories( ${NVTX_INCLUDE} )
-  target_compile_definitions( DemandLoading PUBLIC ENABLE_NVTX_PROFILING )
-else()
-  message( "-- Not Found NVTX: Disabling NVTX profiling in the DemandLoading library" )
+if( DEMAND_LOADING_USE_NVTX )
+    find_package( NVTX )
+    if( NVTX_FOUND )
+        message( "-- Found NVTX: Enabling NVTX profiling in the DemandLoading library" )
+        include_directories( ${NVTX_INCLUDE} )
+        target_compile_definitions( DemandLoading PUBLIC ENABLE_NVTX_PROFILING )
+    else()
+        message( "-- Not Found NVTX: Disabling NVTX profiling in the DemandLoading library" )
+    endif()
 endif()
 
 set_property(TARGET DemandLoading PROPERTY FOLDER "${OPTIX_IDE_FOLDER}")

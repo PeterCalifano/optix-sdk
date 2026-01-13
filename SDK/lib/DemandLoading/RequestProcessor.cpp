@@ -29,6 +29,7 @@
 #include "RequestProcessor.h"
 #include "DemandLoaderImpl.h"
 #include "RequestHandler.h"
+#include "TicketImpl.h"
 
 namespace demandLoading {
 
@@ -55,14 +56,25 @@ void RequestProcessor::stop()
     }
 }
 
+void RequestProcessor::addRequests( unsigned int deviceIndex, CUstream stream, const unsigned int* pageIds, unsigned int numPageIds, Ticket ticket )
+{
+    m_requests.push( deviceIndex, stream, pageIds, numPageIds, ticket );
+
+    // If recording is enabled, write the requests to the trace file.
+    if( m_traceFile && numPageIds > 0 )
+    {
+        m_traceFile->recordRequests( deviceIndex, stream, pageIds, numPageIds );
+    }
+}
+
 void RequestProcessor::worker()
 {
     try
     {
+        PageRequest request;
         while( true )
         {
             // Pop a request from the queue, waiting if necessary until the queue is non-empty or shut down.
-            PageRequest request;
             if( !m_requests.popOrWait( &request ) )
                 return;  // Exit thread when queue is shut down.
 
@@ -72,10 +84,12 @@ void RequestProcessor::worker()
             DEMAND_ASSERT_MSG( handler != nullptr, "Invalid page requested (no associated handler)" );
 
             // Process the request.  Page table updates are accumulated in the PagingSystem.
-            handler->fillRequest( request.deviceIndex, request.stream, request.pageId );
+            std::shared_ptr<TicketImpl>& ticket = TicketImpl::getImpl( request.ticket );
+            handler->fillRequest( ticket->getDeviceIndex(), ticket->getStream(), request.pageId );
 
             // Notify the associated Ticket that the request has been filled.
-            request.ticket->notify();
+            ticket->notify();
+            ticket.reset();
         }
     }
     catch( const std::exception& e )

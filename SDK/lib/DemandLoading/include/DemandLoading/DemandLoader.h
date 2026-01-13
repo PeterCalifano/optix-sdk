@@ -28,9 +28,11 @@
 
 #pragma once
 
-#include <DemandLoading/DeviceContext.h>
+/// \file DemandLoader.h 
+/// Primary interface of the Demand Loading library.
+
 #include <DemandLoading/DemandTexture.h>
-#include <DemandLoading/ImageReader.h>
+#include <DemandLoading/DeviceContext.h>
 #include <DemandLoading/Options.h>
 #include <DemandLoading/Resource.h>
 #include <DemandLoading/Statistics.h>
@@ -41,6 +43,10 @@
 
 #include <memory>
 #include <vector>
+
+namespace imageReader {
+class ImageReader;
+}
 
 namespace demandLoading {
 
@@ -56,7 +62,17 @@ class DemandLoader
     /// Create a demand-loaded texture for the given image.  The texture initially has no backing
     /// storage.  The readTile() method is invoked on the image to fill each required tile.  The
     /// ImageReader pointer is retained for the lifetime of the DemandLoader.
-    virtual const DemandTexture& createTexture( std::shared_ptr<ImageReader> image, const TextureDescriptor& textureDesc ) = 0;
+    virtual const DemandTexture& createTexture( std::shared_ptr<imageReader::ImageReader> image,
+                                                const TextureDescriptor&                  textureDesc ) = 0;
+
+    /// Create a demand-loaded UDIM texture for a given set of images.  If a baseTexture is used,
+    /// it should be created first by calling createTexture.  The id of the returned texture should be used
+    /// when calling tex2DGradUdim.  All of the image readers are retained for the lifetime of the DemandLoader.
+    virtual const DemandTexture& createUdimTexture( std::vector<std::shared_ptr<imageReader::ImageReader>>& imageReaders,
+                                                    std::vector<TextureDescriptor>&                         textureDescs,
+                                                    unsigned int                                            udim,
+                                                    unsigned int                                            vdim,
+                                                    int baseTextureId ) = 0;
 
     /// Create an arbitrary resource with the specified number of pages.  \see ResourceCallback.
     /// Returns the starting index of the resource in the page table.
@@ -72,14 +88,17 @@ class DemandLoader
     /// processing.  The given DeviceContext must reside in host memory.  The given stream is used
     /// when copying tile data to the device.  Returns a ticket that is notified when the requests
     /// have been filled on the host side.
-    virtual std::shared_ptr<Ticket> processRequests( unsigned int deviceIndex, CUstream stream, const DeviceContext& deviceContext ) = 0;
+    virtual Ticket processRequests( unsigned int deviceIndex, CUstream stream, const DeviceContext& deviceContext ) = 0;
 
     /// Get current statistics.
     virtual Statistics getStatistics() const = 0;
+
+    /// Get indices of the devices that can be employed by the DemandLoader (i.e. those that support sparse textures).
+    virtual const std::vector<unsigned int> getDevices() const = 0;
 };
 
-/// Factory function to create a DemandLoader with the given options on the given devices.
-DemandLoader* createDemandLoader( const std::vector<unsigned int>& devices, const Options& options );
+/// Create a DemandLoader with the given options.  
+DemandLoader* createDemandLoader( const Options& options );
 
 /// Function to destroy a DemandLoader.
 void destroyDemandLoader( DemandLoader* manager );

@@ -154,6 +154,27 @@ int main( int argc, char* argv[] )
         }
     }
 
+    if (argc <= 1 || filename.empty())
+    {
+        std::cerr << "This executable is used by the 'optixModuleCreateAbort' sample to compile OptiX modules.\nIt is not meant to be called directly.\n";
+        std::cerr << "Usage  : " << argv[0] << " [options]\n";
+        std::cerr << "Options: --file <path>                                PTX file to compile\n";
+        std::cerr << "         --device <index>                             CUDA device index of the GPU to target\n";
+        std::cerr << "         --maxRegisterCount <value>                   OptixModuleCompileOptions::maxRegisterCount\n";
+        std::cerr << "         --optLevel <value>                           OptixModuleCompileOptions::optLevel\n";
+        std::cerr << "         --debugLevel <value>                         OptixModuleCompileOptions::debugLevel\n";
+        std::cerr << "         --usesMotionBlur <value>                     OptixModuleCompileOptions::usesMotionBlur\n";
+        std::cerr << "         --traversableGraphFlags <value>              OptixModuleCompileOptions::traversableGraphFlags\n";
+        std::cerr << "         --numPayloadValues <value>                   OptixModuleCompileOptions::numPayloadValues\n";
+        std::cerr << "         --numAttributeValues <value>                 OptixModuleCompileOptions::numAttributeValues\n";
+        std::cerr << "         --exceptionFlags <value>                     OptixModuleCompileOptions::exceptionFlags\n";
+        std::cerr << "         --pipelineLaunchParamsVariableName <value>   OptixModuleCompileOptions::pipelineLaunchParamsVariableName\n";
+        std::cerr << "         --usesPrimitiveTypeFlags <value>             OptixModuleCompileOptions::usesPrimitiveTypeFlags\n";
+        std::cerr << "         --boundValue <pipelineParamOffsetInBytes> <sizeInBytes> <annotation> <data>\n";
+        std::cerr << "                                                      Add entry to OptixModuleCompileOptions::boundValues\n";
+        return 1;
+    }
+
     // Now that all bound values where parsed from the command-line, assign them to the compile options
     if( !bound_values.empty() )
     {
@@ -178,12 +199,11 @@ int main( int argc, char* argv[] )
         OPTIX_CHECK( optixDeviceContextGetCacheEnabled( context, &cache_enabled ) );
         SUTIL_ASSERT( cache_enabled );
 
-        // Read the temporary PTX file
-        std::ifstream file( filename.c_str() );
+        // Read the temporary input file
+        std::ifstream file( filename.c_str(), std::ios::binary );
         SUTIL_ASSERT( file.is_open() );
-        std::stringstream ptx_stream;
-        ptx_stream << file.rdbuf();
-        const std::string ptx_string = ptx_stream.str();
+        std::vector<unsigned char> buffer = std::vector<unsigned char>( std::istreambuf_iterator<char>( file ), {} );
+        const std::string ptx_string( buffer.begin(), buffer.end() );
 
         // Actually compile the module and store the result in the OptiX disk cache
         char   log[2048];

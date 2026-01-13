@@ -56,6 +56,9 @@ class TextureRequestHandler : public RequestHandler
     /// Get the associated texture.
     DemandTextureImpl* getTexture() const { return m_texture; }
 
+    /// Unmap the backing storage associated with a texture tile or mip tail
+    void unmapTileResource( unsigned int deviceIndex, CUstream stream, unsigned int pageId );
+
   private:
     DemandTextureImpl* m_texture = nullptr;
     DemandLoaderImpl*  m_loader = nullptr;

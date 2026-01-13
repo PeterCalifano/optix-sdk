@@ -28,6 +28,8 @@
 
 #pragma once
 
+#include <cstddef>
+
 namespace demandLoading {
 
 /// Return ceil(x/y) for integers x and y

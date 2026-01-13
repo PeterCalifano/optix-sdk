@@ -31,6 +31,7 @@ if( CUDA_VERSION VERSION_LESS "11.1" )
 endif()
 
 string( REPLACE "${CUDA_MIN_SM_TARGET}" "sm_60" SAMPLES_NVCC_FLAGS "${SAMPLES_NVCC_FLAGS}" )
+string( REPLACE "${CUDA_MIN_SM_TARGET}" "sm_60" CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS}" )
 
 # CUDA code includes from lib/DemandLoading, but the library target doesn't set the CUDA include path.
 include_directories( ../lib/DemandLoading/include )

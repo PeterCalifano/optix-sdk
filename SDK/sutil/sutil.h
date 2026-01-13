@@ -29,15 +29,15 @@
 
 #pragma once
 
+#include "sutilapi.h"
+#include "sampleConfig.h"
+
 #include <cuda_runtime.h>
+#include <vector_types.h>
 
 #include <cstdlib>
 #include <chrono>
-
-#include <vector_types.h>
-
-#include "sutilapi.h"
-
+#include <vector>
 
 struct GLFWwindow;
 
@@ -148,7 +148,9 @@ SUTILAPI const char* getInputData( const char* sampleName,  // Name of the sampl
                                    const char* sampleDir,  // Directory name for the sample (typically the same as the sample name).
                                    const char* filename,      // Cuda C input file name
                                    size_t&     dataSize, 
-                                   const char** log = NULL );  // (Optional) pointer to compiler log string. If *log == NULL there is no output. Only valid until the next getInputData call
+                                   const char** log = NULL,    // (Optional) pointer to compiler log string. If *log == NULL there is no output. Only valid until the next getInputData call
+                                   const std::vector<const char*>& compilerOptions = {CUDA_NVRTC_OPTIONS} );  // Optional vector of compiler options.
+
 
 
 // Ensures that width and height have the minimum size to prevent launch errors.

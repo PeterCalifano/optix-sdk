@@ -118,7 +118,6 @@ inline __device__ void transformNormalObjectToWorld(float3 &n)
     for( unsigned int i = 0; i < optixGetTransformListSize(); ++i )
     {
         OptixTraversableHandle handle = optixGetTransformListHandle( i );
-        float4 trf[3];
         switch( optixGetTransformTypeFromHandle( handle ) )
         {
             case OPTIX_TRANSFORM_TYPE_INSTANCE: {
@@ -129,7 +128,7 @@ inline __device__ void transformNormalObjectToWorld(float3 &n)
             }
             break;
             default:
-                assert(false); // there can only be a single instance transform 
+                assert(false); // there can only be a single instance transform
         }
     }
 }
@@ -211,7 +210,7 @@ extern "C" __global__ void __closesthit__occlusion_mesh()
 // Volume programs
 // ----------------------------------------------------------------------------
 
-inline __device__ void confine( const nanovdb::BBox<nanovdb::Coord> &bbox, nanovdb::Vec3f &iVec ) 
+inline __device__ void confine( const nanovdb::BBox<nanovdb::Coord> &bbox, nanovdb::Vec3f &iVec )
 {
     // NanoVDB's voxels and tiles are formed from half-open intervals, i.e.
     // voxel[0, 0, 0] spans the set [0, 1) x [0, 1) x [0, 1). To find a point's voxel,
@@ -277,7 +276,7 @@ inline __device__ float transmittanceHDDA(
         density = acc.getValue( ijk ) * opacity;
         hdda.update( ray, acc.getDim( ijk, ray ) ); // if necessary adjust DDA step size
     }
-    
+
     return transmittance;
 }
 
@@ -304,7 +303,7 @@ extern "C" __global__ void __intersection__volume()
         // report the exit point via payload
         optixSetPayload_0( float_as_uint( t1 ) );
         // report the entry-point as hit-point
-        optixReportIntersection( fmaxf( t0, optixGetRayTmin() ), 0 ); 
+        optixReportIntersection( fmaxf( t0, optixGetRayTmin() ), 0 );
     }
 }
 
@@ -357,7 +356,7 @@ extern "C" __global__ void __closesthit__radiance_volume()
     float  transmittance = transmittanceHDDA( start, end, acc, opacity );
 
     float3 result = payload.result * transmittance;
-      
+
     optixSetPayload_0( float_as_int( result.x ) );
     optixSetPayload_1( float_as_int( result.y ) );
     optixSetPayload_2( float_as_int( result.z ) );
@@ -401,10 +400,9 @@ extern "C" __global__ void __closesthit__occlusion_volume()
 
         auto bbox = grid->indexBBox();
         confine( bbox, start, end );
-    
+
         const float opacity = sbt_data->material_data.volume.opacity;
         transmittance       *= transmittanceHDDA( start, end, acc, opacity );
     }
     optixSetPayload_0( float_as_uint( transmittance ) );
 }
-

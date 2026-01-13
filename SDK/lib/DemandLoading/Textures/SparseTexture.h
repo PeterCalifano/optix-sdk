@@ -30,13 +30,64 @@
 #include "Util/Exception.h"
 
 #include <DemandLoading/TextureDescriptor.h>
-#include <DemandLoading/TextureInfo.h>
+#include <ImageReader/TextureInfo.h>
 
 #include <vector_types.h>
 
 #include <vector>
 
 namespace demandLoading {
+
+class SparseArray
+{
+public:
+    SparseArray() = default;
+    ~SparseArray();
+
+    void init( unsigned int deviceIndex, const imageReader::TextureInfo& info );
+
+    explicit operator CUmipmappedArray() const { return m_array; }
+
+    CUarray getLevel( unsigned int mipLevel ) const
+    {
+        DEMAND_CUDA_CHECK( cudaSetDevice( m_deviceIndex ) );
+
+        CUarray mipLevelArray{};
+        DEMAND_CUDA_CHECK( cuMipmappedArrayGetLevel( &mipLevelArray, m_array, mipLevel ) );
+        return mipLevelArray;
+    }
+
+    unsigned int getTileWidth() const { return m_properties.tileExtent.width; }
+    unsigned int getTileHeight() const { return m_properties.tileExtent.height; }
+    unsigned int getMipTailFirstLevel() const { return m_properties.miptailFirstLevel; }
+    size_t       getMipTailSize() const { return m_properties.miptailSize; }
+    uint2 getMipLevelDims( unsigned int mipLevel ) const
+    {
+        DEMAND_ASSERT( mipLevel < m_mipLevelDims.size() );
+        return m_mipLevelDims[mipLevel];
+    }
+
+    void mapTileAsync( CUstream                     stream,
+                       unsigned int                 mipLevel,
+                       uint2                        levelOffset,
+                       uint2                        levelExtent,
+                       CUmemGenericAllocationHandle memHandle,
+                       size_t                       offset ) const;
+    void unmapTileAsync( CUstream stream, unsigned int mipLevel, uint2 levelOffset, uint2 levelExtent ) const;
+    void mapMipTailAsync( CUstream stream, size_t mipTailSize, CUmemGenericAllocationHandle memHandle, size_t offset ) const;
+    void unmapMipTailAsync( CUstream stream, size_t mipTailSize ) const;
+
+private:
+    // Get the dimensions of the specified miplevel by querying its CUDA array descriptor.
+    uint2 queryMipLevelDims( unsigned int mipLevel ) const;
+
+    bool                         m_initialized{};
+    unsigned int                 m_deviceIndex{};
+    imageReader::TextureInfo     m_info{};
+    CUmipmappedArray             m_array{};
+    CUDA_ARRAY_SPARSE_PROPERTIES m_properties{};
+    std::vector<uint2>           m_mipLevelDims;
+};
 
 /// SparseTexture encapsulates a CUDA sparse texture and its associated CUDA array.
 class SparseTexture
@@ -53,7 +104,7 @@ class SparseTexture
 
     /// Initialize sparse texture from the given descriptor (which specifies clamping/wrapping and
     /// filtering) and the given texture info (which describes the dimensions, format, etc.)
-    void init( const TextureDescriptor& descriptor, const TextureInfo& info );
+    void init( const TextureDescriptor& descriptor, const imageReader::TextureInfo& info );
 
     /// Check whether the texture has been initialized.
     bool isInitialized() const { return m_isInitialized; }
@@ -61,22 +112,21 @@ class SparseTexture
     /// Get the dimensions of the specified miplevel.
     uint2 getMipLevelDims( unsigned int mipLevel ) const
     {
-        DEMAND_ASSERT( mipLevel < m_mipLevelDims.size() );
-        return m_mipLevelDims[mipLevel];
+        return m_array.getMipLevelDims( mipLevel );
     }
 
     /// Get the tile width, which depends on the format and number of channels.
-    unsigned int getTileWidth() const { return m_properties.tileExtent.width; }
+    unsigned int getTileWidth() const { return m_array.getTileWidth(); }
 
     /// Get the tile height, which depends on the format and number of channels.
-    unsigned int getTileHeight() const { return m_properties.tileExtent.height; }
+    unsigned int getTileHeight() const { return m_array.getTileHeight(); } 
 
     /// Get the miplevel at the start of the "mip tail".  The mip tail consists of the coarsest
     /// miplevels that fit into a single memory page.
-    unsigned int getMipTailFirstLevel() const { return m_properties.miptailFirstLevel; }
+    unsigned int getMipTailFirstLevel() const { return m_array.getMipTailFirstLevel(); }
 
     /// Get the size of the mip tail in bytes.
-    size_t getMipTailSize() const { return m_properties.miptailSize; }
+    size_t getMipTailSize() const { return m_array.getMipTailSize(); } 
 
     /// Get the CUDA texture object.
     CUtexObject getTextureObject() const { return m_texture; }
@@ -103,14 +153,9 @@ class SparseTexture
   private:
     bool                         m_isInitialized = false;
     unsigned int                 m_deviceIndex;
-    TextureInfo                  m_info;
-    CUmipmappedArray             m_array{};
+    imageReader::TextureInfo     m_info;
+    SparseArray                  m_array;
     CUtexObject                  m_texture{};
-    CUDA_ARRAY_SPARSE_PROPERTIES m_properties{};
-    std::vector<uint2>           m_mipLevelDims;
-
-    // Get the dimensions of the specified miplevel by querying its CUDA array descriptor.
-    uint2 queryMipLevelDims( unsigned int mipLevel ) const;
 
     // Get the dimensions of the specified tile, which might be a partial tile.
     uint2 getTileDimensions( unsigned int mipLevel, unsigned int tileX, unsigned int tileY ) const;

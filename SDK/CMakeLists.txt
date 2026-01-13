@@ -154,50 +154,44 @@ find_package(CUDA 5.0 REQUIRED)
 # Present the CUDA_64_BIT_DEVICE_CODE on the default set of options.
 mark_as_advanced(CLEAR CUDA_64_BIT_DEVICE_CODE)
 
+set(CUDA_MIN_SM_TARGET sm_50 CACHE STRING "Minimum CUDA SM architecture to use for compilation.")
+
+macro(optix_add_cuda_flag flag)
+  list(FIND CUDA_NVCC_FLAGS ${flag} index)
+  if(index EQUAL -1)
+    list(APPEND CUDA_NVCC_FLAGS ${flag})
+    set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} CACHE STRING ${CUDA_NVCC_FLAGS_DESCRIPTION} FORCE)
+  endif()
+endmacro()
 
 # Add some useful default arguments to the NVCC and NVRTC flags.  This is an example of
 # how we use PASSED_FIRST_CONFIGURE.  Once you have configured, this variable is TRUE
 # and following block of code will not be executed leaving you free to edit the values
 # as much as you wish from the GUI or from ccmake.
 if(NOT PASSED_FIRST_CONFIGURE)
+  set(CUDA_NVCC_FLAGS_DESCRIPTION "Semi-colon delimit multiple arguments.")
+  string(REPLACE "sm_" "compute_" CUDA_MIN_SM_COMPUTE_TARGET ${CUDA_MIN_SM_TARGET})
+  
   list(FIND CUDA_NVCC_FLAGS "-arch" index)
   if(index EQUAL -1)
-    list(APPEND CUDA_NVCC_FLAGS -arch sm_60)
+    list(APPEND CUDA_NVCC_FLAGS -arch ${CUDA_MIN_SM_TARGET})
     set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} CACHE STRING "Semi-colon delimit multiple arguments." FORCE)
   endif()
 
-  set(flag "--use_fast_math")
-  list(FIND CUDA_NVCC_FLAGS ${flag} index)
-  if(index EQUAL -1)
-    list(APPEND CUDA_NVCC_FLAGS ${flag})
-    set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} CACHE STRING "Semi-colon delimit multiple arguments." FORCE)
-  endif()
-  
-  set(flag "-lineinfo")
-  list(FIND CUDA_NVCC_FLAGS ${flag} index)
-  if(index EQUAL -1)
-    list(APPEND CUDA_NVCC_FLAGS ${flag})
-    set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} CACHE STRING "Semi-colon delimit multiple arguments." FORCE)
-  endif()
+  optix_add_cuda_flag("--use_fast_math")
+  optix_add_cuda_flag("-lineinfo")
 
   if (CUDA_VERSION VERSION_LESS "3.0")
-    set(flag "--keep")
-    list(FIND CUDA_NVCC_FLAGS ${flag} index)
-    if(index EQUAL -1)
-      list(APPEND CUDA_NVCC_FLAGS ${flag})
-      set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} CACHE STRING "Semi-colon delimit multiple arguments." FORCE)
-    endif()
+    optix_add_cuda_flag("--keep")
   endif()
 
   if( APPLE )
-    # Undef'ing __BLOCKS__ for OSX builds.  This is due to a name clash between OSX 10.6
-    # C headers and CUDA headers
-    set(flag "-U__BLOCKS__")
-    list(FIND CUDA_NVCC_FLAGS ${flag} index)
-    if(index EQUAL -1)
-      list(APPEND CUDA_NVCC_FLAGS ${flag})
-      set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} CACHE STRING "Semi-colon delimit multiple arguments." FORCE)
-    endif()
+    optix_add_cuda_flag("-U__BLOCKS__")
+  endif()
+
+  # Some CUDA 11.x toolkits erroneously complain about sm_50 being deprecated
+  if(CUDA_VERSION VERSION_GREATER "11.0")
+    optix_add_cuda_flag("-Wno-deprecated-gpu-targets")
   endif()
 
   if(CMAKE_CXX_STANDARD EQUAL 11)
@@ -205,7 +199,7 @@ if(NOT PASSED_FIRST_CONFIGURE)
   else()
     set(SAMPLES_NVRTC_CXX "")
   endif()
-  set(CUDA_NVRTC_FLAGS ${SAMPLES_NVRTC_CXX} -arch compute_60 -use_fast_math -lineinfo -default-device -rdc true -D__x86_64 CACHE STRING "Semi-colon delimit multiple arguments." FORCE)
+  set(CUDA_NVRTC_FLAGS ${SAMPLES_NVRTC_CXX} -arch ${CUDA_MIN_SM_COMPUTE_TARGET} -use_fast_math -lineinfo -default-device -rdc true -D__x86_64 CACHE STRING "Semi-colon delimit multiple arguments." FORCE)
 endif(NOT PASSED_FIRST_CONFIGURE)
 
 mark_as_advanced(CUDA_NVRTC_FLAGS)
@@ -241,7 +235,7 @@ include_directories(
   )
 
 # Select whether to use NVRTC or NVCC to generate PTX
-set(CUDA_NVRTC_ENABLED ON CACHE BOOL "Use NVRTC to compile PTX at run-time instead of NVCC at build-time")
+set(CUDA_NVRTC_ENABLED OFF CACHE BOOL "Use NVRTC to compile PTX at run-time instead of NVCC at build-time")
 
 ##################################################################
 # SUtil compilation
@@ -268,6 +262,7 @@ set(SAMPLES_RELATIVE_INCLUDE_DIRS "\\
   \"cuda\", \\
   \"sutil\", \\
   \"lib/DemandLoading/include\", \\
+  \"lib/ImageReader/include\", \\
   \".\", ")
 
 # NVRTC absolute include paths to the headers used to build the samples
@@ -293,6 +288,20 @@ include_directories( ${CMAKE_CURRENT_SOURCE_DIR}
 
 set(SAMPLES_CUDA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/cuda)
 
+# Helper macro to generate PTX from the CUDA files in sutil.
+macro(OPTIX_sutil_compile_to_optix_input generated_files)
+  CUDA_COMPILE_PTX(${generated_files} ${ARGN})
+endmacro()
+
+# These calls will group PTX and CUDA files into their own directories in the Visual
+# Studio projects.
+macro(OPTIX_add_source_groups)
+  if (NOT CUDA_NVRTC_ENABLED)
+    source_group("PTX Files"  REGULAR_EXPRESSION ".+\\.ptx$")
+  endif()
+  source_group("CUDA Files" REGULAR_EXPRESSION ".+\\.cu$")
+endmacro()
+
 #########################################################
 # OPTIX_add_sample_executable
 #
@@ -304,12 +313,7 @@ function(OPTIX_add_sample_executable target_name_base target_name_var)
   set( target_name ${target_name_base} )
   set( ${target_name_var} ${target_name} PARENT_SCOPE )
 
-  # These calls will group PTX and CUDA files into their own directories in the Visual
-  # Studio projects.
-  if (NOT CUDA_NVRTC_ENABLED)
-    source_group("PTX Files"  REGULAR_EXPRESSION ".+\\.ptx$")
-  endif()
-  source_group("CUDA Files" REGULAR_EXPRESSION ".+\\.cu$")
+  OPTIX_add_source_groups()
 
   # Separate the sources from the CMake and CUDA options fed to the macro.  This code
   # comes from the CUDA_COMPILE_PTX macro found in FindCUDA.cmake.  We are copying the
@@ -377,6 +381,7 @@ endfunction()
 # and the CMakeLists.txt file.
 add_subdirectory( optixBoundValues       )
 add_subdirectory( optixCallablePrograms  )
+add_subdirectory( optixCompileWithTasks  )
 add_subdirectory( optixCurves            )
 add_subdirectory( optixCutouts           )
 add_subdirectory( optixDemandLoadSimple  )
@@ -391,6 +396,7 @@ add_subdirectory( optixModuleCreateAbort )
 add_subdirectory( optixMotionGeometry    )
 add_subdirectory( optixMultiGPU          )
 add_subdirectory( optixNVLink            )
+add_subdirectory( optixOpticalFlow       )
 add_subdirectory( optixPathTracer        )
 add_subdirectory( optixRaycasting        )
 add_subdirectory( optixSimpleMotionBlur  )
@@ -403,6 +409,7 @@ add_subdirectory( optixWhitted           )
 add_subdirectory(sutil)
 # Our other libraries.
 add_subdirectory( lib/DemandLoading )
+add_subdirectory( lib/ImageReader )
 # Third-party support libraries.
 add_subdirectory(support)
 

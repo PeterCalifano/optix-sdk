@@ -27,6 +27,9 @@
 //
 #pragma once
 
+/// \file DemandTexture.h
+/// Opaque handle for demand-loaded sparse texture.
+
 #include <cuda.h>
 #include <vector_types.h>
 

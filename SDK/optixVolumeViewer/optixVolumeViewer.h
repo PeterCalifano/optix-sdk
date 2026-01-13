@@ -32,8 +32,8 @@
 
 #include <optix.h>
 
-#include "nanovdb/NanoVDB.h"
-#include "nanovdb/util/GridHandle.h"
+#include <nanovdb/NanoVDB.h>
+#include <nanovdb/util/GridHandle.h>
 
 #include <sutil/sutil.h>
 #include <sutil/vec_math.h>
@@ -50,8 +50,8 @@
 // (NanoVDB Grid) and the device-buffer containing the sparse volume
 // representation (NanoVDB Tree). In addition to the Tree, the Grid
 // also contains an affine transform relating index space (i.e. voxel
-// indices) to world-space. 
-// 
+// indices) to world-space.
+//
 struct Volume
 {
     nanovdb::GridHandle<> handle;
@@ -79,7 +79,7 @@ void cleanupVolumeAccel( VolumeAccel& accel );
 struct Plane
 {
     sutil::Matrix4x4 transform;
-    
+
     static const unsigned int num_indices          = 6;
     const unsigned int        indices[num_indices] = {0, 1, 3, 1, 2, 3};
     CUdeviceptr               d_indices            = 0;
@@ -127,7 +127,7 @@ struct Cube
     CUdeviceptr               d_positions              = 0;
 
     MaterialData::Lambert material;
-    
+
     sutil::Aabb aabb;
 };
 
@@ -151,16 +151,16 @@ struct ProgramGroups
 
     OptixProgramGroup miss_radiance    = 0;
     OptixProgramGroup miss_occlusion   = 0;
-     
+
     OptixProgramGroup mesh_radiance    = 0;
     OptixProgramGroup mesh_occlusion   = 0;
-    
+
     OptixProgramGroup volume_radiance  = 0;
     OptixProgramGroup volume_occlusion = 0;
 };
 
-void createProgramGroups( ProgramGroups& program_groups, 
-    const OptixModule& module, 
+void createProgramGroups( ProgramGroups& program_groups,
+    const OptixModule& module,
     const OptixDeviceContext& context );
 void cleanupProgramGroups( ProgramGroups& program_groups );
 
@@ -185,8 +185,8 @@ struct IAS
     CUdeviceptr            d_update_buffer = 0;
 };
 
-void buildIAS( IAS& ias, int rayTypeCount,     
-    const Volume& volume, const VolumeAccel& volume_accel, 
+void buildIAS( IAS& ias, int rayTypeCount,
+    const Volume& volume, const VolumeAccel& volume_accel,
 	const Plane& plane, const PlaneAccel& plane_accel,
     const Cube& cube, const CubeAccel& cube_accel,
     const OptixDeviceContext& context );

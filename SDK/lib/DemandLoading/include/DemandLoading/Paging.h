@@ -32,6 +32,8 @@
 
 namespace demandLoading {
 
+#ifndef DOXYGEN_SKIP
+
 const unsigned int MAX_LRU_VAL           = 14u;
 const unsigned int NON_EVICTABLE_LRU_VAL = 15u;
 
@@ -123,5 +125,6 @@ __device__ inline void pagingRequestWord( unsigned int* wordPtr, unsigned int wo
 }
 
 #endif  // __CUDACC__
+#endif  // ndef DOXYGEN_SKIP
 
 }  // namespace demandLoading

@@ -50,6 +50,7 @@
 #include <sutil/Trackball.h>
 #include <sutil/sutil.h>
 #include <sutil/vec_math.h>
+#include <sutil/Scene.h>
 #include <optix_stack_size.h>
 
 #include <GLFW/glfw3.h>
@@ -84,261 +85,6 @@ int32_t mouse_button = -1;
 // Local types
 //
 //------------------------------------------------------------------------------
-
-class ObjMesh
-{
-public:
-    ~ObjMesh() { destroy(); }
-
-    void load( const OptixDeviceContext context, const std::string& fileName, const std::vector<std::string>& allowMeshNames, const std::vector<std::string>& denyMeshNames )
-    {
-        destroy();
-
-        tinyobj::attrib_t                attrib;
-        std::vector<tinyobj::shape_t>    shapes;
-        std::vector<tinyobj::material_t> materials;
-
-        // load object
-        std::string warn;
-        std::string err;
-        bool ret = tinyobj::LoadObj( &attrib, &shapes, &materials, &warn, &err, fileName.c_str(), nullptr, true );
-        if( !warn.empty() )
-            std::cout << "obj WARNING: " << warn << std::endl;
-        if( !ret )
-        {
-            std::cout << "Failed to load ObjMesh file'" << fileName << "': " << err << std::endl;
-            throw sutil::Exception( err.c_str() );
-        }
-
-        // count indices
-        size_t numVertexIndices = 0;
-        for( const auto& shape : shapes )
-        {
-            numVertexIndices += shape.mesh.vertex_indices.size();
-        }
-
-        // allocate cuda memory
-        CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &m_indexBuffer ), sizeof( unsigned int ) * numVertexIndices ) );
-        CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &m_vertexBuffer ), sizeof( float ) * attrib.vertices.size() ) );
-        CUDA_CHECK( cudaMemcpy( (void*)m_vertexBuffer, (void*)attrib.vertices.data(),
-            sizeof( float ) * attrib.vertices.size(), cudaMemcpyHostToDevice ) );
-
-        //////////////////////////////////////////////////////////////////////////
-        // no need for these attributes
-        //if( attrib.normals.size() )
-        //{
-        //    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &m_normalIndexBuffer ), sizeof( unsigned int ) * numVetrexIndices ) );
-        //    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &m_normalBuffer ), sizeof( float ) * attrib.normals.size() ) );
-        //    CUDA_CHECK( cudaMemcpy( (void*)m_normalBuffer, (void*)attrib.normals.data(),
-        //        sizeof( float ) * attrib.normals.size(), cudaMemcpyHostToDevice ) );
-        //}
-
-        //if( attrib.texcoords.size() )
-        //{
-        //    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &m_texcoordsIndexBuffer ), sizeof( unsigned int ) * numVetrexIndices ) );
-        //    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &m_texcoordsBuffer ), sizeof( float ) * attrib.texcoords.size() ) );
-        //    CUDA_CHECK( cudaMemcpy( (void*)m_texcoordsBuffer, (void*)attrib.texcoords.data(),
-        //        sizeof( float ) * attrib.texcoords.size(), cudaMemcpyHostToDevice ) );
-        //}
-        //////////////////////////////////////////////////////////////////////////
-
-        // setup build inputs
-        numVertexIndices = 0;
-
-        unsigned int flags = OPTIX_GEOMETRY_FLAG_DISABLE_ANYHIT;
-        for( auto& shape : shapes )
-        {
-            if( !allowMeshNames.empty() && std::find(allowMeshNames.begin(), allowMeshNames.end(), shape.name) == allowMeshNames.end() )
-                continue;
-            if( std::find( denyMeshNames.begin(), denyMeshNames.end(), shape.name ) != denyMeshNames.end() )
-                continue;
-
-            OptixBuildInput buildInput = {};
-
-            buildInput.type                        = OPTIX_BUILD_INPUT_TYPE_TRIANGLES;
-            buildInput.triangleArray.numVertices   = static_cast<unsigned int>( attrib.vertices.size() ) / 3;
-            buildInput.triangleArray.vertexFormat  = OPTIX_VERTEX_FORMAT_FLOAT3;
-            buildInput.triangleArray.vertexBuffers = &m_vertexBuffer;
-
-            buildInput.triangleArray.indexFormat      = OPTIX_INDICES_FORMAT_UNSIGNED_INT3;
-            buildInput.triangleArray.numIndexTriplets = static_cast<unsigned int>( shape.mesh.vertex_indices.size() ) / 3;
-            buildInput.triangleArray.indexBuffer      = m_indexBuffer + numVertexIndices * sizeof( unsigned int );
-            CUdeviceptr normalIndexBuffer             = m_normalIndexBuffer + numVertexIndices * sizeof( unsigned int );
-            CUdeviceptr texcoordIndexBuffer = m_texcoordsIndexBuffer + numVertexIndices * sizeof( unsigned int );
-            buildInput.triangleArray.indexStrideInBytes   = 0;
-            buildInput.triangleArray.primitiveIndexOffset = static_cast<unsigned int>( numVertexIndices ) / 3;
-
-            CUDA_CHECK( cudaMemcpy( (void*)buildInput.triangleArray.indexBuffer, (void*)shape.mesh.vertex_indices.data(),
-                sizeof( unsigned int ) * shape.mesh.vertex_indices.size(), cudaMemcpyHostToDevice ) );
-
-            if( m_normalIndexBuffer != 0 && shape.mesh.normal_indices.size() != 0 )
-                CUDA_CHECK( cudaMemcpy( (void*)normalIndexBuffer, (void*)shape.mesh.normal_indices.data(),
-                    sizeof( unsigned int ) * shape.mesh.normal_indices.size(), cudaMemcpyHostToDevice ) );
-
-            if( m_texcoordsIndexBuffer != 0 && shape.mesh.texcoord_indices.size() != 0 )
-                CUDA_CHECK( cudaMemcpy( (void*)texcoordIndexBuffer, (void*)shape.mesh.texcoord_indices.data(),
-                    sizeof( unsigned int ) * shape.mesh.texcoord_indices.size(), cudaMemcpyHostToDevice ) );
-
-            buildInput.triangleArray.numSbtRecords = 1;
-            buildInput.triangleArray.flags         = &flags;
-
-            m_buildInputs.push_back( buildInput );
-
-            numVertexIndices += shape.mesh.vertex_indices.size();
-        }
-
-        OptixAccelBuildOptions accel_options = {};
-        accel_options.buildFlags = OPTIX_BUILD_FLAG_ALLOW_COMPACTION | OPTIX_BUILD_FLAG_ALLOW_RANDOM_VERTEX_ACCESS;
-        accel_options.operation  = OPTIX_BUILD_OPERATION_BUILD;
-
-        OptixAccelBufferSizes gas_buffer_sizes;
-        OPTIX_CHECK( optixAccelComputeMemoryUsage( context, &accel_options, m_buildInputs.data(),
-            static_cast<unsigned int>( m_buildInputs.size() ),  // num_build_inputs
-            &gas_buffer_sizes ) );
-
-        // allocate tmp memory
-        CUdeviceptr d_temp_buffer    = 0;
-        CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_temp_buffer ), gas_buffer_sizes.tempSizeInBytes ) );
-
-#if 0
-        // allocate non-compacted output + compacted size
-        size_t compactedSizeOffset = roundUp<size_t>( gas_buffer_sizes.outputSizeInBytes, 8ull );
-        CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &m_accelBuffer ), compactedSizeOffset + 8 ) );
-
-        OptixAccelEmitDesc emitProperty = {};
-        emitProperty.type               = OPTIX_PROPERTY_TYPE_COMPACTED_SIZE;
-        emitProperty.result             = ( CUdeviceptr )( (char*)m_accelBuffer + compactedSizeOffset );
-
-        OPTIX_CHECK( optixAccelBuild( context,
-            0,  // CUDA stream
-            &accel_options, m_buildInputs.data(),
-            static_cast<unsigned int>( m_buildInputs.size() ),  // num_build_inputs
-            d_temp_buffer, gas_buffer_sizes.tempSizeInBytes, m_accelBuffer,
-            gas_buffer_sizes.outputSizeInBytes, &m_gas_handle,
-            &emitProperty,  // emitted property list
-            1               // num emitted properties
-        ) );
-#else
-        // allocate non-compacted output + compacted size
-        size_t compactedSizeOffset = roundUp<size_t>( gas_buffer_sizes.outputSizeInBytes, 8ull );
-        size_t aabbOffset = compactedSizeOffset + 8;
-        size_t totalSize = aabbOffset + 24;
-        CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &m_accelBuffer ), totalSize ) );
-
-        OptixAccelEmitDesc emitProperty = {};
-        emitProperty.type               = OPTIX_PROPERTY_TYPE_COMPACTED_SIZE;
-        emitProperty.result             = ( CUdeviceptr )( (char*)m_accelBuffer + compactedSizeOffset );
-        {
-            OptixAccelEmitDesc emitProperties[2] = {};
-            emitProperties[0].type             = OPTIX_PROPERTY_TYPE_COMPACTED_SIZE;
-            emitProperties[0].result           = ( CUdeviceptr )( (char*)m_accelBuffer + compactedSizeOffset );
-            emitProperties[1].type             = OPTIX_PROPERTY_TYPE_AABBS;
-            emitProperties[1].result           = ( CUdeviceptr )( (char*)m_accelBuffer + aabbOffset );
-
-            OPTIX_CHECK( optixAccelBuild( context,
-                                          0,  // CUDA stream
-                                          &accel_options, m_buildInputs.data(),
-                                          static_cast<unsigned int>( m_buildInputs.size() ),  // num_build_inputs
-                                          d_temp_buffer, gas_buffer_sizes.tempSizeInBytes, m_accelBuffer,
-                                          gas_buffer_sizes.outputSizeInBytes, &m_gas_handle,
-                                          emitProperties,  // emitted property list
-                                          2              // num emitted properties
-                                          ) );
-        }
-
-        CUDA_CHECK( cudaMemcpy( gasAabb.data(), (char*)m_accelBuffer + aabbOffset, 24, cudaMemcpyDeviceToHost ) );
-#endif
-
-        CUDA_CHECK( cudaFree( (void*)d_temp_buffer ) );
-
-        // Compress GAS
-
-        size_t compacted_gas_size;
-        CUDA_CHECK( cudaMemcpy( &compacted_gas_size, (void*)emitProperty.result, sizeof( size_t ), cudaMemcpyDeviceToHost ) );
-
-        if( compacted_gas_size < gas_buffer_sizes.outputSizeInBytes )
-        {
-            CUdeviceptr uncompactedAccel = m_accelBuffer;
-
-            CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &m_accelBuffer ), compacted_gas_size ) );
-
-            // use handle as input and output
-            OPTIX_CHECK( optixAccelCompact( context, 0, m_gas_handle, m_accelBuffer, compacted_gas_size, &m_gas_handle ) );
-
-            CUDA_CHECK( cudaFree( (void*)uncompactedAccel ) );
-        }
-    }
-
-    OptixTraversableHandle getHandle() { return m_gas_handle; }
-
-    size_t getNumSbtRecords() { return m_buildInputs.size(); }
-
-    const sutil::Aabb& meshAabb() const
-    {
-        return gasAabb;
-    }
-
-    void destroy()
-    {
-        if( m_indexBuffer )
-        {
-            CUDA_CHECK( cudaFree( (void*)m_indexBuffer ) );
-            m_indexBuffer = 0;
-        }
-
-        if( m_vertexBuffer )
-        {
-            CUDA_CHECK( cudaFree( (void*)m_vertexBuffer ) );
-            m_vertexBuffer = 0;
-        }
-
-        if( m_normalBuffer )
-        {
-            CUDA_CHECK( cudaFree( (void*)m_normalBuffer ) );
-            m_normalBuffer = 0;
-        }
-
-        if( m_normalIndexBuffer )
-        {
-            CUDA_CHECK( cudaFree( (void*)m_normalIndexBuffer ) );
-            m_normalIndexBuffer = 0;
-        }
-
-        if( m_texcoordsBuffer )
-        {
-            CUDA_CHECK( cudaFree( (void*)m_texcoordsBuffer ) );
-            m_texcoordsBuffer = 0;
-        }
-
-        if( m_texcoordsIndexBuffer )
-        {
-            CUDA_CHECK( cudaFree( (void*)m_texcoordsIndexBuffer ) );
-            m_texcoordsIndexBuffer = 0;
-        }
-
-        if( m_accelBuffer )
-        {
-            CUDA_CHECK( cudaFree( (void*)m_accelBuffer ) );
-            m_accelBuffer = 0;
-        }
-
-        m_buildInputs.clear();
-    }
-
-private:
-    sutil::Aabb gasAabb;
-
-    OptixTraversableHandle       m_gas_handle = 0;
-    std::vector<OptixBuildInput> m_buildInputs;
-
-    CUdeviceptr m_indexBuffer          = 0;
-    CUdeviceptr m_vertexBuffer         = 0;
-    CUdeviceptr m_normalIndexBuffer    = 0;
-    CUdeviceptr m_normalBuffer         = 0;
-    CUdeviceptr m_texcoordsIndexBuffer = 0;
-    CUdeviceptr m_texcoordsBuffer      = 0;
-    CUdeviceptr m_accelBuffer          = 0;
-};
 
 template <typename T>
 struct Record
@@ -427,13 +173,16 @@ struct MotionGeometryState
     OptixTraversableHandle         static_gas_handle;
     OptixTraversableHandle         deforming_gas_handle;
     OptixTraversableHandle         exploding_gas_handle;
-
-    ObjMesh                        plane;
-    ObjMesh                        planePropeller;
+    OptixTraversableHandle         plane_gas_handle;
+    OptixTraversableHandle         planePropeller_gas_handle;
 
     CUdeviceptr                    d_ias_output_buffer = 0;
     CUdeviceptr                    d_static_gas_output_buffer = 0;
     CUdeviceptr                    d_deforming_gas_output_buffer = 0;
+    CUdeviceptr                    d_plane_gas_output_buffer = 0;
+    CUdeviceptr                    d_planePropeller_gas_output_buffer = 0;
+
+    sutil::Aabb                    planeAabb;
 
     size_t                         ias_output_buffer_size = 0;
     size_t                         static_gas_output_buffer_size = 0;
@@ -477,13 +226,6 @@ const int32_t g_tessellation_resolution = 128;
 const int32_t g_tessellation_resolution_fume = g_tessellation_resolution / 8;
 
 const float g_exploding_gas_rebuild_frequency = 10.f;
-
-const int32_t INST_COUNT = 4;
-
-struct Instance
-{
-    Matrix3x4 m;
-};
 
 struct PlaneAnimation {
     SRTMotionTransformArray srt_animation;
@@ -676,7 +418,7 @@ float3 getPlaneWSPos( const MotionGeometryState& state )
     OptixSRTData lerped = lerp( plane.srt_animation.motionData( 0, 0 ), plane.srt_animation.motionData( 0, 1 ), 0.5f );
     Matrix3x4    m;
     srtToMatrix( lerped, m.m );
-    return m * state.plane.meshAabb().center();
+    return m * state.planeAabb.center();
 }
 
 
@@ -1135,6 +877,112 @@ void updateMeshAccel( MotionGeometryState& state )
     state.params.handle = state.ias_handle;
 }
 
+void buildMergedGAS( MotionGeometryState& state, const sutil::Scene& scene, CUdeviceptr& gasData, OptixTraversableHandle& gasHandle, sutil::Aabb& aabb )
+{
+    auto& meshes = scene.meshes();
+
+    // unify all meshes into a single GAS
+    std::vector<OptixBuildInput> buildInputs;
+    // since we bake all meshes into a single GAS, we need to apply the transforms
+    // we do so by using the build input pre-transform property of AS builds
+    std::vector<Matrix3x4> meshTransforms( meshes.size() );
+    CUdeviceptr            d_preTransforms = 0;
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_preTransforms ), sizeof( Matrix3x4 ) * meshTransforms.size() ) );
+
+    for( size_t i = 0; i < meshes.size(); ++i )
+    {
+        auto& mesh = meshes[i];
+
+        const size_t num_subMeshes    = mesh->indices.size();
+        size_t       buildInputOffset = buildInputs.size();
+        buildInputs.resize( buildInputOffset + num_subMeshes );
+        memcpy( &meshTransforms[i], mesh->transform.getData(), sizeof( float ) * 12 ); // mesh->transform is a 4x4 matrix, but also row-major
+
+        assert( mesh->positions.size() == num_subMeshes && mesh->normals.size() == num_subMeshes
+                && mesh->texcoords.size() == num_subMeshes );
+
+        for( size_t j = 0; j < num_subMeshes; ++j )
+        {
+            OptixBuildInput& triangle_input = buildInputs[j + buildInputOffset];
+            memset( &triangle_input, 0, sizeof( OptixBuildInput ) );
+            triangle_input.type                       = OPTIX_BUILD_INPUT_TYPE_TRIANGLES;
+            triangle_input.triangleArray.vertexFormat = OPTIX_VERTEX_FORMAT_FLOAT3;
+            triangle_input.triangleArray.vertexStrideInBytes =
+                mesh->positions[j].byte_stride ? mesh->positions[j].byte_stride : sizeof( float3 ),
+            triangle_input.triangleArray.numVertices   = mesh->positions[j].count;
+            triangle_input.triangleArray.vertexBuffers = &( mesh->positions[j].data );
+            triangle_input.triangleArray.indexFormat =
+                mesh->indices[j].elmt_byte_size == 2 ? OPTIX_INDICES_FORMAT_UNSIGNED_SHORT3 : OPTIX_INDICES_FORMAT_UNSIGNED_INT3;
+            triangle_input.triangleArray.indexStrideInBytes =
+                mesh->indices[j].byte_stride ? mesh->indices[j].byte_stride : mesh->indices[j].elmt_byte_size * 3;
+            triangle_input.triangleArray.numIndexTriplets = mesh->indices[j].count / 3;
+            triangle_input.triangleArray.indexBuffer      = mesh->indices[j].data;
+            triangle_input.triangleArray.flags            = &state.triangle_flags;
+            triangle_input.triangleArray.numSbtRecords    = 1;
+            triangle_input.triangleArray.preTransform     = ( CUdeviceptr )( (char*)d_preTransforms + sizeof( Matrix3x4 ) * i );
+            triangle_input.triangleArray.transformFormat  = OPTIX_TRANSFORM_FORMAT_MATRIX_FLOAT12;
+        }
+    }
+
+    CUDA_CHECK( cudaMemcpy( (void*)d_preTransforms, meshTransforms.data(), sizeof( Matrix3x4 ) * meshTransforms.size(), cudaMemcpyHostToDevice ) );
+
+    OptixAccelBuildOptions accelOptions = {};
+    accelOptions.buildFlags = OPTIX_BUILD_FLAG_ALLOW_COMPACTION | OPTIX_BUILD_FLAG_ALLOW_RANDOM_VERTEX_ACCESS;
+    accelOptions.operation  = OPTIX_BUILD_OPERATION_BUILD;
+
+    OptixAccelBufferSizes gasBufferSizes;
+    OPTIX_CHECK( optixAccelComputeMemoryUsage( state.context, &accelOptions, buildInputs.data(),
+                                               static_cast<unsigned int>( buildInputs.size() ), &gasBufferSizes ) );
+
+    // allocate tmp memory
+    CUdeviceptr d_tempBuffer = 0, d_accelBuffer = 0;
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_tempBuffer ), gasBufferSizes.tempSizeInBytes ) );
+
+    // allocate non-compacted output + compacted size
+    size_t compactedSizeOffset = roundUp<size_t>( gasBufferSizes.outputSizeInBytes, sizeof( size_t ) );
+    size_t aabbOffset          = compactedSizeOffset + sizeof( size_t );
+    size_t totalSize           = aabbOffset + 6 * sizeof( float );
+    CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_accelBuffer ), totalSize ) );
+
+    OptixAccelEmitDesc emitProperties[2] = {};
+    emitProperties[0].type               = OPTIX_PROPERTY_TYPE_COMPACTED_SIZE;
+    emitProperties[0].result             = ( CUdeviceptr )( (char*)d_accelBuffer + compactedSizeOffset );
+    emitProperties[1].type               = OPTIX_PROPERTY_TYPE_AABBS;
+    emitProperties[1].result             = ( CUdeviceptr )( (char*)d_accelBuffer + aabbOffset );
+
+    OPTIX_CHECK( optixAccelBuild( state.context, state.stream,
+                                  &accelOptions, buildInputs.data(),
+                                  static_cast<unsigned int>( buildInputs.size() ),
+                                  d_tempBuffer, gasBufferSizes.tempSizeInBytes,
+                                  d_accelBuffer, gasBufferSizes.outputSizeInBytes,
+                                  &gasHandle,
+                                  emitProperties, 2
+                                  ) );
+
+    CUDA_CHECK( cudaMemcpy( aabb.data(), (const char*)d_accelBuffer + aabbOffset, 6 * sizeof( float ), cudaMemcpyDeviceToHost ) );
+
+    CUDA_CHECK( cudaFree( (void*)d_tempBuffer ) );
+    CUDA_CHECK( cudaFree( (void*)d_preTransforms ) );
+
+    // Compact GAS
+    size_t compactedGasSize;
+    CUDA_CHECK( cudaMemcpy( &compactedGasSize, (const char*)d_accelBuffer + compactedSizeOffset, sizeof( size_t ), cudaMemcpyDeviceToHost ) );
+
+    if( compactedGasSize < gasBufferSizes.outputSizeInBytes )
+    {
+        CUdeviceptr uncompactedAccel = d_accelBuffer;
+
+        CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_accelBuffer ), compactedGasSize ) );
+
+        // use handle as input and output
+        OPTIX_CHECK( optixAccelCompact( state.context, state.stream, gasHandle, d_accelBuffer, compactedGasSize, &gasHandle ) );
+
+        CUDA_CHECK( cudaFree( (void*)uncompactedAccel ) );
+    }
+
+    gasData = d_accelBuffer;
+}
+
 void buildMeshAccel( MotionGeometryState& state )
 {
     // Allocate temporary space for vertex generation.
@@ -1255,17 +1103,21 @@ void buildMeshAccel( MotionGeometryState& state )
     }
 
     //////////////////////////////////////////////////////////////////////////
-    //////////////////////////////////////////////////////////////////////////
-    //////////////////////////////////////////////////////////////////////////
-
+    // load plane and propeller
     {
-        std::string fileName = sutil::sampleFilePath( "data/Plane", "biplane_no_propeller.obj" );
-        state.plane.load( state.context, fileName, {}, {} );
+        sutil::Scene s;
+        std::string fileName = sutil::sampleFilePath( "data/Plane", "biplane.gltf" );
+        loadScene( fileName, s );
+        buildMergedGAS( state, s, state.d_plane_gas_output_buffer, state.plane_gas_handle, state.planeAabb );
     }
     {
-        std::string fileName = sutil::sampleFilePath( "data/Plane", "biplane_propeller.obj" );
-        state.planePropeller.load( state.context, fileName, {}, {} );
+        sutil::Scene s;
+        sutil::Aabb  dummyAabb;
+        std::string  fileName = sutil::sampleFilePath( "data/Plane", "biplane_propeller.gltf" );
+        loadScene( fileName, s );
+        buildMergedGAS( state, s, state.d_planePropeller_gas_output_buffer, state.planePropeller_gas_handle, dummyAabb );
     }
+    // init animation of plane and propeller
     {
         plane.srt_animation = SRTMotionTransformArray( 2, 2 );
 
@@ -1301,6 +1153,9 @@ void buildMeshAccel( MotionGeometryState& state )
     CUDA_CHECK( cudaMalloc( (void**)&plane.d_srts, plane.srt_animation.byteSize() ) );
     CUDA_CHECK( cudaMalloc( (void**)&plane.d_srtsPropeller, plane.srt_animationPropeller.byteSize() ) );
 
+    // static sphere, orbiting sphere, plane, plane propeller
+    // 'exhaust fume' instances are added on demand
+    const int32_t INST_COUNT = 4;
     std::vector<OptixInstance>& instances = state.instances;
     instances.resize( INST_COUNT );
 
@@ -1330,7 +1185,7 @@ void buildMeshAccel( MotionGeometryState& state )
         instances[iIdx++].traversableHandle = handle;
     }
     {
-        OptixTraversableHandle handle = state.plane.getHandle();
+        OptixTraversableHandle handle = state.plane_gas_handle;
 
         unsigned int             tIdx = 0;
         OptixSRTMotionTransform& t    = plane.srt_animation.transform( tIdx );
@@ -1347,7 +1202,7 @@ void buildMeshAccel( MotionGeometryState& state )
         instances[iIdx++].traversableHandle = handle;
     }
     {
-        OptixTraversableHandle handle = state.planePropeller.getHandle();
+        OptixTraversableHandle handle = state.planePropeller_gas_handle;
 
         {
             unsigned int             tIdx = 0;
@@ -1392,7 +1247,7 @@ void buildMeshAccel( MotionGeometryState& state )
     state.ias_instance_input.instanceArray.instances = state.d_instances;
     state.ias_instance_input.instanceArray.numInstances = static_cast<int>( instances.size() );
 
-    // we choose FAST_BUILD here as we need to rebuild every frame, no update, compaction needed
+    // we choose FAST_BUILD here as we need to rebuild every frame, no update or compaction needed
     state.ias_accel_options.buildFlags = OPTIX_BUILD_FLAG_PREFER_FAST_BUILD;
     // In this interactive sample, build times can govern render times.
     // Hence, we build a static IAS with faster build times despite slower traversal times.
@@ -1419,9 +1274,13 @@ void buildMeshAccel( MotionGeometryState& state )
         CUDA_CHECK( cudaMalloc( (void**)&state.d_temp_buffer, state.temp_buffer_size ) );
     }
 
-    OPTIX_CHECK( optixAccelBuild( state.context, state.stream, &state.ias_accel_options, &state.ias_instance_input, 1, state.d_temp_buffer,
-                                  ias_buffer_sizes.tempSizeInBytes, state.d_ias_output_buffer,
-                                  ias_buffer_sizes.outputSizeInBytes, &state.ias_handle, nullptr, 0 ) );
+    OPTIX_CHECK( optixAccelBuild( state.context, state.stream,
+                                  &state.ias_accel_options,
+                                  &state.ias_instance_input, 1,
+                                  state.d_temp_buffer, ias_buffer_sizes.tempSizeInBytes,
+                                  state.d_ias_output_buffer, ias_buffer_sizes.outputSizeInBytes,
+                                  &state.ias_handle,
+                                  nullptr, 0 ) );
 
     state.params.handle = state.ias_handle;
 }
@@ -1432,7 +1291,7 @@ void createModule( MotionGeometryState& state )
     OptixModuleCompileOptions module_compile_options = {};
     module_compile_options.maxRegisterCount = OPTIX_COMPILE_DEFAULT_MAX_REGISTER_COUNT;
     module_compile_options.optLevel = OPTIX_COMPILE_OPTIMIZATION_DEFAULT;
-    module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_LINEINFO;
+    module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_MINIMAL;
 
     state.pipeline_compile_options.usesMotionBlur = true;
     state.pipeline_compile_options.traversableGraphFlags = OPTIX_TRAVERSABLE_GRAPH_FLAG_ALLOW_ANY;
@@ -1685,6 +1544,8 @@ void cleanupState( MotionGeometryState& state )
     CUDA_CHECK( cudaFree( reinterpret_cast< void* >( state.d_temp_vertices[1] ) ) );
     CUDA_CHECK( cudaFree( reinterpret_cast< void* >( state.d_static_gas_output_buffer ) ) );
     CUDA_CHECK( cudaFree( reinterpret_cast< void* >( state.d_deforming_gas_output_buffer ) ) );
+    CUDA_CHECK( cudaFree( reinterpret_cast< void* >( state.d_plane_gas_output_buffer ) ) );
+    CUDA_CHECK( cudaFree( reinterpret_cast< void* >( state.d_planePropeller_gas_output_buffer ) ) );
     CUDA_CHECK( cudaFree( reinterpret_cast< void* >( state.d_instances ) ) );
     CUDA_CHECK( cudaFree( reinterpret_cast< void* >( state.d_ias_output_buffer ) ) );
     CUDA_CHECK( cudaFree( reinterpret_cast< void* >( state.d_temp_buffer ) ) );

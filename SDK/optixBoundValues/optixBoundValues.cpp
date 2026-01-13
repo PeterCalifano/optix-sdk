@@ -411,13 +411,23 @@ static void keyCallback( GLFWwindow* window, int32_t key, int32_t /*scancode*/, 
     {
         // toggle UI draw
     }
-    else if( key == GLFW_KEY_KP_ADD )
+    else if( key == GLFW_KEY_S )
+    {
+        specialize = !specialize;
+        updatePipeline( *static_cast<PathTracerState*>(glfwGetWindowUserPointer( window )) );
+    }
+}
+
+
+static void charCallback( GLFWwindow* window, unsigned int codepoint )
+{
+    if( codepoint == '+' )
     {
         ++light_samples;
         if( specialize )
             updatePipeline( *static_cast<PathTracerState*>(glfwGetWindowUserPointer( window )) );
     }
-    else if( key == GLFW_KEY_KP_SUBTRACT )
+    else if( codepoint == '-' )
     {
         if( light_samples > 1 )
         {
@@ -425,11 +435,6 @@ static void keyCallback( GLFWwindow* window, int32_t key, int32_t /*scancode*/, 
             if( specialize )
                 updatePipeline( *static_cast<PathTracerState*>(glfwGetWindowUserPointer( window )) );
         }
-    }
-    else if( key == GLFW_KEY_S )
-    {
-        specialize = !specialize;
-        updatePipeline( *static_cast<PathTracerState*>(glfwGetWindowUserPointer( window )) );
     }
 }
 
@@ -1168,12 +1173,13 @@ int main( int argc, char* argv[] )
 
         if( outfile.empty() )
         {
-            GLFWwindow* window = sutil::initUI( "optixPathTracer", state.params.width, state.params.height );
+            GLFWwindow* window = sutil::initUI( "optixBoundValues", state.params.width, state.params.height );
             glfwSetMouseButtonCallback( window, mouseButtonCallback );
             glfwSetCursorPosCallback( window, cursorPosCallback );
             glfwSetWindowSizeCallback( window, windowSizeCallback );
             glfwSetWindowIconifyCallback( window, windowIconifyCallback );
             glfwSetKeyCallback( window, keyCallback );
+            glfwSetCharCallback( window, charCallback );
             glfwSetScrollCallback( window, scrollCallback );
             glfwSetWindowUserPointer( window, &state );
 

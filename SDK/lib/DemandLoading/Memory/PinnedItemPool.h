@@ -48,6 +48,7 @@ class PinnedItemPool : public AsyncItemPool<Item>
     /// Construct a PinnedItemPool of the specified capacity.
     PinnedItemPool( size_t capacity )
     {
+        capacity = ( capacity > 0 ) ? capacity : 1ull;
         size_t itemSize = align( sizeof( Item ), alignof( Item ) );
         m_capacityInBytes = itemSize * capacity;
         DEMAND_CUDA_CHECK( cudaMallocHost( &m_data, m_capacityInBytes, 0U ) );

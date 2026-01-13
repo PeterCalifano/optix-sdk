@@ -27,6 +27,9 @@
 //
 #pragma once
 
+/// \file TextureDescriptor.h
+/// TextureDescriptor specifies address mode, filter mode, etc.
+
 #include <cuda.h>
 
 namespace demandLoading {

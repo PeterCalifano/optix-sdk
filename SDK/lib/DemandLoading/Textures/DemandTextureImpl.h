@@ -27,14 +27,15 @@
 //
 #pragma once
 
+#include "Textures/DenseTexture.h"
 #include "Textures/SparseTexture.h"
 #include "Textures/TextureRequestHandler.h"
 #include "Util/Exception.h"
 
 #include <DemandLoading/DemandTexture.h>
-#include <DemandLoading/ImageReader.h>
 #include <DemandLoading/TextureDescriptor.h>
 #include <DemandLoading/TextureSampler.h>
+#include <ImageReader/ImageReader.h>
 
 #include <cuda.h>
 
@@ -43,10 +44,13 @@
 #include <mutex>
 #include <vector>
 
+namespace imageReader {
+class ImageReader;
+}
+
 namespace demandLoading {
 
 class DemandLoaderImpl;
-class ImageReader;
 class TilePool;
 
 /// Demand-loaded textures are created by the DemandLoader.
@@ -59,11 +63,11 @@ class DemandTextureImpl : public DemandTexture
     /// Construct demand loaded texture with the specified id (which is used as an index into the
     /// device-side sampler array) the the given descriptor (which specifies the wrap mode, filter
     /// mode, etc.).  The given image reader is retained and used by subsequent readTile() calls.
-    DemandTextureImpl( unsigned int                 id,
-                       unsigned int                 maxNumDevices,
-                       const TextureDescriptor&     descriptor,
-                       std::shared_ptr<ImageReader> image,
-                       DemandLoaderImpl*            loader );
+    DemandTextureImpl( unsigned int                              id,
+                       unsigned int                              maxNumDevices,
+                       const TextureDescriptor&                  descriptor,
+                       std::shared_ptr<imageReader::ImageReader> image,
+                       DemandLoaderImpl*                         loader );
 
     /// Default destructor.
     ~DemandTextureImpl() override = default;
@@ -76,7 +80,7 @@ class DemandTextureImpl : public DemandTexture
     bool init( unsigned int deviceIndex );
 
     /// Get the image info.  Valid only after the image has been initialized (e.g. opened).
-    const TextureInfo& getInfo() const;
+    const imageReader::TextureInfo& getInfo() const;
 
     /// Get the canonical sampler for this texture, excluding the CUDA texture object, which differs
     /// for each device (see getTextureObject).
@@ -97,8 +101,11 @@ class DemandTextureImpl : public DemandTexture
     /// Get tile height.
     unsigned int getTileHeight() const;
 
-    /// Get the number of miplevels.
-    unsigned int IsMipmapped() const { return getInfo().numMipLevels > getMipTailFirstLevel(); }
+    /// Return whether the texture is mipmapped.
+    bool isMipmapped() const { return getInfo().numMipLevels > getMipTailFirstLevel(); }
+
+    /// Return whether to use a sparse or dense texture. Undefined before m_info is initialized.
+    bool useSparseTexture() const { return m_info.width * m_info.height > SPARSE_TEXTURE_THRESHOLD; }
 
     /// Get the first miplevel in the mip tail.
     unsigned int getMipTailFirstLevel() const;
@@ -107,7 +114,7 @@ class DemandTextureImpl : public DemandTexture
     TextureRequestHandler* getRequestHandler() { return m_requestHandler.get(); }
 
     /// Get the ImageReader (for gathering statistics).
-    ImageReader* getImageReader() const { return m_image.get(); }
+    imageReader::ImageReader* getImageReader() const { return m_image.get(); }
 
     /// Read the specified tile into the given buffer.
     bool readTile( unsigned int mipLevel, unsigned int tileX, unsigned int tileY, char* tileBuffer, size_t tileBufferSize ) const;
@@ -140,13 +147,22 @@ class DemandTextureImpl : public DemandTexture
     /// Unmap backing storage for the mip tail
     void unmapMipTail( unsigned int deviceIndex, CUstream stream ) const;
 
+    /// Create and fill the dense texture on the given device
+    void fillDenseTexture( unsigned int deviceIndex, CUstream stream, const char* textureData, unsigned int width, unsigned int height );
+
     /// DemandTextureImpl cannot be copied because the PageTableManager holds a pointer to the
     /// RequestHandler it provides.
     DemandTextureImpl( const DemandTextureImpl& ) = delete;
 
     /// Not assignable.
     DemandTextureImpl& operator=( const DemandTextureImpl& ) = delete;
+
+    /// Set this texture as an entry point to a udim texture array
+    void setUdimTexture( unsigned int udimStartPage, unsigned int udim, unsigned int vdim, bool isBaseTexture );
     
+    /// Return the size of the mip tail if the texture is initialized.
+    size_t getMipTailSize(); 
+
   private:
     // A mutex guards against concurrent initialization, which can arise when the sampler
     // is requested on multiple devices.  Tiles can be filled concurrently, along with the mip tail.
@@ -159,7 +175,7 @@ class DemandTextureImpl : public DemandTexture
     TextureDescriptor m_descriptor{};
 
     // The image provides a read() method that fills requested miplevels.
-    const std::shared_ptr<ImageReader> m_image;
+    const std::shared_ptr<imageReader::ImageReader> m_image;
 
     // The DemandLoader provides access to the PageTableManager, etc.
     DemandLoaderImpl* const m_loader;
@@ -168,7 +184,7 @@ class DemandTextureImpl : public DemandTexture
     bool m_isInitialized = false;
 
     // Image info, including dimensions and format.  Invariant after init(), and not valid before then.
-    TextureInfo        m_info{};
+    imageReader::TextureInfo m_info{};
     TextureSampler     m_sampler{};
     unsigned int       m_tileWidth         = 0;
     unsigned int       m_tileHeight        = 0;
@@ -176,15 +192,19 @@ class DemandTextureImpl : public DemandTexture
     size_t             m_mipTailSize       = 0;
     std::vector<uint2> m_mipLevelDims;
 
-    // Sparse textures (one per device).  This vector does not grow after construction, which is
+    // Sparse and dense textures (one per device).  These vectors do not grow after construction, which is
     // important for thread safety.
-    std::vector<SparseTexture> m_textures;
+    std::vector<SparseTexture> m_sparseTextures;
+    std::vector<DenseTexture> m_denseTextures;
 
     // Request handler.
     std::unique_ptr<TextureRequestHandler> m_requestHandler;
 
     void         initSampler();
     unsigned int getNumTilesInLevel( unsigned int mipLevel ) const;
+
+    // Threshold number of pixels to switch between sparse and dense texture
+    const unsigned int SPARSE_TEXTURE_THRESHOLD = 1024;
 };
 
 }  // namespace demandLoading

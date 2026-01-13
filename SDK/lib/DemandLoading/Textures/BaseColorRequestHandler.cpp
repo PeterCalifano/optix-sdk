@@ -26,27 +26,47 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#include <DemandLoading/ImageReader.h>
+#include "Textures/BaseColorRequestHandler.h"
+#include "DemandLoaderImpl.h"
+#include "PagingSystem.h"
+#include "Textures/DemandTextureImpl.h"
+#include "Util/NVTXProfiling.h"
 
-#include <cstddef>  // for size_t
+#include <DemandLoading/Paging.h>  // for NON_EVICTABLE_LRU_VAL
+
+#include <cuda_fp16.h>
 
 namespace demandLoading {
 
-bool MipTailImageReader::readMipTail( char* dest, unsigned int mipTailFirstLevel, unsigned int numMipLevels, const uint2* mipLevelDims, unsigned int pixelSizeInBytes )
+struct half4
 {
-    size_t offset = 0;
-    for( unsigned int mipLevel = mipTailFirstLevel; mipLevel < numMipLevels; ++mipLevel )
-    {
-        const uint2 levelDims = mipLevelDims[mipLevel];
-        if( !readMipLevel( dest + offset, mipLevel, levelDims.x, levelDims.y ) )
-        {
-            return false;
-        }
+    half x, y, z, w;
+};
 
-        // Increment offset.
-        offset += levelDims.x * levelDims.y * pixelSizeInBytes;
+void BaseColorRequestHandler::fillRequest( unsigned int deviceIndex, CUstream stream, unsigned int pageId )
+{
+    SCOPED_NVTX_RANGE_FUNCTION_NAME();
+
+    // Do nothing if the request has already been filled.
+    if( m_loader->getPagingSystem( deviceIndex )->isResident( pageId ) )
+        return;
+
+    unsigned int       textureId = pageId - m_startPage;
+    DemandTextureImpl* texture   = m_loader->getTexture( textureId );
+
+    float4 fBaseColor = float4{1.0f, 0.0f, 1.0f, 0.0f};
+    bool hasBaseColor = false;
+    if( texture != nullptr )
+    {
+        texture->getImageReader()->open( nullptr );
+        hasBaseColor = texture->getImageReader()->readBaseColor( fBaseColor );
     }
-    return true;
+
+    // Store the base color as a half4 in the page table
+    unsigned long long  noColor   = 0xFFFFFFFFFFFFFFFFull; // four half NaNs, to indicate when no baseColor exists
+    half4               baseColor = half4{fBaseColor.x, fBaseColor.y, fBaseColor.z, fBaseColor.w};
+    unsigned long long* baseVal   = ( hasBaseColor ) ? reinterpret_cast<unsigned long long*>( &baseColor ) : &noColor;
+    m_loader->getPagingSystem( deviceIndex )->addMapping( pageId, NON_EVICTABLE_LRU_VAL, *baseVal );
 }
 
 }  // namespace demandLoading

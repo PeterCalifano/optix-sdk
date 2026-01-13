@@ -30,6 +30,7 @@
 
 #include <cuda/BufferView.h>
 #include <cuda/MaterialData.h>
+#include <cuda/whitted.h>
 #include <sutil/Aabb.h>
 #include <sutil/Camera.h>
 #include <sutil/Matrix.h>

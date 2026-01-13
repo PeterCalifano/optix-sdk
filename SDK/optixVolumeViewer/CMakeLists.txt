@@ -26,7 +26,8 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
 
-include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}
+  ${SAMPLES_DIR}/lib/NanoVDB/include/)
 
 OPTIX_add_sample_executable( optixVolumeViewer target_name
   optixVolumeViewer.h
@@ -34,6 +35,7 @@ OPTIX_add_sample_executable( optixVolumeViewer target_name
   volume.h
   volume_cuda.h
   volume.cu
+
   nanovdb/NanoVDB.h
   nanovdb/util/GridHandle.h
   nanovdb/util/HDDA.h

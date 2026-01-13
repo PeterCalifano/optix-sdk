@@ -123,6 +123,10 @@ typedef unsigned char      uint8_t;
 typedef unsigned int       uint32_t;
 typedef unsigned long long uint64_t;
 
+#ifndef UINT64_C
+#define UINT64_C(value) value##ULL
+#endif
+
 #else // __CUDACC_RTC__
 
 #include <stdlib.h> //    for abs in clang7
@@ -280,12 +284,15 @@ public:
     __hostdev__ uint32_t getMajor() const { return (mData >> 21) & ((1u << 11) - 1);}
     __hostdev__ uint32_t getMinor() const { return (mData >> 10) & ((1u << 11) - 1);}
     __hostdev__ uint32_t getPatch() const { return  mData        & ((1u << 10) - 1);}
+
+#ifndef __CUDACC_RTC__
     const char* c_str() const
     {
         char *buffer = (char*)malloc(4 + 1 + 4 + 1 + 4 + 1);// xxxx.xxxx.xxxx\n
         sprintf(buffer, "%d.%d.%d", this->getMajor(), this->getMinor(), this->getPatch());
         return buffer;
     }
+#endif
 };// Version
 
 // ----------------------------> Various math functions <-------------------------------------

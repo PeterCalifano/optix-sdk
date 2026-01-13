@@ -25,9 +25,9 @@
 // (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
-#include <DemandLoading/CheckerBoardImage.h>
+#include <ImageReader/CheckerBoardImage.h>
 
-#include "Util/Exception.h"
+#include "Exception.h"
 
 #include <algorithm>
 #include <cmath>
@@ -35,13 +35,13 @@
 
 #include <cuda_runtime.h>  // for make_float4
 
-namespace demandLoading {
+namespace imageReader {
 
 CheckerBoardImage::CheckerBoardImage( unsigned int width, unsigned int height, unsigned int squaresPerSide, bool useMipmaps )
     : m_squaresPerSide( squaresPerSide )
     , m_info{width, height, CU_AD_FORMAT_FLOAT, /*numChannels=*/4, /*numMipLevels=*/0}
 {
-    m_info.numMipLevels = useMipmaps ? demandLoading::calculateNumMipLevels( width, height ) : 1;
+    m_info.numMipLevels = useMipmaps ? imageReader::calculateNumMipLevels( width, height ) : 1;
 
     // Use a different color per miplevel.
     std::vector<float4> colors{
@@ -135,4 +135,4 @@ bool CheckerBoardImage::readMipLevel( char* dest, unsigned int mipLevel, unsigne
     return true;
 }
 
-}  // namespace demandLoading
+}  // namespace imageReader

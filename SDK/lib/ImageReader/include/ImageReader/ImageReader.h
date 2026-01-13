@@ -28,10 +28,13 @@
 
 #pragma once
 
+/// \file ImageReader.h
+/// Interface for a mipmapped image.
+
 #include <cmath>
 #include <vector_types.h>
 
-namespace demandLoading {
+namespace imageReader {
 
 struct TextureInfo;
 
@@ -70,6 +73,9 @@ class ImageReader
                               const uint2* mipLevelDims,
                               unsigned int pixelSizeInBytes ) = 0;
 
+    /// Read the base color of the image (1x1 mip level) as a float4. Returns true on success.
+    virtual bool readBaseColor( float4& dest ) = 0; 
+
     /// Returns the number of tiles that have been read.
     virtual unsigned long long getNumTilesRead() const { return 0u; }
 
@@ -91,10 +97,11 @@ class MipTailImageReader : public ImageReader
     bool readMipTail( char* dest, unsigned int mipTailFirstLevel, unsigned int numMipLevels, const uint2* mipLevelDims, unsigned int pixelSizeInBytes ) override;
 };
 
+/// @private
 inline unsigned int calculateNumMipLevels( unsigned int width, unsigned int height )
 {
     unsigned int dim = ( width > height ) ? width : height;
     return 1 + static_cast<unsigned int>( std::log2f( static_cast<float>( dim ) ) );
 }
 
-}  // namespace demandLoading
+}  // namespace imageReader

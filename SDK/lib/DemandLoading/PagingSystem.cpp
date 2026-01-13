@@ -31,6 +31,7 @@
 #include "Memory/PinnedMemoryManager.h"
 #include "PagingSystemKernels.h"
 #include "RequestProcessor.h"
+#include "Util/CudaCallback.h"
 
 #include <algorithm>
 
@@ -53,6 +54,10 @@ PagingSystem::PagingSystem( unsigned int         deviceIndex,
     // Allocate host-side page table
     m_pageTable.resize( m_options.numPages, 0ul );
     m_residenceBits.resize( m_options.numPages, false );
+    m_stagedBits.resize( m_options.numPages, false );
+
+    // Make the initial pushMappings event (which will be recorded when pushMappings is called)
+    m_pushMappingsEvent = std::make_shared<FutureEvent>();
 
     // Allocate pinned memory for page mappings and invalidated pages (see pushMappings).  Note that
     // it's not necessary to free m_pageMappingsContext in the destructor, since it's pool
@@ -61,48 +66,46 @@ PagingSystem::PagingSystem( unsigned int         deviceIndex,
     m_pageMappingsContext->clear();
 }
 
-void PagingSystem::incrementLruThreshold( unsigned int returnedStalePages, unsigned int requestedStalePages, unsigned int medianLruVal )
+void PagingSystem::updateLruThreshold( unsigned int returnedStalePages, unsigned int requestedStalePages, unsigned int medianLruVal )
 {
     // Don't change the value if no stale pages were requested
     if( requestedStalePages == 0 )
         return;
 
-    // Heuristic to increment the lruThreshold. The basic idea is to aggressively reduce the threshold
+    // Heuristic to update the lruThreshold. The basic idea is to aggressively reduce the threshold
     // if not enough stale pages are returned, but only gradually increase the threshold if it is too low.
     if( returnedStalePages < requestedStalePages / 2 )
-        m_lruThreshold -= std::min( m_lruThreshold, 4u );
+        m_lruThreshold -= std::min( m_lruThreshold-MIN_LRU_THRESHOLD, 4u );
     else if( returnedStalePages < requestedStalePages )
-        m_lruThreshold -= std::min( m_lruThreshold, 2u );
+        m_lruThreshold -= std::min( m_lruThreshold-MIN_LRU_THRESHOLD, 2u );
     else if( medianLruVal > m_lruThreshold )
         m_lruThreshold++;
 }
 
-// Argument struct for processRequestsCallback.
-struct ProcessRequestCallbackArg
+// This callback invokes processRequests() after the asynchronous copies in pullRequests have completed.
+class ProcessRequestsCallback : public CudaCallback
 {
-    PagingSystem*               pagingSystem;
-    DeviceContext               context;
-    RequestContext*             pinnedContext;
-    CUstream                    stream;
-    std::shared_ptr<TicketImpl> ticket;
+  public:
+    ProcessRequestsCallback( PagingSystem* pagingSystem, DeviceContext context, RequestContext* pinnedContext, CUstream stream, Ticket ticket )
+        : m_pagingSystem( pagingSystem )
+        , m_context( context )
+        , m_pinnedContext( pinnedContext )
+        , m_stream( stream )
+        , m_ticket( ticket )
+    {
+    }
+
+    void callback() override { m_pagingSystem->processRequests( m_context, m_pinnedContext, m_stream, m_ticket ); }
+
+  private:
+    PagingSystem*   m_pagingSystem;
+    DeviceContext   m_context;
+    RequestContext* m_pinnedContext;
+    CUstream        m_stream;
+    Ticket          m_ticket;
 };
 
-// Free function adapter for the processRequests method. pullRequests() uses cuLaunchHostFunc() to
-// enqueue a call to this function after it launches a kernel to pull requests from the device.
-// That's why this is a free function that takes a void* argument, since it must adhere to the
-// CUhostFn function type.
-void processRequestsCallback( void* ptr )
-{
-    ProcessRequestCallbackArg* arg = reinterpret_cast<ProcessRequestCallbackArg*>( ptr );
-    arg->pagingSystem->processRequests( arg->context, arg->pinnedContext, arg->stream, arg->ticket );
-    delete arg;
-}
-
-void PagingSystem::pullRequests( const DeviceContext&        context,
-                                 CUstream                    stream,
-                                 unsigned int                startPage,
-                                 unsigned int                endPage,
-                                 std::shared_ptr<TicketImpl> ticket )
+void PagingSystem::pullRequests( const DeviceContext& context, CUstream stream, unsigned int startPage, unsigned int endPage, Ticket ticket )
 {
     std::unique_lock<std::mutex> lock( m_mutex );
     DEMAND_CUDA_CHECK( cudaSetDevice( m_deviceIndex ) );
@@ -134,24 +137,36 @@ void PagingSystem::pullRequests( const DeviceContext&        context,
                                         pinnedContext->numArrayLengths * sizeof( unsigned int ), cudaMemcpyDeviceToHost, stream ) );
 
     // Enqueue host function call to process the page requests once the kernel launch and copies have completed.
-    ProcessRequestCallbackArg* arg = new ProcessRequestCallbackArg{this, context, pinnedContext, stream, ticket};
-    DEMAND_CUDA_CHECK( cuLaunchHostFunc( stream, processRequestsCallback, arg ) );
+    CudaCallback::enqueue( stream, new ProcessRequestsCallback( this, context, pinnedContext, stream, ticket ) );
 }
 
 // Note: this method must not make any CUDA API calls, because it's invoked via cuLaunchHostFunc.
-void PagingSystem::processRequests( const DeviceContext& context, RequestContext* requestContext, CUstream stream, std::shared_ptr<TicketImpl> ticket )
+void PagingSystem::processRequests( const DeviceContext& context, RequestContext* requestContext, CUstream stream, Ticket ticket )
 {
     std::unique_lock<std::mutex> lock( m_mutex );
 
     // Return device context to pool.  The DeviceContext has been copied, but DeviceContextPool is designed to permit that.
     m_deviceMemoryManager->getDeviceContextPool()->free( const_cast<DeviceContext*>( &context ) );
 
+    // Restore staged requests, and remove them from the request list
     unsigned int numRequestedPages = requestContext->arrayLengths[PAGE_REQUESTS_LENGTH];
     unsigned int numStalePages     = requestContext->arrayLengths[STALE_PAGES_LENGTH];
+
+    for( unsigned int i = 0; i < numRequestedPages; ++i )
+    {
+        if( restoreMapping( requestContext->requestedPages[i] ) )
+        {
+            requestContext->requestedPages[i] = requestContext->requestedPages[numRequestedPages - 1];
+            --numRequestedPages;
+            --i;
+        }
+    }
+    requestContext->arrayLengths[PAGE_REQUESTS_LENGTH] = numRequestedPages;
 
     // Enqueue the requests for asynchronous processing.
     m_requestProcessor->addRequests( m_deviceIndex, stream, requestContext->requestedPages, numRequestedPages, ticket );
 
+    // Sort and stage stale pages, and update the LRU threshold
     unsigned int medianLruVal = 0;
     if( numStalePages > 0 )
     {
@@ -165,32 +180,23 @@ void PagingSystem::processRequests( const DeviceContext& context, RequestContext
         {
             std::random_shuffle( requestContext->stalePages, requestContext->stalePages + numStalePages );
         }
+
+        if( m_evictionActive && getNumStagedPages() < m_options.maxStagedPages )
+        {
+            m_stagedPages.emplace_back( StagedPageList{m_pushMappingsEvent, std::deque<PageMapping>() } );
+            stageStalePages( requestContext, m_stagedPages.back().mappings );
+        }
     }
-
-    incrementLruThreshold( numStalePages, requestContext->maxStalePages, medianLruVal );
-
-    // TODO: how to handle freeTiles?
-    // m_demandLoader->freeTiles( stream );
+    updateLruThreshold( numStalePages, requestContext->maxStalePages, medianLruVal );
 
     // Return the RequestContext to its pool.
     m_pinnedMemoryManager->getRequestContextPool()->free( requestContext );
 }
 
-
 void PagingSystem::addMapping( unsigned int pageId, unsigned int lruVal, unsigned long long entry )
 {
     std::unique_lock<std::mutex> lock( m_mutex );
-
-    DEMAND_ASSERT_MSG( m_pageMappingsContext->numFilledPages < m_pageMappingsContext->maxFilledPages,
-                       "Maximum number of filled pages exceeded (Options::maxFilledPages)" );
-    m_pageMappingsContext->filledPages[m_pageMappingsContext->numFilledPages++] = PageMapping{pageId, lruVal, entry};
-
-    DEMAND_ASSERT( m_residenceBits[pageId] == false );
-    m_pageTable[pageId] = entry;
-
-    DEMAND_ASSERT( pageId < m_pageTable.size() );
-    m_residenceBits[pageId] = true;
-
+    addMappingBody( pageId, lruVal, entry );
 }
 
 bool PagingSystem::isResident( unsigned int pageId )
@@ -201,15 +207,16 @@ bool PagingSystem::isResident( unsigned int pageId )
 
 void PagingSystem::clearMapping( unsigned int pageId )
 {
-    // Mutex is acquired in caller (invalidateStalePages).
+    // Mutex acquired in caller (processRequests).
     DEMAND_ASSERT( m_pageMappingsContext->numInvalidatedPages < m_pageMappingsContext->maxInvalidatedPages );
-    m_pageMappingsContext->invalidatedPages[m_pageMappingsContext->numInvalidatedPages++] = pageId;
-
     DEMAND_ASSERT( pageId < m_pageTable.size() );
-    m_pageTable[pageId] = 0ull;
-
     DEMAND_ASSERT( m_residenceBits[pageId] == true );
+    DEMAND_ASSERT( m_stagedBits[pageId] == false );
+
+    // Set host-side resident bit to false, and schedule the page to be invalidated on the device.
+    // Note that we do not clear the value in m_pageTable since it is needed for the second chance algorithm.
     m_residenceBits[pageId] = false;
+    m_pageMappingsContext->invalidatedPages[m_pageMappingsContext->numInvalidatedPages++] = pageId;
 }
 
 unsigned int PagingSystem::pushMappings( const DeviceContext& context, CUstream stream )
@@ -233,39 +240,115 @@ unsigned int PagingSystem::pushMappings( const DeviceContext& context, CUstream 
         launchInvalidatePages( stream, context, numInvalidatedPages );
     }
 
+    // Zero out the reference bits
+    unsigned int referenceBitsSizeInBytes = idivCeil( context.maxNumPages, 8 );
+    DEMAND_CUDA_CHECK( cudaMemsetAsync( context.referenceBits, 0, referenceBitsSizeInBytes, stream ) );
+
+    // Record the event in the stream. pushMappings will be complete when it returns cudaSuccess
+    DEMAND_CUDA_CHECK( cudaEventRecord( m_pushMappingsEvent->event, stream ) );
+    m_pushMappingsEvent->recorded = true;
+
+    // Make a new event for the next time pushMappings is called
+    m_pushMappingsEvent = std::make_shared<FutureEvent>();
+
     // Free the current PageMappingsContext (it's not reused until the preceding operations on the stream are done)
     // and allocate another one.
     m_pinnedMemoryManager->getPageMappingsContextPool()->free( m_pageMappingsContext, m_deviceIndex, stream );
     m_pageMappingsContext = m_pinnedMemoryManager->getPageMappingsContextPool()->allocate();
     m_pageMappingsContext->clear();
 
-    // Zero out the reference bits
-    unsigned int referenceBitsSizeInBytes = idivCeil( context.maxNumPages, 8 );
-    DEMAND_CUDA_CHECK( cudaMemsetAsync( context.referenceBits, 0, referenceBitsSizeInBytes, stream ) );
-
     return numFilledPages;
 }
 
-void PagingSystem::invalidateStalePages( std::vector<PageMapping>& pageMappings, unsigned int maxMappings )
+void PagingSystem::stageStalePages( RequestContext* requestContext, std::deque<PageMapping>& stagedMappings )
 {
-#if 0 
-    // This needs work.  The list of stale pages now resides in RequestContext, which lives only for
-    // the duration of processRequests().
-    std::unique_lock<std::mutex> lock( m_mutex );
-    unsigned int                 numInvalidated = 0;
-    for( StalePage& sp : m_stalePages )
+    // Mutex acquired in caller (processRequests)
+
+    unsigned int numStalePages = requestContext->arrayLengths[STALE_PAGES_LENGTH];
+    size_t       numStaged     = getNumStagedPages();
+
+    // Count backwards to stage the oldest pages first
+    for( int i = static_cast<int>( numStalePages - 1 ); i >= 0; --i )
     {
-        if( numInvalidated >= maxMappings || m_pageMappingsContext->numInvalidatedPages >= m_options.maxInvalidatedPages )
+        StalePage sp = requestContext->stalePages[i];
+        if( numStaged >= m_options.maxStagedPages || m_pageMappingsContext->numInvalidatedPages >= m_options.maxInvalidatedPages )
             break;
 
-        if( m_residenceBits[sp.pageId] )
+        if( m_residenceBits[sp.pageId] && !m_stagedBits[sp.pageId] )
         {
-            pageMappings.push_back( PageMapping{sp.pageId, sp.lruVal, m_pageTable[sp.pageId]} );
+            stagedMappings.emplace_back( PageMapping{sp.pageId, sp.lruVal, m_pageTable[sp.pageId]} );
             clearMapping( sp.pageId );
-            numInvalidated++;
+            m_stagedBits[sp.pageId] = true;
+            numStaged++;
         }
     }
-#endif
+}
+
+bool PagingSystem::freeStagedPage( PageMapping* m )
+{
+    std::unique_lock<std::mutex> lock( m_mutex );
+
+    while( !m_stagedPages.empty() && ( m_stagedPages[0].event->query() == cudaSuccess ) )
+    {
+        *m = m_stagedPages[0].mappings.front();
+        m_stagedPages[0].mappings.pop_front();
+
+        // Advance to the next list if the beginning list is empty
+        if( m_stagedPages[0].mappings.empty() )
+            m_stagedPages.pop_front();
+
+        // If the page is still staged, return. Otherwise, go around and look for another one
+        if( m_stagedBits[m->id] )
+        {
+            m_stagedBits[m->id] = false;
+            return true;
+        }
+    }
+    return false;
+}
+
+void PagingSystem::addMappingBody( unsigned int pageId, unsigned int lruVal, unsigned long long entry )
+{
+    // Mutex acquired in caller
+
+    DEMAND_ASSERT_MSG( m_pageMappingsContext->numFilledPages <= m_pageMappingsContext->maxFilledPages,
+                       "Maximum number of filled pages exceeded (Options::maxFilledPages)" );
+    DEMAND_ASSERT( m_residenceBits[pageId] == false );
+    DEMAND_ASSERT( pageId < m_pageTable.size() );
+
+    m_pageMappingsContext->filledPages[m_pageMappingsContext->numFilledPages++] = PageMapping{pageId, lruVal, entry};
+
+    m_pageTable[pageId]     = entry;
+    m_residenceBits[pageId] = true;
+}
+
+bool PagingSystem::restoreMapping( unsigned int pageId )
+{
+    // Mutex acquired in caller (processRequests).
+
+    if( m_stagedBits[pageId] && !m_residenceBits[pageId]
+        && m_pageMappingsContext->numFilledPages < m_pageMappingsContext->maxFilledPages )
+    {
+        m_stagedBits[pageId] = false;
+        addMappingBody( pageId, 0, m_pageTable[pageId] );
+        return true;
+    }
+
+    return false;
+}
+
+size_t PagingSystem::getNumStagedPages()
+{
+    size_t numPages = 0;
+    for( StagedPageList s : m_stagedPages )
+        numPages += s.mappings.size();
+    return numPages;
+}
+
+void PagingSystem::flushMappings()
+{
+    std::unique_lock<std::mutex> lock( m_mutex );
+    m_pageMappingsContext->numFilledPages = 0;
 }
 
 }  // namespace demandLoading

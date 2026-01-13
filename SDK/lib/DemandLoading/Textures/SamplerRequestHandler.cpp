@@ -55,10 +55,25 @@ void SamplerRequestHandler::fillRequest( unsigned int deviceIndex, CUstream stre
     unsigned int       samplerId = pageId - m_startPage;
     DemandTextureImpl* texture   = m_loader->getTexture( samplerId );
 
+    // A 1x1 or null texture is indicated in the page table as a null value.
+    imageReader::TextureInfo texInfo = {0};
+    if( texture )
+        texture->getImageReader()->open( &texInfo );
+
+    if( texInfo.width <= 1 && texInfo.height <= 1 )
+    {
+        m_loader->getPagingSystem( deviceIndex )->addMapping( pageId, NON_EVICTABLE_LRU_VAL, 0ULL );
+        return;
+    }
+
     // Initialize the texture, reading image info from file header on the first call and
     // creating a per-device CUDA texture object.
     const bool ok = texture->init( deviceIndex );
     DEMAND_ASSERT_MSG( ok, "ImageReader::init() failed" );
+
+    // For a dense texture, the whole thing has to be loaded, so load it now
+    if ( texture->useSparseTexture() == false )
+        fillDenseTexture( deviceIndex, stream, pageId );
 
     // Allocate sampler buffer in pinned memory.
     PinnedItemPool<TextureSampler>* pinnedSamplerPool = m_loader->getPinnedMemoryManager()->getPinnedSamplerPool();
@@ -82,6 +97,29 @@ void SamplerRequestHandler::fillRequest( unsigned int deviceIndex, CUstream stre
 
     // Push mapping for sampler to update page table.
     m_loader->getPagingSystem( deviceIndex )->addMapping( pageId, NON_EVICTABLE_LRU_VAL, reinterpret_cast<unsigned long long>( devSampler ) );
+}
+
+void SamplerRequestHandler::fillDenseTexture( unsigned int deviceIndex, CUstream stream, unsigned int pageId )
+{
+    SCOPED_NVTX_RANGE_FUNCTION_NAME();
+
+    DemandTextureImpl* texture = m_loader->getTexture( pageId );
+
+    // Use a TileBuffer, since dense textures are always smaller than a tile
+    PinnedItemPool<TileBuffer>* pinnedTilePool = m_loader->getPinnedMemoryManager()->getPinnedTilePool();
+    TileBuffer* pinnedTileBuffer = pinnedTilePool->allocate();
+
+    // If it failed to allocate pinned memory, just return. (It's probably shutting down.)
+    if( pinnedTileBuffer == nullptr )
+        return;
+
+    // Read the mip tail into a single buffer (which is the whole texture for dense textures).
+    char* pinnedData = pinnedTileBuffer->data;
+    const bool ok = texture->readMipTail( pinnedData, sizeof( TileBuffer ) );
+    DEMAND_ASSERT_MSG( ok, "readMipTail call failed" );
+
+    texture->fillDenseTexture( deviceIndex, stream, pinnedData, texture->getInfo().width, texture->getInfo().height );
+    pinnedTilePool->free( pinnedTileBuffer, deviceIndex, stream );
 }
 
 }  // namespace demandLoading

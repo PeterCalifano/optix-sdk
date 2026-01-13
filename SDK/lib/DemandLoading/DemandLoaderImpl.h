@@ -36,6 +36,7 @@
 #include "PagingSystem.h"
 #include "RequestProcessor.h"
 #include "ResourceRequestHandler.h"
+#include "Textures/BaseColorRequestHandler.h"
 #include "Textures/DemandTextureImpl.h"
 #include "Textures/SamplerRequestHandler.h"
 
@@ -46,20 +47,24 @@
 #include <mutex>
 #include <vector>
 
+namespace imageReader {
+class ImageReader;
+}
+
 namespace demandLoading {
 
 struct DeviceContext;
 class DemandTexture;
-class ImageReader;
 class RequestProcessor;
 struct TextureDescriptor;
+class TraceFileWriter;
 
 /// DemandLoader demonstrates how to implement demand-loaded textures using the OptiX paging library.
 class DemandLoaderImpl : public DemandLoader
 {
   public:
     /// Construct demand loading sytem.
-    DemandLoaderImpl( const std::vector<unsigned int>& devices, const Options& options );
+    DemandLoaderImpl( const Options& options );
 
     /// Destroy demand loading system.
     ~DemandLoaderImpl();
@@ -67,7 +72,17 @@ class DemandLoaderImpl : public DemandLoader
     /// Create a demand-loaded texture for the given image.  The texture initially has no backing
     /// storage.  The readTile() method is invoked on the image to fill each required tile.  The
     /// ImageReader pointer is retained indefinitely.
-    const DemandTexture& createTexture( std::shared_ptr<ImageReader> image, const TextureDescriptor& textureDesc ) override;
+    const DemandTexture& createTexture( std::shared_ptr<imageReader::ImageReader> image, const TextureDescriptor& textureDesc ) override;
+
+    /// Create a demand-loaded UDIM texture for a given set of images.  If a baseTexture is used,
+    /// it should be created first by calling createTexture.  The id of the returned texture should be
+    /// used when calling tex2DGradUdim.  This will create demand-loaded textures for each image
+    /// supplied, and all of the image readers are retained for the lifetime of the DemandLoader.
+    const DemandTexture& createUdimTexture( std::vector<std::shared_ptr<imageReader::ImageReader>>& imageReaders,
+                                            std::vector<TextureDescriptor>&                         textureDescs,
+                                            unsigned int                                            udim,
+                                            unsigned int                                            vdim,
+                                            int baseTextureId ) override;
 
     /// Create an arbitrary resource with the specified number of pages.  \see ResourceCallback.
     unsigned int createResource( unsigned int numPages, ResourceCallback callback ) override;
@@ -81,7 +96,12 @@ class DemandLoaderImpl : public DemandLoader
     /// Fetch page requests from the given device context and enqueue them for background
     /// processing.  The given stream is used when copying tile data to the device.  Returns a
     /// ticket that is notified when the requests have been filled.
-    std::shared_ptr<Ticket> processRequests( unsigned int deviceIndex, CUstream stream, const DeviceContext& deviceContext ) override;
+    Ticket processRequests( unsigned int deviceIndex, CUstream stream, const DeviceContext& deviceContext ) override;
+
+    /// Replay the given page requests (from a trace file), adding them to the page requeuest queue
+    /// for asynchronous processing.  Returns a ticket that is notified when the requests have been
+    /// filled.
+    Ticket replayRequests( unsigned int deviceIndex, CUstream stream, unsigned int* requestedPages, unsigned int numRequestedPages );
 
     /// Get current statistics.
     Statistics getStatistics() const override;
@@ -89,8 +109,8 @@ class DemandLoaderImpl : public DemandLoader
     /// Get the demand loading configuration options.
     const Options& getOptions() const { return m_options; }
 
-    /// Get the number of devices (including inactive devices, if any).
-    unsigned int getNumDevices() const { return static_cast<unsigned int>( m_pagingSystems.size() ); }
+    /// Get indices of the devices that can be employed by the DemandLoader.
+    const std::vector<unsigned int> getDevices() const override { return m_devices; }
 
     /// Check whether the specified device is active.
     bool isActiveDevice( unsigned int deviceIndex ) const
@@ -111,34 +131,38 @@ class DemandLoaderImpl : public DemandLoader
     DemandTextureImpl* getTexture( unsigned int textureId ) { return m_textures.at( textureId ).get(); }
 
     /// Get the PagingSystem for the specified device.
-    PagingSystem* getPagingSystem( unsigned int deviceIndex ) { return m_pagingSystems.at( deviceIndex ).get(); }
+    PagingSystem* getPagingSystem( unsigned int deviceIndex ) { return m_pagingSystems[deviceIndex].get(); }
 
     /// Get the PageTableManager.
     PageTableManager* getPageTableManager() { return &m_pageTableManager; }
 
-    /// Unmap the backing storage associated with a texture tile or mip tail
-    void unmapTileResource( unsigned int deviceIndex, CUstream stream, unsigned int pageId );
-
-    // Free stale tiles as needed to keep free tiles in the tile pools
-    void freeTiles( unsigned int deviceIndex, CUstream stream );
+    /// Free some staged tiles if there are some that are ready
+    void freeStagedTiles( unsigned int deviceIndex, CUstream stream );
 
   private:
-    mutable std::mutex m_mutex;
-    Options            m_options;
-    unsigned int       m_numDevices;
+    mutable std::mutex        m_mutex;
+    Options                   m_options;
+    unsigned int              m_numDevices;
+    std::vector<unsigned int> m_devices;  // Indices of supported devices.
 
     std::vector<std::unique_ptr<DemandTextureImpl>>   m_textures;  // demand-loaded textures, indexed by texture id.
     std::vector<std::unique_ptr<DeviceMemoryManager>> m_deviceMemoryManagers;  // Manages device memory (one per device)
     std::vector<std::unique_ptr<PagingSystem>>        m_pagingSystems;  // Manages device interaction (one per device)
 
-    SamplerRequestHandler m_samplerRequestHandler;  // Handles requests for texture samplers.
-    PageTableManager      m_pageTableManager;       // Allocates ranges of virtual pages.
-    RequestProcessor      m_requestProcessor;       // Asynchronously processes page requests.
-    PinnedMemoryManager   m_pinnedMemoryManager;
+    BaseColorRequestHandler m_baseColorRequestHandler;  // Handles base colors for textures.
+    SamplerRequestHandler   m_samplerRequestHandler;    // Handles requests for texture samplers.
+    PageTableManager        m_pageTableManager;         // Allocates ranges of virtual pages.
+    RequestProcessor        m_requestProcessor;         // Asynchronously processes page requests.
+    PinnedMemoryManager     m_pinnedMemoryManager;
 
     std::vector<std::unique_ptr<ResourceRequestHandler>> m_resourceRequestHandlers;  // Request handlers for arbitrary resources.
 
+    std::unique_ptr<TraceFileWriter> m_traceFile{};  // Empty if tracing is disabled.
+
     double m_totalProcessingTime = 0.0;
+
+    /// Unmap the backing storage associated with a texture tile or mip tail
+    void unmapTileResource( unsigned int deviceIndex, CUstream stream, unsigned int pageId );
 };
 
 }  // namespace demandLoading

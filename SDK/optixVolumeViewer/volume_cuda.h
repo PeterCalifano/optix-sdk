@@ -31,7 +31,7 @@
 #include "volume.h"
 
 #include <cuda_runtime.h>
-#include <nanovdb/NanoVDB.h>
+#include "nanovdb/NanoVDB.h"
 
 
 static __forceinline__ __device__ void traceRadiance(

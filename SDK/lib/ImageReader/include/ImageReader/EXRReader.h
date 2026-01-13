@@ -28,26 +28,31 @@
 
 #pragma once
 
-#include <DemandLoading/ImageReader.h>
-#include <DemandLoading/TextureInfo.h>
+/// \file EXRReader.h
+/// OpenEXR image reader.
+
+#include <ImageReader/ImageReader.h>
+#include <ImageReader/TextureInfo.h>
 
 #include <ImfFrameBuffer.h>
 #include <ImfTiledInputFile.h>
 
+#include <iosfwd>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
 
-namespace demandLoading {
+namespace imageReader {
 
 /// OpenEXR image reader.
 class EXRReader : public MipTailImageReader
 {
   public:
     /// The constructor copies the given filename.  The file is not opened until open() is called.
-    explicit EXRReader( const char* filename )
+    explicit EXRReader( const char* filename, bool readBaseColor = true )
         : m_filename( filename )
+        , m_readBaseColor( readBaseColor )
     {
     }
 
@@ -69,6 +74,9 @@ class EXRReader : public MipTailImageReader
 
     /// Read the specified mipLevel.  Returns true for success.
     bool readMipLevel( char* dest, unsigned int mipLevel, unsigned int expectedWidth, unsigned int expectedHeight ) override;
+
+    /// Read the base color of the image (1x1 mip level) as an array of floats. Returns true on success.
+    virtual bool readBaseColor( float4& dest ) override;
 
     /// Get tile width (used only for testing).
     unsigned int getTileWidth() const { return m_tileWidth; }
@@ -97,6 +105,12 @@ class EXRReader : public MipTailImageReader
         return m_totalReadTime;
     }
 
+    /// Serialize the image filename (etc.) to the give stream.
+    void serialize( std::ostream& stream ) const;
+
+    /// Deserialize an EXRReader.  Called from ImageReader::deserialize.
+    static std::shared_ptr<ImageReader> deserialize( std::istream& stream );
+
   private:
     std::string                          m_filename;
     std::unique_ptr<Imf::TiledInputFile> m_inputFile;
@@ -104,6 +118,9 @@ class EXRReader : public MipTailImageReader
     Imf::PixelType                       m_pixelType = Imf::NUM_PIXELTYPES;
     unsigned int                         m_tileWidth{};
     unsigned int                         m_tileHeight{};
+    float4                               m_baseColor{};
+    bool                                 m_readBaseColor = false;
+    bool                                 m_baseColorWasRead = false;
     mutable std::mutex                   m_mutex;
     unsigned long long                   m_numTilesRead  = 0;
     unsigned long long                   m_numBytesRead  = 0;
@@ -113,4 +130,4 @@ class EXRReader : public MipTailImageReader
     void readActualTile( char* dest, unsigned int rowPitch, unsigned int mipLevel, unsigned int tileX, unsigned int tileY );
 };
 
-}  // namespace demandLoading
+}  // namespace imageReader

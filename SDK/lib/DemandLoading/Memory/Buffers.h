@@ -37,7 +37,7 @@ struct TileBuffer
 
 struct MipTailBuffer 
 {
-    char data[3 * 64 * 1024];
+    char data[16 * 64 * 1024];
 };
 
 }  // namespace demandLoading

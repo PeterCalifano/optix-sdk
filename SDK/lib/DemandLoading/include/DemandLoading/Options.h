@@ -28,7 +28,11 @@
 
 #pragma once
 
+/// \file Options.h
+/// Demand loading configuration options.
+
 #include <cstddef>
+#include <string>
 
 namespace demandLoading {
 
@@ -43,13 +47,15 @@ struct Options
     unsigned int maxStalePages       = 8192;  ///< max stale pages to pull from device
     unsigned int maxEvictablePages   = 8192;  ///< max evictable pages to pull from device
     unsigned int maxInvalidatedPages = 8192;  ///< max slots to push invalidated pages back to device
+    unsigned int maxStagedPages      = 8192;  ///< max staged pages (pages ready to be evicted)
+    bool         useLruTable         = true;  ///< use LRU table for eviction 
 
-    bool   useLruTable        = false;              ///< enable eviction (not yet fully implemented)
     size_t maxTexMemPerDevice = 0;                  ///< max texture data to be allocated per device (0 is unlimited)
-    size_t maxPinnedMemory    = 640 * 1024 * 1024;  ///< maximum pinned memory.
+    size_t maxPinnedMemory    = 640 * 1024 * 1024;  ///< max pinned memory.
 
     unsigned int maxThreads = 0;        ///< max number of threads to use when processing requests;
                                         ///< zero means use std::thread::hardware_concurrency.
     unsigned int maxActiveStreams = 4;  ///< number of active streams across all devices.
+    std::string  traceFile        = "";  ///< trace filename (empty if disabled).
 };
 }

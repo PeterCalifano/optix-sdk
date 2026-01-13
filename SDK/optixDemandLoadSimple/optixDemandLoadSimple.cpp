@@ -60,14 +60,15 @@ void* callback( unsigned int deviceIndex, cudaStream_t stream, unsigned int page
 int main()
 {
     // Create DemandLoader
-    std::vector<unsigned int> devices{0};
-    DemandLoader*             loader = createDemandLoader( devices, Options() );
+    DemandLoader*             loader = createDemandLoader( Options() );
 
     // Create a resource, using the given callback to handle page requests.
     const unsigned int numPages  = 128;
     unsigned int       startPage = loader->createResource( numPages, callback );
 
-    // Create a stream, which is used for asynchronous operations.
+    // Create a stream on the first supported device, which is used for asynchronous operations.
+    unsigned int deviceIndex = loader->getDevices().at( 0 );
+    check( cudaSetDevice( deviceIndex ) );
     cudaStream_t stream;
     check( cudaStreamCreate( &stream ) );
 
@@ -77,7 +78,6 @@ int main()
     for( unsigned int currentPage = startPage; currentPage < startPage + numPages; )
     {
         // Prepare for launch, obtaining DeviceContext.
-        const unsigned int deviceIndex = 0;
         DeviceContext      context;
         loader->launchPrepare( deviceIndex, stream, context );
 
@@ -86,13 +86,13 @@ int main()
         ++numLaunches;
 
         // Initiate request processing, which returns a Ticket.
-        std::shared_ptr<Ticket> ticket = loader->processRequests( deviceIndex, stream, context );
+        Ticket ticket = loader->processRequests( deviceIndex, stream, context );
 
         // Wait for any page requests to be processed.
-        ticket->wait();
+        ticket.wait();
 
         // Advance the loop counter only when there were no page requests.
-        if( ticket->numTasksTotal() == 0 )
+        if( ticket.numTasksTotal() == 0 )
             currentPage += batchSize;
     }
 

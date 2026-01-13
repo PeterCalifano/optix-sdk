@@ -27,8 +27,6 @@
 //
 
 
-#pragma once
-
 #include <optix.h>
 #include <optix_function_table_definition.h>
 #include <optix_stubs.h>
@@ -54,8 +52,8 @@ static void context_log_cb( uint32_t level, const char* tag, const char* message
                   << message << "\n";
 }
 
-// create four channel float OptixImage2D with given dimension. allocate memory on device and
-// copy data from host memory given in hmem to device if hmem is nonzero.
+// Create four channel float OptixImage2D with given dimension. Allocate memory on device and
+// Copy data from host memory given in hmem to device if hmem is nonzero.
 static OptixImage2D createOptixImage2D( unsigned int width, unsigned int height, const float * hmem = nullptr ) 
 {
     OptixImage2D oi;
@@ -94,31 +92,34 @@ public:
         std::vector< float* > outputs;  // denoised beauty, followed by denoised AOVs
     };
 
-    // Initialize the API and push all data to the GPU -- normaly done only once per session
-    // tileWidth, tileHeight: if nonzero, enable tiling with given dimension
-    // kpMode: if enabled, use kernel prediction model even if no AOVs are given
-    // temporalMode: if enabled, use a model for denoising sequences of images
+    // Initialize the API and push all data to the GPU -- normaly done only once per session.
+    // tileWidth, tileHeight: If nonzero, enable tiling with given dimension.
+    // kpMode: If enabled, use kernel prediction model even if no AOVs are given.
+    // temporalMode: If enabled, use a model for denoising sequences of images.
+    // applyFlowMode: Apply flow vectors from current frame to previous image (no denoising).
     void init( const Data&  data,
-               unsigned int tileWidth = 0,
-               unsigned int tileHeight = 0,
-               bool         kpMode = false,
-               bool         temporalMode = false );
+               unsigned int tileWidth     = 0,
+               unsigned int tileHeight    = 0,
+               bool         kpMode        = false,
+               bool         temporalMode  = false,
+               bool         applyFlowMode = false );
 
-    // Execute the denoiser. In interactive sessions, this would be done once per frame/subframe
+    // Execute the denoiser. In interactive sessions, this would be done once per frame/subframe.
     void exec();
 
-    // Update denoiser input data on GPU from host memory
+    // Update denoiser input data on GPU from host memory.
     void update( const Data& data );
 
-    // Copy results from GPU to host memory
+    // Copy results from GPU to host memory.
     void getResults();
 
-    // Cleanup state, deallocate memory -- normally done only once per render session
-    void finish(); 
+    // Cleanup state, deallocate memory -- normally done only once per render session.
+    void finish();
 
-    // --- test flow vectors: flow is applied to noisy input image and written back to result
-    // --- no denoising.
-    void getFlowResults();
+private:
+    // --- Test flow vectors: Flow is applied to noisy input image and written back to result.
+    // --- No denoising.
+    void applyFlow();
 
 private:
     OptixDeviceContext    m_context      = nullptr;
@@ -126,6 +127,7 @@ private:
     OptixDenoiserParams   m_params       = {};
 
     bool                  m_temporalMode;
+    bool                  m_applyFlowMode;
 
     CUdeviceptr           m_intensity    = 0;
     CUdeviceptr           m_avgColor     = 0;
@@ -147,7 +149,8 @@ void OptiXDenoiser::init( const Data&  data,
                           unsigned int tileWidth,
                           unsigned int tileHeight,
                           bool         kpMode,
-                          bool         temporalMode )
+                          bool         temporalMode,
+                          bool         applyFlowMode )
 {
     SUTIL_ASSERT( data.color  );
     SUTIL_ASSERT( data.outputs.size() >= 1 );
@@ -158,6 +161,7 @@ void OptiXDenoiser::init( const Data&  data,
 
     m_host_outputs = data.outputs;
     m_temporalMode = temporalMode;
+    m_applyFlowMode = applyFlowMode;
 
     m_tileWidth  = tileWidth > 0 ? tileWidth : data.width;
     m_tileHeight = tileHeight > 0 ? tileHeight : data.height;
@@ -182,7 +186,7 @@ void OptiXDenoiser::init( const Data&  data,
     //
     {
         /*****
-        // load user provided model if model.bin is present in the currrent directory,
+        // Load user provided model if model.bin is present in the currrent directory,
         // configuration of filename not done here.
         std::ifstream file( "model.bin" );
         if ( file.good() ) {
@@ -199,14 +203,9 @@ void OptiXDenoiser::init( const Data&  data,
 
             OptixDenoiserModelKind modelKind;
             if( kpMode || data.aovs.size() > 0 )
-            {
-                SUTIL_ASSERT( !temporalMode );
-                modelKind = OPTIX_DENOISER_MODEL_KIND_AOV;
-            }
+                modelKind = temporalMode ? OPTIX_DENOISER_MODEL_KIND_TEMPORAL_AOV : OPTIX_DENOISER_MODEL_KIND_AOV;
             else
-            {
                 modelKind = temporalMode ? OPTIX_DENOISER_MODEL_KIND_TEMPORAL : OPTIX_DENOISER_MODEL_KIND_HDR;
-            }
             OPTIX_CHECK( optixDenoiserCreate( m_context, modelKind, &options, &m_denoiser ) );
         }
     }
@@ -268,7 +267,7 @@ void OptiXDenoiser::init( const Data&  data,
         layer.output = createOptixImage2D( data.width, data.height );
         if( m_temporalMode )
         {
-            // this is the first frame, create zero motion vector image
+            // This is the first frame, create zero motion vector image.
             void * flowmem;
             CUDA_CHECK( cudaMalloc( &flowmem, data.width * data.height * sizeof( float4 ) ) );
             CUDA_CHECK( cudaMemset( flowmem, 0, data.width * data.height * sizeof(float4) ) );
@@ -374,38 +373,44 @@ void OptiXDenoiser::exec()
                     ) );
     }
 
-    /**
-    OPTIX_CHECK( optixDenoiserInvoke(
-                m_denoiser,
-                nullptr, // CUDA stream
-                &m_params,
-                m_state,
-                m_state_size,
-                &m_guideLayer,
-                m_layers.data(),
-                static_cast<unsigned int>( m_layers.size() ),
-                0, // input offset X
-                0, // input offset y
-                m_scratch,
-                m_scratch_size
-                ) );
-    **/
-    OPTIX_CHECK( optixUtilDenoiserInvokeTiled(
-                m_denoiser,
-                nullptr, // CUDA stream
-                &m_params,
-                m_state,
-                m_state_size,
-                &m_guideLayer,
-                m_layers.data(),
-                static_cast<unsigned int>( m_layers.size() ),
-                m_scratch,
-                m_scratch_size,
-                m_overlap,
-                m_tileWidth,
-                m_tileHeight
-                ) );
-
+    if( m_applyFlowMode )
+    {
+        applyFlow();
+    }
+    else
+    {
+        /** This sample is always using tiling mode.
+        OPTIX_CHECK( optixDenoiserInvoke(
+                    m_denoiser,
+                    nullptr, // CUDA stream
+                    &m_params,
+                    m_state,
+                    m_state_size,
+                    &m_guideLayer,
+                    m_layers.data(),
+                    static_cast<unsigned int>( m_layers.size() ),
+                    0, // input offset X
+                    0, // input offset y
+                    m_scratch,
+                    m_scratch_size
+                    ) );
+        **/
+        OPTIX_CHECK( optixUtilDenoiserInvokeTiled(
+                    m_denoiser,
+                    nullptr, // CUDA stream
+                    &m_params,
+                    m_state,
+                    m_state_size,
+                    &m_guideLayer,
+                    m_layers.data(),
+                    static_cast<unsigned int>( m_layers.size() ),
+                    m_scratch,
+                    m_scratch_size,
+                    m_overlap,
+                    m_tileWidth,
+                    m_tileHeight
+                    ) );
+    }
     CUDA_SYNC_CHECK();
 }
 
@@ -416,7 +421,7 @@ inline float catmull_rom(
     return p[1] + 0.5f * t * ( p[2] - p[0] + t * ( 2.f * p[0] - 5.f * p[1] + 4.f * p[2] - p[3] + t * ( 3.f * ( p[1] - p[2]) + p[3] - p[0] ) ) );
 }
 
-// apply flow to image at given pixel position (using bilinear interpolation), write back RGB result.
+// Apply flow to image at given pixel position (using bilinear interpolation), write back RGB result.
 static void addFlow(
     float4*             result,
     const float4*       image,
@@ -478,7 +483,8 @@ static void addFlow(
     result[y * width + x].z = catmull_rom( b[0], ty );
 }
 
-void OptiXDenoiser::getFlowResults()
+// Apply flow from current frame to the previous noisy image. 
+void OptiXDenoiser::applyFlow()
 {
     if( m_layers.size() == 0 )
         return;
@@ -492,16 +498,18 @@ void OptiXDenoiser::getFlowResults()
     CUDA_CHECK( cudaMemcpy( flow, device_flow, frame_byte_size, cudaMemcpyDeviceToHost ) );
 
     float4* image = new float4[ frame_byte_size ];
+    float4* result = new float4[frame_byte_size];
 
     for( size_t i=0; i < m_layers.size(); i++ )
     {
-        CUDA_CHECK( cudaMemcpy( image, (float4*)m_layers[i].input.data, frame_byte_size, cudaMemcpyDeviceToHost ) );
+        CUDA_CHECK( cudaMemcpy( image, (float4*)m_layers[i].previousOutput.data, frame_byte_size, cudaMemcpyDeviceToHost ) );
+        for( unsigned int y=0; y < m_layers[i].previousOutput.height; y++ )
+            for( unsigned int x=0; x < m_layers[i].previousOutput.width; x++ )
+                addFlow( result, image, flow, m_layers[i].previousOutput.width, m_layers[i].previousOutput.height, x, y );
 
-        for( unsigned int y=0; y < m_layers[i].input.height; y++ )
-            for( unsigned int x=0; x < m_layers[i].input.width; x++ )
-                addFlow( (float4*)m_host_outputs[i], image, flow, m_layers[i].input.width, m_layers[i].input.height, x, y );
+        CUDA_CHECK( cudaMemcpy( (void*)m_layers[i].output.data, result, frame_byte_size, cudaMemcpyHostToDevice ) );
     }
-
+    delete[] result;
     delete[] image;
     delete[] flow;
 }
@@ -517,6 +525,11 @@ void OptiXDenoiser::getResults()
                     frame_byte_size,
                     cudaMemcpyDeviceToHost
                     ) );
+
+        // We start with a noisy image in this mode for each frame, otherwise the warped images would accumulate.
+        if( m_applyFlowMode )
+            CUDA_CHECK( cudaMemcpy( (void*)m_layers[i].previousOutput.data, reinterpret_cast<void*>( m_layers[i].input.data ),
+                                    frame_byte_size, cudaMemcpyDeviceToHost ) );
     }
 }
 

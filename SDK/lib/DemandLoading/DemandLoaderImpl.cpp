@@ -32,6 +32,8 @@
 #include "Util/Exception.h"
 #include "Util/NVTXProfiling.h"
 #include "Util/Stopwatch.h"
+#include "Util/TraceFile.h"
+#include "TicketImpl.h"
 
 #include <DemandLoading/DeviceContext.h>
 #include <DemandLoading/TileIndexing.h>
@@ -68,38 +70,55 @@ bool supportsSparseTextures( unsigned int deviceIndex )
     return static_cast<bool>( sparseSupport );
 }
 
+unsigned int getNumDevices()
+{
+    int numDevices;
+    DEMAND_CUDA_CHECK( cudaGetDeviceCount( &numDevices ) );
+    return static_cast<unsigned int>( numDevices );
+}
+
 }  // anonymous namespace
 
 namespace demandLoading {
 
-DemandLoaderImpl::DemandLoaderImpl( const std::vector<unsigned int>& devices, const Options& options )
+DemandLoaderImpl::DemandLoaderImpl( const Options& options )
     : m_options( configure( options ) )
-    , m_numDevices( static_cast<unsigned int>( devices.size() ) )
-    , m_deviceMemoryManagers( devices.size() )
-    , m_pagingSystems( devices.size() )
+    , m_numDevices( getNumDevices() )
+    , m_deviceMemoryManagers( m_numDevices )
+    , m_pagingSystems( m_numDevices )
+    , m_baseColorRequestHandler( this )
     , m_samplerRequestHandler( this )
     , m_pageTableManager( options.numPages )
     , m_requestProcessor( &m_pageTableManager )
     , m_pinnedMemoryManager( options )
 {
-    // Create per-device DeviceMemoryManager, PagingSystem, and RequestHandler
-    unsigned int numCapableDevices = 0;
-    for( unsigned int deviceIndex : devices )
+    // Create per-device DeviceMemoryManager and PagingSystem.
+    for( unsigned int deviceIndex = 0; deviceIndex < m_numDevices; ++deviceIndex )
     {
         if( supportsSparseTextures( deviceIndex ) )
         {
-            ++numCapableDevices;
+            m_devices.push_back(deviceIndex);
             m_deviceMemoryManagers[deviceIndex].reset( new DeviceMemoryManager( deviceIndex, m_options ) );
             m_pagingSystems[deviceIndex].reset( new PagingSystem( deviceIndex, options,
                                                                   m_deviceMemoryManagers[deviceIndex].get(),
                                                                   &m_pinnedMemoryManager, &m_requestProcessor ) );
         }
     }
-    if( numCapableDevices == 0 )
+    if( m_devices.empty() )
         throw Exception( "No devices that support CUDA sparse textures were found (sm_60+ required)." );
 
     // Reserve virtual address space for texture samplers, which is associated with the sampler request handler.
-    m_pageTableManager.reserve( m_options.numPageTableEntries, &m_samplerRequestHandler );
+    // Note that the max number of samplers/textures is half the number of page table entries.
+    m_pageTableManager.reserve( m_options.numPageTableEntries / 2, &m_samplerRequestHandler );
+    m_pageTableManager.reserve( m_options.numPageTableEntries / 2, &m_baseColorRequestHandler );
+
+    // If tracing is enabled, open the trace output file.
+    if( !options.traceFile.empty() )
+    {
+        m_traceFile.reset( new TraceFileWriter( options.traceFile.c_str() ) );
+        m_traceFile->recordOptions( options );
+        m_requestProcessor.setTraceFile( m_traceFile.get() );
+    }
 
     m_requestProcessor.start( m_options.maxThreads );
 }
@@ -111,7 +130,8 @@ DemandLoaderImpl::~DemandLoaderImpl()
 
 // Create a demand-loaded texture.  The image is not opened until the texture sampler is requested
 // by device code (via pagingMapOrRequest in Tex2D).
-const DemandTexture& DemandLoaderImpl::createTexture( std::shared_ptr<ImageReader> imageReader, const TextureDescriptor& textureDesc )
+const DemandTexture& DemandLoaderImpl::createTexture( std::shared_ptr<imageReader::ImageReader> imageReader,
+                                                      const TextureDescriptor&                  textureDesc )
 {
     SCOPED_NVTX_RANGE_FUNCTION_NAME();
     std::unique_lock<std::mutex> lock( m_mutex );
@@ -123,7 +143,60 @@ const DemandTexture& DemandLoaderImpl::createTexture( std::shared_ptr<ImageReade
     // image, from which tile data is obtained on demand.
     m_textures.emplace_back( new DemandTextureImpl( textureId, m_numDevices, textureDesc, imageReader, this ) );
 
+    // If tracing is enabled, record the image reader and texture descriptor.
+    if( m_traceFile )
+    {
+        m_traceFile->recordTexture( imageReader, textureDesc );
+    }
+
     return *m_textures.back();
+}
+
+// Create a demand-loaded UDIM texture.  The images are not opened until the texture samplers are requested
+// by device code (via pagingMapOrRequest in Tex2DGradUdim, or other Tex2D functions).
+const DemandTexture& DemandLoaderImpl::createUdimTexture( std::vector<std::shared_ptr<imageReader::ImageReader>>& imageReaders,
+                                                          std::vector<TextureDescriptor>& textureDescs,
+                                                          unsigned int                    udim,
+                                                          unsigned int                    vdim,
+                                                          int                             baseTextureId )
+{
+    SCOPED_NVTX_RANGE_FUNCTION_NAME();
+
+    // Create all the slots we need in textures array
+    unsigned int startIndex = 0;
+    {
+        std::unique_lock<std::mutex> lock( m_mutex );
+        startIndex = static_cast<unsigned int>( m_textures.size() );
+        m_textures.resize( startIndex + udim*vdim );
+    }
+
+    // Fill the slots in the textures array
+    unsigned int entryPointIndex = static_cast<unsigned int>( m_textures.size() );
+    for( unsigned int v=0; v<vdim; ++v )
+    {
+        for( unsigned int u=0; u<udim; ++u )
+        {
+            unsigned int imageIndex = v*udim + u;
+            unsigned int textureId = startIndex + imageIndex;
+            if(imageIndex < imageReaders.size() && imageReaders[imageIndex].get() != nullptr )
+            {
+                if( textureId < entryPointIndex )
+                    entryPointIndex = textureId;
+                DemandTextureImpl* tex = new DemandTextureImpl( textureId, m_numDevices, textureDescs[imageIndex], imageReaders[imageIndex], this );
+                m_textures[textureId].reset( tex );
+            }
+            else 
+            {
+                m_textures[textureId].reset( nullptr );
+            }
+        }
+    }
+
+    m_textures[entryPointIndex]->setUdimTexture( startIndex, udim, vdim, false );
+    if( baseTextureId >= 0 )
+        m_textures[baseTextureId]->setUdimTexture( startIndex, udim, vdim, true );
+
+    return (baseTextureId >= 0) ? *m_textures[baseTextureId] : *m_textures[entryPointIndex];
 }
 
 unsigned int DemandLoaderImpl::createResource( unsigned int numPages, ResourceCallback callback )
@@ -141,7 +214,6 @@ unsigned int DemandLoaderImpl::createResource( unsigned int numPages, ResourceCa
     // Return the start page.
     return m_resourceRequestHandlers.back()->getStartPage();
 }
-
 
 // Returns false if the device doesn't support sparse textures.
 bool DemandLoaderImpl::launchPrepare( unsigned int deviceIndex, CUstream stream, DeviceContext& context )
@@ -161,14 +233,14 @@ bool DemandLoaderImpl::launchPrepare( unsigned int deviceIndex, CUstream stream,
 }
 
 // Process page requests.
-std::shared_ptr<Ticket> DemandLoaderImpl::processRequests( unsigned int deviceIndex, CUstream stream, const DeviceContext& context )
+Ticket DemandLoaderImpl::processRequests( unsigned int deviceIndex, CUstream stream, const DeviceContext& context )
 {
     Stopwatch stopwatch;
     SCOPED_NVTX_RANGE_FUNCTION_NAME();
     std::unique_lock<std::mutex> lock( m_mutex );
 
     // Create a Ticket that the caller can use to track request processing.
-    std::shared_ptr<TicketImpl> ticket( std::make_shared<TicketImpl>() );
+    Ticket ticket( TicketImpl::create( deviceIndex, stream ) );
 
     // Pull requests from the device.  This launches a kernel on the given stream to scan the
     // request bits copies the requested page ids to host memory (asynchronously).
@@ -181,44 +253,50 @@ std::shared_ptr<Ticket> DemandLoaderImpl::processRequests( unsigned int deviceIn
     return ticket;
 }
 
+Ticket DemandLoaderImpl::replayRequests( unsigned int deviceIndex, CUstream stream, unsigned int* requestedPages, unsigned int numRequestedPages )
+{
+    SCOPED_NVTX_RANGE_FUNCTION_NAME();
+    std::unique_lock<std::mutex> lock( m_mutex );
+
+    // Flush any page mappings that have accumulated for the specified device.
+    m_pagingSystems.at( deviceIndex )->flushMappings();
+
+    // Create a Ticket that the caller can use to track request processing.
+    Ticket ticket( TicketImpl::create( deviceIndex, stream ) );
+
+    m_requestProcessor.addRequests( deviceIndex, stream, requestedPages, numRequestedPages, ticket );
+
+    return ticket;
+}
+
+
 void DemandLoaderImpl::unmapTileResource( unsigned int deviceIndex, CUstream stream, unsigned int pageId )
 {
     // Ask the PageTableManager for the RequestHandler associated with the given page index.
     TextureRequestHandler* handler = dynamic_cast<TextureRequestHandler*>( m_pageTableManager.getRequestHandler( pageId ) );
     DEMAND_ASSERT_MSG( handler != nullptr, "Page request does not correspond to a known resource" );
-    DemandTextureImpl* texture   = handler->getTexture();
-    const unsigned int tileIndex = pageId - texture->getSampler().startPage;
-
-    // Unmap the tile or mip tail
-    if( tileIndex == 0 )
-    {
-        texture->unmapMipTail( deviceIndex, stream );
-    }
-    else
-    {
-        unsigned int mipLevel;
-        unsigned int tileX;
-        unsigned int tileY;
-        unpackTileIndex( texture->getSampler(), tileIndex, mipLevel, tileX, tileY );
-        texture->unmapTile( deviceIndex, stream, mipLevel, tileX, tileY );
-    }
+    handler->unmapTileResource( deviceIndex, stream, pageId );
 }
 
-void DemandLoaderImpl::freeTiles( unsigned int deviceIndex, CUstream stream )
+void DemandLoaderImpl::freeStagedTiles( unsigned int deviceIndex, CUstream stream )
 {
-    // TODO: the code below just adds the tiles to the free list without making sure they
-    // can't be used on the GPU. Freeing tiles must be asynchronous and stream-aware.
-    TilePool*    tilePool           = m_deviceMemoryManagers[deviceIndex]->getTilePool();
-    unsigned int desiredTilesToFree = tilePool->getDesiredTilesToFree();
-    if( desiredTilesToFree > 0 )
+    std::unique_lock<std::mutex> lock( m_mutex );
+
+    PagingSystem* pagingSystem = getPagingSystem( deviceIndex );
+    TilePool*     tilePool     = m_deviceMemoryManagers[deviceIndex]->getTilePool();
+    PageMapping   mapping;
+
+    while( tilePool->getTotalFreeTiles() < tilePool->getDesiredFreeTiles() )
     {
-        PagingSystem*            pagingSystem = m_pagingSystems[deviceIndex].get();
-        std::vector<PageMapping> staleMemBlocks;
-        pagingSystem->invalidateStalePages( staleMemBlocks, desiredTilesToFree );
-        for( PageMapping m : staleMemBlocks )
+        pagingSystem->activateEviction( true );
+        if( pagingSystem->freeStagedPage( &mapping ) )
         {
-            unmapTileResource( deviceIndex, stream, m.id );
-            tilePool->freeBlock( m.page );
+            unmapTileResource( deviceIndex, stream, mapping.id );
+            tilePool->freeBlock( mapping.page );
+        }
+        else 
+        {
+            break;
         }
     }
 }
@@ -231,10 +309,10 @@ Statistics DemandLoaderImpl::getStatistics() const
 
     // Multiple textures might share the same ImageReader, so we create a set as we go to avoid
     // duplicate counting.
-    std::set<ImageReader*> images;
+    std::set<imageReader::ImageReader*> images;
     for( auto& tex : m_textures )
     {
-        ImageReader* image = tex->getImageReader();
+        imageReader::ImageReader* image = tex->getImageReader();
         if( images.find( image ) == images.end() )
         {
             images.insert( image );
@@ -253,10 +331,10 @@ Statistics DemandLoaderImpl::getStatistics() const
     return stats;
 }
 
-DemandLoader* createDemandLoader( const std::vector<unsigned int>& devices, const Options& options )
+DemandLoader* createDemandLoader( const Options& options )
 {
     SCOPED_NVTX_RANGE_FUNCTION_NAME();
-    return new DemandLoaderImpl( devices, options );
+    return new DemandLoaderImpl( options );
 }
 
 void destroyDemandLoader( DemandLoader* manager )

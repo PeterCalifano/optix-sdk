@@ -1,4 +1,3 @@
-
 //
 // Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
 //
@@ -27,42 +26,27 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#include "Util/Exception.h"
+#include "TicketImpl.h"
 
-#include <cuda.h>
-#include <cuda_fp16.h>
+#include <DemandLoading/Ticket.h>
+
 
 namespace demandLoading {
 
-unsigned int getBytesPerChannel( const CUarray_format format )
+int Ticket::numTasksTotal() const
 {
-    switch( format )
-    {
-        case CU_AD_FORMAT_SIGNED_INT8:
-        case CU_AD_FORMAT_UNSIGNED_INT8:
-            return 1;
-
-        case CU_AD_FORMAT_SIGNED_INT16:
-        case CU_AD_FORMAT_UNSIGNED_INT16:
-            return 2;
-
-        case CU_AD_FORMAT_SIGNED_INT32:
-        case CU_AD_FORMAT_UNSIGNED_INT32:
-            return 4;
-
-        case CU_AD_FORMAT_HALF:
-            return sizeof( half );
-
-        case CU_AD_FORMAT_FLOAT:
-            return sizeof( float );
-
-        default:
-            DEMAND_ASSERT_MSG( false, "Invalid CUDA array format" );
-            return 0;
-    }
-
-    DEMAND_ASSERT_MSG( false, "Invalid CUDA array format" );
-    return 0;
+    return m_impl ? m_impl->numTasksTotal() : 0;
 }
 
-}  // namespace demandLoading
+int Ticket::numTasksRemaining() const
+{
+    return m_impl ? m_impl->numTasksRemaining() : 0;
+}
+
+void Ticket::wait( CUevent* event )
+{
+    if( m_impl )
+        m_impl->wait( event );
+}
+
+} // namespace demandLoading

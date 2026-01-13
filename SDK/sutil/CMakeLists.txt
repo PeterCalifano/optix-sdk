@@ -65,12 +65,16 @@ set(sources
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 if(NOT CUDA_NVRTC_ENABLED)
-  CUDA_COMPILE_PTX(ptx_files ${sources})
+  OPTIX_sutil_compile_to_optix_input(ptx_files ${sources})
+else()
+  set(ptx_files)
 endif()
+
+OPTIX_add_source_groups()
 
 # Make the library.
 set(sutil_target "sutil_7_sdk")
-add_library(${sutil_target} ${sources})
+add_library(${sutil_target} ${sources} ${ptx_files})
 if( WIN32 )
   target_compile_definitions( ${sutil_target} PUBLIC GLAD_GLAPI_EXPORT )
 endif()

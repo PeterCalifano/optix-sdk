@@ -47,7 +47,13 @@ if( WARNINGS_AS_ERRORS AND (USING_GNU_CXX OR USING_CLANG_CXX))
   pop_variable( CMAKE_C_FLAGS )
 endif()
 
+if( WARNINGS_AS_ERRORS AND (USING_GNU_CXX OR USING_CLANG_CXX))
+    push_variable( CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-class-memaccess" )
+endif()
 add_subdirectory( imgui )
+if( WARNINGS_AS_ERRORS AND (USING_GNU_CXX OR USING_CLANG_CXX))
+  pop_variable( CMAKE_CXX_FLAGS )
+endif()
 
 add_library( glad SHARED
   KHR/khrplatform.h

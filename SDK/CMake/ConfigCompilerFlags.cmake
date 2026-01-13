@@ -112,7 +112,15 @@ if(OPTIX_USE_AGGRESSIVE_WARNINGS)
       set(clang_warnings "${clang_warnings} -Wno-inconsistent-missing-override")
     endif()
   endif()
-  SET(CXX_WARNING_FLAGS "-Wall -Wsign-compare -Wno-multichar ${clang_warnings}")
+  
+  # Needed for corelib's use of deprecated sysctl.h
+  include(CheckCXXCompilerFlag)
+  CHECK_CXX_COMPILER_FLAG(-Wno-cpp OPTIX_CXX_ACCEPTS_NO_CPP)
+  if(OPTIX_CXX_ACCEPTS_NO_CPP)
+      set(OPTIX_NO_CPP -Wno-cpp)
+  endif()
+
+  SET(CXX_WARNING_FLAGS "-Wall -Wsign-compare -Wno-multichar ${clang_warnings} ${OPTIX_NO_CPP}")
   SET(C_WARNING_FLAGS   "${CXX_WARNING_FLAGS} -Wstrict-prototypes -Wdeclaration-after-statement")
   if(WARNINGS_AS_ERRORS)
     APPEND_TO_STRING(C_WARNING_FLAGS    "-Werror")
@@ -143,6 +151,7 @@ IF   (USING_GNU_CXX OR USING_CLANG_CXX)
   if(OPTIX_CXX_ACCEPTS_NO_UNUSED_RESULT)
     set(OPTIX_NO_UNUSED_RESULT -Wno-unused-result)
   endif()
+
 ENDIF()
 
 ########################

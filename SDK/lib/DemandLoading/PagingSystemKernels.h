@@ -39,7 +39,7 @@ void launchPullRequests( CUstream             stream,
                          unsigned int         launchNum,
                          unsigned int         lruThreshold,
                          unsigned int         startPage,
-                         unsigned int         endPage );
+                         unsigned int         endPage /*inclusive*/ );
 
 void launchPushMappings( CUstream stream, const DeviceContext& context /*on host*/, int filledPageCount );
 

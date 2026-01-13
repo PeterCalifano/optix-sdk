@@ -32,6 +32,8 @@
 
 #include <DemandLoading/Ticket.h>
 
+#include <cuda.h>
+
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
@@ -39,11 +41,24 @@
 namespace demandLoading {
 
 /// A TicketImpl tracks the progress of a number of tasks.
-class TicketImpl : public Ticket
+class TicketImpl
 {
   public:
-    /// Initially the number of tasks is unknown (represented by -1).
-    TicketImpl() {}
+    /// Create a ticket.  Initially the number of tasks is unknown (represented by -1).
+    static Ticket create( unsigned int deviceIndex, CUstream stream )
+    {
+        return Ticket( std::make_shared<TicketImpl>( deviceIndex, stream ) );
+    }
+
+    /// Get TicketImpl from Ticket, which is held as a shared pointer.
+    static std::shared_ptr<TicketImpl>& getImpl( Ticket& ticket ) { return ticket.m_impl; }
+
+    /// Construct TicketImpl with the given device index and stream.
+    TicketImpl( unsigned deviceIndex, CUstream stream )
+        : m_deviceIndex( deviceIndex )
+        , m_stream( stream )
+    {
+    }
 
     /// The ticket is updated when the number of tasks are known.
     void update( unsigned int numTasks )
@@ -58,44 +73,59 @@ class TicketImpl : public Ticket
             m_isDone.notify_all();
     }
 
+    /// Get the device index associated with the ticket.
+    unsigned int getDeviceIndex() const { return m_deviceIndex; }
+
+    /// Get the stream associated with the ticket.
+    CUstream getStream() const { return m_stream; }
+
     /// Get the total number of tasks tracked by this ticket.  Returns -1 if the number of tasks is
     /// unknown, which indicates that task processing has not yet started.
-    int numTasksTotal() const override { return m_numTasksTotal; }
+    int numTasksTotal() const { return m_numTasksTotal; }
 
     /// Get the number of tasks remaining.  Returns -1 if the number of tasks is unknown, which
     /// indicates that task processing has not yet started.
-    int numTasksRemaining() const override { return m_numTasksRemaining.load(); }
+    int numTasksRemaining() const
+    {
+        std::unique_lock<std::mutex> lock( m_mutex );
+        return m_numTasksRemaining;
+    }
 
-    /// Wait for the tasks to be done.
-    void wait() override
+    /// Wait for the host-side execution of the tasks to finish.  Optionally, if a CUDA event is
+    /// provided, it is recorded when the last task is finished, allowing the caller to wait for
+    /// device-side execution to finish (e.g. via cuEventSynchronize or cuStreamWaitEvent).
+    void wait( CUevent* event = nullptr )
     {
         std::unique_lock<std::mutex> lock( m_mutex );
         m_isDone.wait( lock, [this] { return m_numTasksRemaining == 0; } );
+        if( event )
+        {
+            DEMAND_CUDA_CHECK( cudaSetDevice( m_deviceIndex ) );
+            DEMAND_CUDA_CHECK( cuEventRecord( *event, m_stream ) );
+        }
     }
 
     /// Decrement the number of tasks remaining, notifying any waiting threads
     /// when all the tasks are done.
     void notify( unsigned int tasksDone = 1 )
     {
+        std::unique_lock<std::mutex> lock( m_mutex );
+
         // Atomically decrement the number of tasks remaining.
-        DEMAND_ASSERT( m_numTasksRemaining.load() > 0 );
+        DEMAND_ASSERT( m_numTasksRemaining > 0 );
         m_numTasksRemaining -= tasksDone;
 
         // If there are no tasks remaining, notify any threads waiting on the condition variable.
         // It's not necessary to acquire the mutex.  Redundant notifications are OK.
-        if( m_numTasksRemaining.load() == 0 )
+        if( m_numTasksRemaining == 0 )
             m_isDone.notify_all();
     }
 
-    /// Not copyable.
-    TicketImpl( const TicketImpl& ) = delete;
-
-    /// Not assignable.
-    TicketImpl& operator=( const TicketImpl& ) = delete;
-
   private:
+    const unsigned int      m_deviceIndex{};
+    const CUstream          m_stream{};
     int                     m_numTasksTotal{-1};
-    std::atomic<int>        m_numTasksRemaining{-1};
+    int                     m_numTasksRemaining{-1};
     mutable std::mutex      m_mutex;
     std::condition_variable m_isDone;
 };

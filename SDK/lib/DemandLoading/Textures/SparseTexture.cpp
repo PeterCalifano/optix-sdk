@@ -26,40 +26,51 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#include <DemandLoading/ImageReader.h>
-
 #include "Textures/SparseTexture.h"
 #include "Util/Exception.h"
+
+#include <ImageReader/ImageReader.h>
 
 #include <algorithm>
 #include <cmath>
 
 namespace demandLoading {
 
-void SparseTexture::init( const TextureDescriptor& descriptor, const TextureInfo& info )
+SparseArray::~SparseArray()
 {
-    // Redundant initialization can occur because requests from multiple streams are not yet
-    // deduplicated.
-    if( m_isInitialized )
+    if( m_initialized )
+    {
+        // It's not necessary to unmap the tiles / mip tail when destroying the array.
+        DEMAND_CUDA_CHECK_NOTHROW( cudaSetDevice( m_deviceIndex ) );
+        DEMAND_CUDA_CHECK_NOTHROW( cuMipmappedArrayDestroy( m_array ) );
+
+        m_initialized = false;
+    }
+}
+
+void SparseArray::init( unsigned int deviceIndex, const imageReader::TextureInfo& info )
+{
+    if( m_initialized )
         return;
 
-    m_isInitialized = true;
-    m_info          = info;
+    m_deviceIndex = deviceIndex;
+    m_info = info;
+
     DEMAND_CUDA_CHECK( cudaSetDevice( m_deviceIndex ) );
 
     // Work around an invalid read (reported by valgrind) in cuMipmappedArrayCreate when the number
     // of miplevels is less than the start of the mip tail.  See bug 3139148.
     // Note that the texture descriptor clamps the maximum miplevel appropriately, and we'll never
     // map tiles (or the mip tail) beyond the actual maximum miplevel.
-    const unsigned int nominalNumMipLevels = calculateNumMipLevels( m_info.width, m_info.height );
-    DEMAND_ASSERT( info.numMipLevels <= nominalNumMipLevels );
+    const unsigned int nominalNumMipLevels = imageReader::calculateNumMipLevels( m_info.width, m_info.height );
+    DEMAND_ASSERT( m_info.numMipLevels <= nominalNumMipLevels );
 
     // Create CUDA array
     CUDA_ARRAY3D_DESCRIPTOR ad{};
-    ad.Width       = info.width;
-    ad.Height      = info.height;
-    ad.Format      = info.format;
-    ad.NumChannels = info.numChannels;
+    ad.Width       = m_info.width;
+    ad.Height      = m_info.height;
+    ad.Format      = m_info.format;
+    ad.NumChannels = m_info.numChannels;
     ad.Flags       = CUDA_ARRAY3D_SPARSE;
     DEMAND_CUDA_CHECK( cuMipmappedArrayCreate( &m_array, &ad, nominalNumMipLevels ) );
 
@@ -67,10 +78,141 @@ void SparseTexture::init( const TextureDescriptor& descriptor, const TextureInfo
     DEMAND_CUDA_CHECK( cuMipmappedArrayGetSparseProperties( &m_properties, m_array ) );
 
     // Precompute array of mip level dimensions (for use in getTileDimensions).
-    for( unsigned int mipLevel = 0; mipLevel < info.numMipLevels; ++mipLevel )
+    for( unsigned int mipLevel = 0; mipLevel < m_info.numMipLevels; ++mipLevel )
     {
         m_mipLevelDims.push_back( queryMipLevelDims( mipLevel ) );
     }
+
+    m_initialized = true;
+}
+
+uint2 SparseArray::queryMipLevelDims( unsigned int mipLevel ) const
+{
+    DEMAND_CUDA_CHECK( cudaSetDevice( m_deviceIndex ) );
+
+    // Get CUDA array for the specified level from the mipmapped array.
+    DEMAND_ASSERT( mipLevel < m_info.numMipLevels );
+    CUarray mipLevelArray = getLevel( mipLevel );
+
+    // Get the array descriptor.
+    CUDA_ARRAY_DESCRIPTOR desc;
+    DEMAND_CUDA_CHECK( cuArrayGetDescriptor( &desc, mipLevelArray ) );
+
+    return make_uint2( static_cast<unsigned int>( desc.Width ), static_cast<unsigned int>( desc.Height ) );
+}
+
+void SparseArray::mapTileAsync( CUstream stream, unsigned int mipLevel, uint2 levelOffset, uint2 levelExtent, CUmemGenericAllocationHandle memHandle, size_t offset ) const
+{
+    DEMAND_ASSERT( m_initialized );
+    DEMAND_CUDA_CHECK( cudaSetDevice( m_deviceIndex ) );
+
+    // Map tile backing storage into array
+    CUarrayMapInfo mapInfo{}; 
+    mapInfo.resourceType    = CU_RESOURCE_TYPE_MIPMAPPED_ARRAY;
+    mapInfo.resource.mipmap = m_array;
+
+    mapInfo.subresourceType               = CU_ARRAY_SPARSE_SUBRESOURCE_TYPE_SPARSE_LEVEL;
+    mapInfo.subresource.sparseLevel.level = mipLevel;
+
+    mapInfo.subresource.sparseLevel.offsetX = levelOffset.x;
+    mapInfo.subresource.sparseLevel.offsetY = levelOffset.y;
+
+    mapInfo.subresource.sparseLevel.extentWidth  = levelExtent.x;
+    mapInfo.subresource.sparseLevel.extentHeight = levelExtent.y;
+    mapInfo.subresource.sparseLevel.extentDepth  = 1;
+
+    mapInfo.memOperationType    = CU_MEM_OPERATION_TYPE_MAP;
+    mapInfo.memHandleType       = CU_MEM_HANDLE_TYPE_GENERIC;
+    mapInfo.memHandle.memHandle = memHandle;
+    mapInfo.offset              = offset;
+    mapInfo.deviceBitMask       = 1U << m_deviceIndex;
+
+    DEMAND_CUDA_CHECK( cuMemMapArrayAsync( &mapInfo, 1, stream ) );
+}
+
+void SparseArray::unmapTileAsync( CUstream stream, unsigned int mipLevel, uint2 levelOffset, uint2 levelExtent ) const
+{
+    DEMAND_ASSERT( m_initialized );
+    DEMAND_CUDA_CHECK( cudaSetDevice( m_deviceIndex ) );
+
+    CUarrayMapInfo mapInfo{};
+    mapInfo.resourceType    = CU_RESOURCE_TYPE_MIPMAPPED_ARRAY;
+    mapInfo.resource.mipmap = m_array;
+
+    mapInfo.subresourceType               = CU_ARRAY_SPARSE_SUBRESOURCE_TYPE_SPARSE_LEVEL;
+    mapInfo.subresource.sparseLevel.level = mipLevel;
+
+    mapInfo.subresource.sparseLevel.offsetX = levelOffset.x;
+    mapInfo.subresource.sparseLevel.offsetY = levelOffset.y;
+
+    mapInfo.subresource.sparseLevel.extentWidth  = levelExtent.x;
+    mapInfo.subresource.sparseLevel.extentHeight = levelExtent.y;
+    mapInfo.subresource.sparseLevel.extentDepth  = 1;
+
+    mapInfo.memOperationType    = CU_MEM_OPERATION_TYPE_UNMAP;
+    mapInfo.memHandleType       = CU_MEM_HANDLE_TYPE_GENERIC;
+    mapInfo.memHandle.memHandle = 0ULL;
+    mapInfo.offset              = 0ULL;
+    mapInfo.deviceBitMask       = 1U << m_deviceIndex;
+
+    DEMAND_CUDA_CHECK( cuMemMapArrayAsync( &mapInfo, 1, stream ) );
+}
+
+void SparseArray::mapMipTailAsync( CUstream stream, size_t mipTailSize, CUmemGenericAllocationHandle memHandle, size_t offset ) const
+{
+    DEMAND_ASSERT( m_initialized );
+    DEMAND_CUDA_CHECK( cudaSetDevice( m_deviceIndex ) );
+
+    CUarrayMapInfo mapInfo{};
+    mapInfo.resourceType    = CU_RESOURCE_TYPE_MIPMAPPED_ARRAY;
+    mapInfo.resource.mipmap = m_array;
+
+    mapInfo.subresourceType            = CU_ARRAY_SPARSE_SUBRESOURCE_TYPE_MIPTAIL;
+    mapInfo.subresource.miptail.offset = 0;
+    mapInfo.subresource.miptail.size   = mipTailSize;
+
+    mapInfo.memOperationType    = CU_MEM_OPERATION_TYPE_MAP;
+    mapInfo.memHandleType       = CU_MEM_HANDLE_TYPE_GENERIC;
+    mapInfo.memHandle.memHandle = memHandle;
+    mapInfo.offset              = offset;
+    mapInfo.deviceBitMask       = 1U << m_deviceIndex;
+
+    DEMAND_CUDA_CHECK( cuMemMapArrayAsync( &mapInfo, 1, stream ) );
+}
+
+void SparseArray::unmapMipTailAsync( CUstream stream, size_t mipTailSize ) const
+{
+    DEMAND_ASSERT( m_initialized );
+    DEMAND_CUDA_CHECK( cudaSetDevice( m_deviceIndex ) );
+
+    CUarrayMapInfo mapInfo{};
+    mapInfo.resourceType    = CU_RESOURCE_TYPE_MIPMAPPED_ARRAY;
+    mapInfo.resource.mipmap = static_cast<CUmipmappedArray>( m_array );
+
+    mapInfo.subresourceType            = CU_ARRAY_SPARSE_SUBRESOURCE_TYPE_MIPTAIL;
+    mapInfo.subresource.miptail.offset = 0;
+    mapInfo.subresource.miptail.size   = mipTailSize;
+
+    mapInfo.memOperationType    = CU_MEM_OPERATION_TYPE_UNMAP;
+    mapInfo.memHandleType       = CU_MEM_HANDLE_TYPE_GENERIC;
+    mapInfo.memHandle.memHandle = 0ULL;
+    mapInfo.offset              = 0ULL;
+    mapInfo.deviceBitMask       = 1U << m_deviceIndex;
+
+    DEMAND_CUDA_CHECK( cuMemMapArrayAsync( &mapInfo, 1, stream ) );
+}
+
+void SparseTexture::init( const TextureDescriptor& descriptor, const imageReader::TextureInfo& info )
+{
+    // Redundant initialization can occur because requests from multiple streams are not yet
+    // deduplicated.
+    if( m_isInitialized )
+        return;
+
+    m_info = info;
+    m_array.init( m_deviceIndex, m_info );
+
+    DEMAND_CUDA_CHECK( cudaSetDevice( m_deviceIndex ) );
 
     // Create CUDA texture descriptor
     CUDA_TEXTURE_DESC td{};
@@ -86,24 +228,11 @@ void SparseTexture::init( const TextureDescriptor& descriptor, const TextureInfo
     // Create texture object.
     CUDA_RESOURCE_DESC rd{};
     rd.resType                    = CU_RESOURCE_TYPE_MIPMAPPED_ARRAY;
-    rd.res.mipmap.hMipmappedArray = m_array;
-    DEMAND_CUDA_CHECK( cuTexObjectCreate( &m_texture, &rd, &td, 0 ) );
+    rd.res.mipmap.hMipmappedArray = static_cast<CUmipmappedArray>( m_array );
+    DEMAND_CUDA_CHECK( cuTexObjectCreate( &m_texture, &rd, &td, nullptr ) );
+
+    m_isInitialized = true;
 };
-
-
-uint2 SparseTexture::queryMipLevelDims( unsigned int mipLevel ) const
-{
-    // Get CUDA array for the specified level from the mipmapped array.
-    DEMAND_ASSERT( mipLevel < m_info.numMipLevels );
-    CUarray mipLevelArray;
-    DEMAND_CUDA_CHECK( cuMipmappedArrayGetLevel( &mipLevelArray, m_array, mipLevel ) );
-
-    // Get the array descriptor.
-    CUDA_ARRAY_DESCRIPTOR desc;
-    DEMAND_CUDA_CHECK( cuArrayGetDescriptor( &desc, mipLevelArray ) );
-
-    return make_uint2( static_cast<unsigned int>( desc.Width ), static_cast<unsigned int>( desc.Height ) );
-}
 
 
 // Get the dimensions of the specified tile, which might be a partial tile.
@@ -132,40 +261,17 @@ void SparseTexture::fillTile( CUstream                     stream,
                               CUmemGenericAllocationHandle tileHandle,
                               size_t                       tileOffset ) const
 {
-    // Make device current.
     DEMAND_ASSERT( m_isInitialized );
-    DEMAND_CUDA_CHECK( cudaSetDevice( m_deviceIndex ) );
 
-    // Map tile backing storage into array
-    CUarrayMapInfo mapInfo{};
-    mapInfo.resourceType    = CU_RESOURCE_TYPE_MIPMAPPED_ARRAY;
-    mapInfo.resource.mipmap = m_array;
-
-    mapInfo.subresourceType               = CU_ARRAY_SPARSE_SUBRESOURCE_TYPE_SPARSE_LEVEL;
-    mapInfo.subresource.sparseLevel.level = mipLevel;
-
-    mapInfo.subresource.sparseLevel.offsetX = tileX * getTileWidth();
-    mapInfo.subresource.sparseLevel.offsetY = tileY * getTileHeight();
-
-    uint2 tileDims                               = getTileDimensions( mipLevel, tileX, tileY );
-    mapInfo.subresource.sparseLevel.extentWidth  = tileDims.x;
-    mapInfo.subresource.sparseLevel.extentHeight = tileDims.y;
-    mapInfo.subresource.sparseLevel.extentDepth  = 1;
-
-    mapInfo.memOperationType    = CU_MEM_OPERATION_TYPE_MAP;
-    mapInfo.memHandleType       = CU_MEM_HANDLE_TYPE_GENERIC;
-    mapInfo.memHandle.memHandle = tileHandle;
-    mapInfo.offset              = tileOffset;
-    mapInfo.deviceBitMask       = 1U << m_deviceIndex;
-
-    DEMAND_CUDA_CHECK( cuMemMapArrayAsync( &mapInfo, 1, stream ) );
+    const uint2 tileDims{getTileDimensions( mipLevel, tileX, tileY )};
+    const uint2 levelOffset{make_uint2( tileX * getTileWidth(), tileY * getTileHeight() )};
+    m_array.mapTileAsync(stream, mipLevel, levelOffset, tileDims, tileHandle, tileOffset);
 
     // Get CUDA array for the specified miplevel.
-    CUarray mipLevelArray;
-    DEMAND_CUDA_CHECK( cuMipmappedArrayGetLevel( &mipLevelArray, m_array, mipLevel ) );
+    CUarray mipLevelArray = m_array.getLevel( mipLevel );
 
     // Copy tile data into CUDA array
-    const unsigned int pixelSize = m_info.numChannels * getBytesPerChannel( m_info.format );
+    const unsigned int pixelSize = m_info.numChannels * imageReader::getBytesPerChannel( m_info.format );
     CUDA_MEMCPY2D      copyArgs  = {};
     copyArgs.srcMemoryType       = CU_MEMORYTYPE_HOST;
     copyArgs.srcHost             = tileData;
@@ -186,64 +292,26 @@ void SparseTexture::fillTile( CUstream                     stream,
 
 void SparseTexture::unmapTile( CUstream stream, unsigned int mipLevel, unsigned int tileX, unsigned int tileY ) const
 {
-    // Make device current.
     DEMAND_ASSERT( m_isInitialized );
-    DEMAND_CUDA_CHECK( cudaSetDevice( m_deviceIndex ) );
 
-    CUarrayMapInfo mapInfo{};
-    mapInfo.resourceType    = CU_RESOURCE_TYPE_MIPMAPPED_ARRAY;
-    mapInfo.resource.mipmap = m_array;
-
-    mapInfo.subresourceType               = CU_ARRAY_SPARSE_SUBRESOURCE_TYPE_SPARSE_LEVEL;
-    mapInfo.subresource.sparseLevel.level = mipLevel;
-
-    mapInfo.subresource.sparseLevel.offsetX = tileX * getTileWidth();
-    mapInfo.subresource.sparseLevel.offsetY = tileY * getTileHeight();
-
-    uint2 tileDims                               = getTileDimensions( mipLevel, tileX, tileY );
-    mapInfo.subresource.sparseLevel.extentWidth  = tileDims.x;
-    mapInfo.subresource.sparseLevel.extentHeight = tileDims.y;
-    mapInfo.subresource.sparseLevel.extentDepth  = 1;
-
-    mapInfo.memOperationType    = CU_MEM_OPERATION_TYPE_UNMAP;
-    mapInfo.memHandleType       = CU_MEM_HANDLE_TYPE_GENERIC;
-    mapInfo.memHandle.memHandle = 0ULL;
-    mapInfo.offset              = 0ULL;
-    mapInfo.deviceBitMask       = 1U << m_deviceIndex;
-
-    DEMAND_CUDA_CHECK( cuMemMapArrayAsync( &mapInfo, 1, stream ) );
+    const uint2 levelExtent{getTileDimensions( mipLevel, tileX, tileY )};
+    const uint2 levelOffset{make_uint2( tileX * getTileWidth(), tileY * getTileHeight() )};
+    m_array.unmapTileAsync( stream, mipLevel, levelOffset, levelExtent );
 }
 
 
 void SparseTexture::fillMipTail( CUstream stream, const char* mipTailData, size_t mipTailSize, CUmemGenericAllocationHandle tileHandle, size_t tileOffset ) const
 {
-    // Make device current.
     DEMAND_ASSERT( m_isInitialized );
-    DEMAND_CUDA_CHECK( cudaSetDevice( m_deviceIndex ) );
 
-    CUarrayMapInfo mapInfo{};
-    mapInfo.resourceType    = CU_RESOURCE_TYPE_MIPMAPPED_ARRAY;
-    mapInfo.resource.mipmap = m_array;
-
-    mapInfo.subresourceType            = CU_ARRAY_SPARSE_SUBRESOURCE_TYPE_MIPTAIL;
-    mapInfo.subresource.miptail.offset = 0;
-    mapInfo.subresource.miptail.size   = getMipTailSize();
-
-    mapInfo.memOperationType    = CU_MEM_OPERATION_TYPE_MAP;
-    mapInfo.memHandleType       = CU_MEM_HANDLE_TYPE_GENERIC;
-    mapInfo.memHandle.memHandle = tileHandle;
-    mapInfo.offset              = tileOffset;
-    mapInfo.deviceBitMask       = 1U << m_deviceIndex;
-
-    DEMAND_CUDA_CHECK( cuMemMapArrayAsync( &mapInfo, 1, stream ) );
+    m_array.mapMipTailAsync(stream, getMipTailSize(), tileHandle, tileOffset);
 
     // Fill each level in the mip tail.
     size_t             offset    = 0;
-    const unsigned int pixelSize = m_info.numChannels * getBytesPerChannel( m_info.format );
+    const unsigned int pixelSize = m_info.numChannels * imageReader::getBytesPerChannel( m_info.format );
     for( unsigned int mipLevel = getMipTailFirstLevel(); mipLevel < m_info.numMipLevels; ++mipLevel )
     {
-        CUarray mipLevelArray;
-        DEMAND_CUDA_CHECK( cuMipmappedArrayGetLevel( &mipLevelArray, m_array, mipLevel ) );
+        CUarray mipLevelArray = m_array.getLevel( mipLevel );
         uint2 levelDims = getMipLevelDims( mipLevel );
 
         CUDA_MEMCPY2D copyArgs{};
@@ -263,28 +331,11 @@ void SparseTexture::fillMipTail( CUstream stream, const char* mipTailData, size_
     }
 }
 
-
 void SparseTexture::unmapMipTail( CUstream stream ) const
 {
-    // Make device current.
     DEMAND_ASSERT( m_isInitialized );
-    DEMAND_CUDA_CHECK( cudaSetDevice( m_deviceIndex ) );
 
-    CUarrayMapInfo mapInfo{};
-    mapInfo.resourceType    = CU_RESOURCE_TYPE_MIPMAPPED_ARRAY;
-    mapInfo.resource.mipmap = m_array;
-
-    mapInfo.subresourceType            = CU_ARRAY_SPARSE_SUBRESOURCE_TYPE_MIPTAIL;
-    mapInfo.subresource.miptail.offset = 0;
-    mapInfo.subresource.miptail.size   = getMipTailSize();
-
-    mapInfo.memOperationType    = CU_MEM_OPERATION_TYPE_UNMAP;
-    mapInfo.memHandleType       = CU_MEM_HANDLE_TYPE_GENERIC;
-    mapInfo.memHandle.memHandle = 0ULL;
-    mapInfo.offset              = 0ULL;
-    mapInfo.deviceBitMask       = 1U << m_deviceIndex;
-
-    DEMAND_CUDA_CHECK( cuMemMapArrayAsync( &mapInfo, 1, stream ) );
+    m_array.unmapMipTailAsync(stream, getMipTailSize());
 }
 
 
@@ -292,11 +343,8 @@ SparseTexture::~SparseTexture()
 {
     if( m_isInitialized )
     {
-        DEMAND_CUDA_CHECK( cudaSetDevice( m_deviceIndex ) );
-        DEMAND_CUDA_CHECK( cuTexObjectDestroy( m_texture ) );
-
-        // It's not necessary to unmap the tiles / mip tail when destroying the array.
-        DEMAND_CUDA_CHECK( cuMipmappedArrayDestroy( m_array ) );
+        DEMAND_CUDA_CHECK_NOTHROW( cudaSetDevice( m_deviceIndex ) );
+        DEMAND_CUDA_CHECK_NOTHROW( cuTexObjectDestroy( m_texture ) );
     }
 }
 

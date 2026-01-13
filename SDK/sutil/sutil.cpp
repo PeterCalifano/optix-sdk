@@ -855,7 +855,12 @@ static void getCuStringFromFile( std::string& cu, std::string& location, const c
 
 static std::string g_nvrtcLog;
 
-static void getPtxFromCuString( std::string& ptx, const char* sample_name, const char* cu_source, const char* name, const char** log_string )
+static void getPtxFromCuString( std::string&                    ptx,
+                                const char*                     sample_directory,
+                                const char*                     cu_source,
+                                const char*                     name,
+                                const char**                    log_string,
+                                const std::vector<const char*>& compiler_options )
 {
     // Create program
     nvrtcProgram prog = 0;
@@ -868,9 +873,9 @@ static void getPtxFromCuString( std::string& ptx, const char* sample_name, const
 
     // Set sample dir as the primary include path
     std::string sample_dir;
-    if( sample_name )
+    if( sample_directory )
     {
-        sample_dir = std::string( "-I" ) + base_dir + '/' + sample_name;
+        sample_dir = std::string( "-I" ) + base_dir + '/' + sample_directory;
         options.push_back( sample_dir.c_str() );
     }
 
@@ -893,7 +898,6 @@ static void getPtxFromCuString( std::string& ptx, const char* sample_name, const
     }
 
     // Collect NVRTC options
-    const char*  compiler_options[] = {CUDA_NVRTC_OPTIONS};
     std::copy( std::begin( compiler_options ), std::end( compiler_options ), std::back_inserter( options ) );
 
     // JIT compile CU to PTX
@@ -994,7 +998,12 @@ struct PtxSourceCache
 };
 static PtxSourceCache g_ptxSourceCache;
 
-const char* getInputData( const char* sample, const char* sampleDir, const char* filename, size_t& dataSize, const char** log )
+const char* getInputData( const char*                     sample,
+                          const char*                     sampleDir,
+                          const char*                     filename,
+                          size_t&                         dataSize,
+                          const char**                    log,
+                          const std::vector<const char*>& compilerOptions )
 {
     if( log )
         *log = NULL;
@@ -1009,7 +1018,7 @@ const char* getInputData( const char* sample, const char* sampleDir, const char*
 #if CUDA_NVRTC_ENABLED
         std::string location;
         getCuStringFromFile( cu, location, sampleDir, filename );
-        getPtxFromCuString( *ptx, sample, cu.c_str(), location.c_str(), log );
+        getPtxFromCuString( *ptx, sampleDir, cu.c_str(), location.c_str(), log, compilerOptions );
 #else
         getInputDataFromFile( *ptx, sample, filename );
 #endif

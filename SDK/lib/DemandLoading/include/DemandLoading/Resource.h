@@ -27,6 +27,9 @@
 //
 #pragma once
 
+/// \file Resource.h
+/// Definitions for demand-loaded resources.
+
 #include <functional>
 
 namespace demandLoading {

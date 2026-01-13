@@ -72,8 +72,10 @@
 #else
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <linux/limits.h>
 #include <spawn.h>
 #include <signal.h>
+#include <unistd.h>
 #endif
 
 
@@ -438,21 +440,6 @@ static void keyCallback( GLFWwindow* window, int32_t key, int32_t /*scancode*/, 
     {
         // toggle UI draw
     }
-    else if( key == GLFW_KEY_KP_ADD )
-    {
-        ++light_samples;
-        if( specialize )
-            createRadianceModule( *static_cast<PathTracerState*>(glfwGetWindowUserPointer( window )) );
-    }
-    else if( key == GLFW_KEY_KP_SUBTRACT )
-    {
-        if( light_samples > 1 )
-        {
-            --light_samples;
-            if( specialize )
-                createRadianceModule( *static_cast<PathTracerState*>(glfwGetWindowUserPointer( window )) );
-        }
-    }
     else if( key == GLFW_KEY_S )
     {
         specialize = !specialize;
@@ -465,8 +452,12 @@ static void keyCallback( GLFWwindow* window, int32_t key, int32_t /*scancode*/, 
         for( const CompileOperation& operation : compile_operations_in_flight )
         {
 #ifdef WIN32
-            SUTIL_ASSERT( TerminateProcess( operation.process_handle, 1 ) );
+            // Ignore failure in case process has already exited
+            TerminateProcess( operation.process_handle, 1 );
+            // Wait for process to actually exit before deleting temporary file, since TerminateProcess is asynchronous and it may still have a handle to it open
+            WaitForSingleObject( operation.process_handle, 1000 );
             SUTIL_ASSERT( DeleteFileA( operation.temp_file.c_str() ) );
+            SUTIL_ASSERT( CloseHandle( operation.process_handle ) );
 #else
             SUTIL_ASSERT( kill( operation.process_id, SIGTERM ) == 0 );
             SUTIL_ASSERT( remove( operation.temp_file.c_str() ) == 0 );
@@ -476,6 +467,25 @@ static void keyCallback( GLFWwindow* window, int32_t key, int32_t /*scancode*/, 
     }
 }
 
+
+static void charCallback( GLFWwindow* window, unsigned int codepoint )
+{
+    if( codepoint == '+' )
+    {
+        ++light_samples;
+        if( specialize )
+            createRadianceModule( *static_cast<PathTracerState*>(glfwGetWindowUserPointer( window )) );
+    }
+    else if( codepoint == '-' )
+    {
+        if( light_samples > 1 )
+        {
+            --light_samples;
+            if( specialize )
+                createRadianceModule( *static_cast<PathTracerState*>(glfwGetWindowUserPointer( window )) );
+        }
+    }
+}
 
 static void scrollCallback( GLFWwindow* window, double xscroll, double yscroll )
 {
@@ -494,8 +504,7 @@ static void scrollCallback( GLFWwindow* window, double xscroll, double yscroll )
 void printUsageAndExit( const char* argv0 )
 {
     std::cerr << "Usage  : " << argv0 << " [options]\n";
-    std::cerr << "Options:\n";
-    std::cerr << "         --launch-samples | -s       Number of samples per pixel per launch (default 16)\n";
+    std::cerr << "Options: --launch-samples | -s       Number of samples per pixel per launch (default 16)\n";
     std::cerr << "         --light-samples  | -l       Number of radiance samples (default 1)\n";
     std::cerr << "         --no-specialize             ...\n";
     std::cerr << "         --no-gl-interop             Disable GL interop for display\n";
@@ -653,12 +662,6 @@ void createContext( PathTracerState& state )
     OptixDeviceContextOptions options = {};
     options.logCallbackFunction       = &context_log_cb;
     options.logCallbackLevel          = 4;
-#ifdef DEBUG
-    // Enables validation mode for OptiX:
-    //   Enables all debug exceptions during optix launches and stops on first exception.
-    //   Enables verification of launch parameter specialization values with the current launch parameter values.
-    options.validationMode            = OPTIX_DEVICE_CONTEXT_VALIDATION_MODE_ALL;
-#endif
     OPTIX_CHECK( optixDeviceContextCreate( cu_ctx, &options, &context ) );
 
     state.context = context;
@@ -842,13 +845,20 @@ void createModule( OptixDeviceContext context, const std::string& ptx, const Opt
     operation.temp_file = filename;
     operation.module_compile_options = module_compile_options;
     operation.pipeline_compile_options = pipeline_compile_options;
-    operation.bound_values.assign(module_compile_options.boundValues, module_compile_options.boundValues + module_compile_options.numBoundValues);
+    operation.bound_values.assign( module_compile_options.boundValues, module_compile_options.boundValues + module_compile_options.numBoundValues );
     operation.target_module = &module;
 
 #ifdef WIN32
-    STARTUPINFO si = { sizeof(si) };
+    // Get path to the module creation executable (optixModuleCreateProcess.exe), which should be right next to the sample executable
+    char executablePath[MAX_PATH] = "";
+    SUTIL_ASSERT( GetModuleFileNameA( nullptr, executablePath, sizeof( executablePath ) ) );
+    std::string createProcessPath = executablePath;
+    createProcessPath.erase( createProcessPath.rfind( '\\' ) + 1 );
+    createProcessPath += "optixModuleCreateProcess.exe";
+
+    STARTUPINFO si = { sizeof( si ) };
     PROCESS_INFORMATION pi = {};
-    SUTIL_ASSERT( CreateProcessA( "optixModuleCreateProcess.exe", const_cast<char*>(cmd.c_str()), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi ) );
+    SUTIL_ASSERT( CreateProcessA( createProcessPath.c_str(), const_cast<char*>(cmd.c_str()), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi ) );
 
     operation.process_handle = pi.hProcess;
 #else
@@ -857,16 +867,29 @@ void createModule( OptixDeviceContext context, const std::string& ptx, const Opt
     cmd += ' ';
     for( size_t offset = 0, next; (next = cmd.find( ' ', offset )) != std::string::npos; offset = next + 1 )
     {
+        // Remove quotes around argument
+        if( cmd[offset] == '\"' )
+        {
+            offset++;
+            cmd[next - 1] = '\0';
+        }
+
         cmd[next] = '\0';
         argv.push_back( const_cast<char*>(cmd.c_str()) + offset );
     }
 
-    char process_name[] = "optixModuleCreateProcess";
-    argv[0] = process_name;
+    char executablePath[PATH_MAX] = "";
+    std::string createProcessPath;
+    SUTIL_ASSERT( readlink( "/proc/self/exe", executablePath, sizeof( executablePath ) ) != -1 );
+    createProcessPath = executablePath;
+    createProcessPath.erase( createProcessPath.rfind( '/' ) + 1 );
+    createProcessPath += "optixModuleCreateProcess";
+
+    argv[0] = (char*)createProcessPath.c_str();
     argv.push_back( nullptr ); // Terminate argument list
 
     extern char **environ;
-    SUTIL_ASSERT( posix_spawn( &operation.process_id, process_name, nullptr, nullptr, argv.data(), environ ) == 0 );
+    SUTIL_ASSERT( posix_spawn( &operation.process_id, createProcessPath.c_str(), nullptr, nullptr, argv.data(), environ ) == 0 );
 #endif
 
     compile_operations_in_flight.push_back( operation );
@@ -1153,8 +1176,14 @@ void fillHitGroupSBT( PathTracerState& state )
 
 void updatePipeline( PathTracerState& state )
 {
+    // Do not update in case one of the modules was not created yet
+    if( state.ptx_module == nullptr || state.ptx_module_radiance == nullptr )
+    {
+        return;
+    }
+
     // destroy old stuff
-    if (state.pipeline != nullptr)
+    if( state.pipeline != nullptr )
     {
         OPTIX_CHECK( optixPipelineDestroy( state.pipeline ) );
         OPTIX_CHECK( optixProgramGroupDestroy( state.raygen_prog_group ) );
@@ -1169,6 +1198,10 @@ void updatePipeline( PathTracerState& state )
     createPipeline( state );
     fillSBT(state);
     fillHitGroupSBT( state );
+
+    // Force params.subframe_index to zero in updateState (which is called after updatePipeline in the render loop).
+    // This is done to ensure the frame buffer is reset when rendering with the new pipeline begins.
+    camera_changed = true;
 }
 
 void updatePipelineWhenChanged( PathTracerState& state )
@@ -1187,17 +1220,18 @@ void updatePipelineWhenChanged( PathTracerState& state )
             continue;
         }
 
-        // Delete temporary file
-        const BOOL delete_success = DeleteFileA( it->temp_file.c_str() );
+        CompileOperation operation = *it;
+        // This compile operation is finished, so remove it from the list
+        it = compile_operations_in_flight.erase( it );
 
         // Process has exited, so check the exit code to ensure module compilation was successfull
         DWORD exit_code = EXIT_FAILURE;
-        GetExitCodeProcess( it->process_handle, &exit_code );
+        GetExitCodeProcess( operation.process_handle, &exit_code );
+        CloseHandle( operation.process_handle );
 
-        CloseHandle( it->process_handle );
-
+        // Delete temporary file
+        SUTIL_ASSERT( DeleteFileA( operation.temp_file.c_str() ) );
         SUTIL_ASSERT_MSG( exit_code == 0, "Compile process was not successfull" );
-        SUTIL_ASSERT( delete_success );
 #else
         int status = -1;
         if( waitpid( it->process_id, &status, WNOHANG ) == 0 )
@@ -1206,28 +1240,30 @@ void updatePipelineWhenChanged( PathTracerState& state )
             continue;
         }
 
-        SUTIL_ASSERT_MSG( WEXITSTATUS(status) == 0, "Compile process was not successfull" );
-        SUTIL_ASSERT( remove( it->temp_file.c_str() ) == 0 );
+        CompileOperation operation = *it;
+        // This compile operation is finished, so remove it from the list
+        it = compile_operations_in_flight.erase( it );
+
+        // Delete temporary file
+        SUTIL_ASSERT( remove( operation.temp_file.c_str() ) == 0 );
+        SUTIL_ASSERT_MSG( WEXITSTATUS( status ) == 0, "Compile process was not successfull" );
 #endif
 
-        it->module_compile_options.boundValues = it->bound_values.data();
+        operation.module_compile_options.boundValues = operation.bound_values.data();
 
         // The module should be in cache, so simply create it again in this context
         // This API call should now return instantenously (unless caching failed, in which case this would recompile the module again)
         OPTIX_CHECK( optixModuleCreateFromPTX(
             state.context,
-            &it->module_compile_options,
-            &it->pipeline_compile_options,
-            it->ptx.c_str(),
-            it->ptx.size(),
+            &operation.module_compile_options,
+            &operation.pipeline_compile_options,
+            operation.ptx.c_str(),
+            operation.ptx.size(),
             nullptr, 0,
-            it->target_module
+            operation.target_module
         ) );
 
         need_pipeline_update = true;
-
-        // This compile operation is finished, so remove it from the list
-        it = compile_operations_in_flight.erase( it );
     }
 
     if( need_pipeline_update )
@@ -1275,7 +1311,7 @@ void displaySpecializationInfo( GLFWwindow* window )
         "specialization [S]  : %s\n%s",
         light_samples,
         specialize ? "on" : "off",
-        !compile_operations_in_flight.empty() ? "compiling ... [A] to abort\n" : "");
+        !compile_operations_in_flight.empty() ? "[A] to abort compiling ...\n" : "");
     Params& params = static_cast<PathTracerState*>(glfwGetWindowUserPointer( window ))->params;
     sutil::displayText( display_text, 10.0f, (float)params.height - 70.f );
     sutil::endFrameImGui();
@@ -1291,6 +1327,8 @@ int main( int argc, char* argv[] )
     //
     // Parse command line options
     //
+    std::string outfile;
+
     for( int i = 1; i < argc; ++i )
     {
         const std::string arg = argv[i];
@@ -1326,6 +1364,12 @@ int main( int argc, char* argv[] )
                 printUsageAndExit( argv[0] );
             light_samples = atoi( argv[++i] );
         }
+        else if( arg == "--file" || arg == "-f" )
+        {
+            if( i >= argc - 1 )
+                printUsageAndExit( argv[0] );
+            outfile = argv[++i];
+        }
         else
         {
             std::cerr << "Unknown option '" << argv[i] << "'\n";
@@ -1346,65 +1390,96 @@ int main( int argc, char* argv[] )
         allocateSBT( state );
         initLaunchParams( state );
 
-        GLFWwindow* window = sutil::initUI( "optixModuleCreateAbort", state.params.width, state.params.height );
-        glfwSetMouseButtonCallback( window, mouseButtonCallback );
-        glfwSetCursorPosCallback( window, cursorPosCallback );
-        glfwSetWindowSizeCallback( window, windowSizeCallback );
-        glfwSetWindowIconifyCallback( window, windowIconifyCallback );
-        glfwSetKeyCallback( window, keyCallback );
-        glfwSetScrollCallback( window, scrollCallback );
-        glfwSetWindowUserPointer( window, &state );
-
-        //
-        // Render loop
-        //
+        if( outfile.empty() )
         {
-            sutil::CUDAOutputBuffer<uchar4> output_buffer(
-                    output_buffer_type,
-                    state.params.width,
-                    state.params.height
-                    );
+            GLFWwindow* window = sutil::initUI( "optixModuleCreateAbort", state.params.width, state.params.height );
+            glfwSetMouseButtonCallback( window, mouseButtonCallback );
+            glfwSetCursorPosCallback( window, cursorPosCallback );
+            glfwSetWindowSizeCallback( window, windowSizeCallback );
+            glfwSetWindowIconifyCallback( window, windowIconifyCallback );
+            glfwSetKeyCallback( window, keyCallback );
+            glfwSetCharCallback( window, charCallback );
+            glfwSetScrollCallback( window, scrollCallback );
+            glfwSetWindowUserPointer( window, &state );
 
-            output_buffer.setStream( state.stream );
-            sutil::GLDisplay gl_display;
-
-            std::chrono::duration<double> state_update_time( 0.0 );
-            std::chrono::duration<double> render_time( 0.0 );
-            std::chrono::duration<double> display_time( 0.0 );
-
-            do
+            //
+            // Render loop
+            //
             {
-                auto t0 = std::chrono::steady_clock::now();
-                glfwPollEvents();
+                sutil::CUDAOutputBuffer<uchar4> output_buffer( output_buffer_type, state.params.width, state.params.height );
+                output_buffer.setStream( state.stream );
+                sutil::GLDisplay gl_display;
 
+                std::chrono::duration<double> state_update_time( 0.0 );
+                std::chrono::duration<double> render_time( 0.0 );
+                std::chrono::duration<double> display_time( 0.0 );
+
+                do
+                {
+                    auto t0 = std::chrono::steady_clock::now();
+                    glfwPollEvents();
+
+                    updatePipelineWhenChanged( state );
+
+                    updateState( output_buffer, state.params );
+                    auto t1 = std::chrono::steady_clock::now();
+                    state_update_time += t1 - t0;
+                    t0 = t1;
+
+                    launchSubframe( output_buffer, state );
+                    t1 = std::chrono::steady_clock::now();
+                    render_time += t1 - t0;
+                    t0 = t1;
+
+                    displaySubframe( output_buffer, gl_display, window );
+                    t1 = std::chrono::steady_clock::now();
+                    display_time += t1 - t0;
+
+                    sutil::displayStats( state_update_time, render_time, display_time );
+
+                    displaySpecializationInfo( window );
+
+                    glfwSwapBuffers( window );
+
+                    ++state.params.subframe_index;
+                } while( !glfwWindowShouldClose( window ) );
+                CUDA_SYNC_CHECK();
+            }
+
+            sutil::cleanupUI( window );
+        }
+        else
+        {
+            if( output_buffer_type == sutil::CUDAOutputBufferType::GL_INTEROP )
+            {
+                sutil::initGLFW(); // For GL context
+                sutil::initGL();
+            }
+
+            sutil::CUDAOutputBuffer<uchar4> output_buffer( output_buffer_type, state.params.width, state.params.height );
+            output_buffer.setStream( state.stream );
+            handleCameraUpdate( state.params );
+            handleResize( output_buffer, state.params );
+
+            // Need to potentially wait on modules to compile since we are not in a render loop. 
+            while( state.ptx_module_radiance == nullptr || state.ptx_module == nullptr )
                 updatePipelineWhenChanged( state );
 
-                updateState( output_buffer, state.params );
-                auto t1 = std::chrono::steady_clock::now();
-                state_update_time += t1 - t0;
-                t0 = t1;
+            launchSubframe( output_buffer, state );
 
-                launchSubframe( output_buffer, state );
-                t1 = std::chrono::steady_clock::now();
-                render_time += t1 - t0;
-                t0 = t1;
+            sutil::ImageBuffer buffer;
+            buffer.data = output_buffer.getHostPointer();
+            buffer.width = output_buffer.width();
+            buffer.height = output_buffer.height();
+            buffer.pixel_format = sutil::BufferImageFormat::UNSIGNED_BYTE4;
 
-                displaySubframe( output_buffer, gl_display, window );
-                t1 = std::chrono::steady_clock::now();
-                display_time += t1 - t0;
+            sutil::saveImage( outfile.c_str(), buffer, false );
 
-                sutil::displayStats( state_update_time, render_time, display_time );
-
-                displaySpecializationInfo( window );
-
-                glfwSwapBuffers( window );
-
-                ++state.params.subframe_index;
-            } while( !glfwWindowShouldClose( window ) );
-            CUDA_SYNC_CHECK();
+            if( output_buffer_type == sutil::CUDAOutputBufferType::GL_INTEROP )
+            {
+                glfwTerminate();
+            }
         }
-
-        sutil::cleanupUI( window );
 
         cleanupState( state );
     }

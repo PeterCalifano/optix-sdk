@@ -35,6 +35,9 @@ endif()
 
 
 configure_file( Doxyfile Doxyfile @ONLY )
+configure_file( header.tex header.tex @ONLY )
+configure_file( footer.tex footer.tex @ONLY )
+configure_file( cuda_header.png latex/cuda_header.png COPYONLY )
 
 add_custom_target( doc ${DOXYGEN_EXECUTABLE} ${CMAKE_CURRENT_BINARY_DIR}/Doxyfile
                    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}

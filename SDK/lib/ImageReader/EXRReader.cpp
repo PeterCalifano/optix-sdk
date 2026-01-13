@@ -26,10 +26,10 @@
 // OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#include <DemandLoading/EXRReader.h>
+#include <ImageReader/EXRReader.h>
 
-#include "Util/Exception.h"
-#include "Util/Stopwatch.h"
+#include "Exception.h"
+#include "Stopwatch.h"
 
 #include <cuda_runtime.h>
 
@@ -44,7 +44,7 @@
 using namespace Imf;
 using namespace Imath;
 
-namespace demandLoading {
+namespace imageReader {
 
 CUarray_format pixelTypeToArrayFormat( PixelType type )
 {
@@ -105,6 +105,33 @@ bool EXRReader::open( TextureInfo* info )
 
             // CUDA textures don't support float3, so we round up to four channels.
             m_info.numChannels = A ? 4 : ( B ? 4 : ( G ? 2 : 1 ) );
+
+            // Read the base color from the file
+            // FIXME: There should be an option to have this available in the metadata, so 
+            // we don't have to read the level.
+            if( m_readBaseColor && ( m_info.numMipLevels > 1 || ( m_info.width == 1 && m_info.height == 1 ) ) )
+            {
+                char buff[16] = {0};
+                readActualTile( buff, 16, m_info.numMipLevels - 1, 0, 0 );
+                if( m_info.format == CU_AD_FORMAT_HALF )
+                {
+                    half* h = reinterpret_cast<half*>( buff );
+                    m_baseColor = float4{ float(h[0]), float(h[1]), float(h[2]), float(h[3]) };
+                    m_baseColorWasRead = true;
+                }
+                else if( m_info.format == CU_AD_FORMAT_FLOAT )
+                {
+                    float* f = reinterpret_cast<float*>( buff );
+                    m_baseColor = float4{ f[0], f[1], f[2], f[3] };
+                    m_baseColorWasRead = true;
+                }
+                else if( m_info.format == CU_AD_FORMAT_UNSIGNED_INT32 )
+                {
+                    unsigned int* f = reinterpret_cast<unsigned int*>( buff );
+                    m_baseColor = float4{ float(f[0]), float(f[1]), float(f[2]), float(f[3]) };
+                    m_baseColorWasRead = true;
+                }
+            }
         }
 
         m_totalReadTime += stopwatch.elapsed();
@@ -179,11 +206,17 @@ bool EXRReader::readTile( char* dest, unsigned int mipLevel, unsigned int tileX,
 
     const unsigned int actualTileX    = tileX * tileWidth / actualTileWidth;
     const unsigned int actualTileY    = tileY * tileHeight / actualTileHeight;
-    const unsigned int numTilesX      = tileWidth / actualTileWidth;
-    const unsigned int numTilesY      = tileHeight / actualTileHeight;
+    unsigned int       numTilesX      = tileWidth / actualTileWidth;
+    unsigned int       numTilesY      = tileHeight / actualTileHeight;
     const unsigned int bytesPerPixel  = getBytesPerChannel( m_info.format ) * m_info.numChannels;
     const unsigned int rowPitch       = tileWidth * bytesPerPixel;
     const size_t       actualTileSize = actualTileWidth * actualTileHeight * bytesPerPixel;
+
+    // Don't request non-existent tiles on the edge of the texture
+    unsigned int levelWidthInActualTiles  = ( m_inputFile->levelWidth( mipLevel ) + actualTileWidth - 1 ) / actualTileWidth;
+    unsigned int levelHeightInActualTiles = ( m_inputFile->levelHeight( mipLevel ) + actualTileHeight - 1 ) / actualTileHeight;
+    numTilesX                             = std::min( numTilesX, levelWidthInActualTiles - actualTileX );
+    numTilesY                             = std::min( numTilesY, levelHeightInActualTiles - actualTileY );
 
     for( unsigned int j = 0; j < numTilesY; ++j )
     {
@@ -247,4 +280,40 @@ bool EXRReader::readMipLevel( char* dest, unsigned int mipLevel, unsigned int ex
     return true;
 }
 
-}  // namespace demandLoading
+bool EXRReader::readBaseColor( float4& dest )
+{
+    dest = m_baseColor;
+    return m_baseColorWasRead;
+}
+
+void EXRReader::serialize( std::ostream& stream ) const
+{
+    // Serialize the filename, preceded by its length.
+    size_t size = m_filename.size();
+    stream.write( reinterpret_cast<const char*>( &size ), sizeof( size_t ) );
+    stream.write( m_filename.data(), size );
+
+    // Serialize other constructor parameters.
+    stream.write( reinterpret_cast<const char*>( &m_readBaseColor ), sizeof( bool ) );
+}
+
+std::shared_ptr<ImageReader> EXRReader::deserialize( std::istream& stream )
+{
+    // Deserialize filename, which is preceded by its length.
+    size_t length;
+    stream.read( reinterpret_cast<char*>( &length ), sizeof( size_t ) );
+
+    std::vector<char> buffer( length );
+    stream.read( buffer.data(), length );
+    std::string filename( buffer.data(), length );
+
+    // Deserialize other constructor parameters.
+    bool readBaseColor;
+    stream.read( reinterpret_cast<char*>( &readBaseColor ), sizeof( bool ) );
+
+    // Construct the EXRReader.
+    return std::shared_ptr<ImageReader>( new EXRReader( filename.c_str(), readBaseColor ) );
+}
+
+
+}  // namespace imageReader

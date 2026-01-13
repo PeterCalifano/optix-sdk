@@ -90,25 +90,18 @@ class PinnedMemoryManager
 
     size_t maxMipTailBytes( const Options& options )
     {
-        // The mip tail of texture can occupy up to two 64K tiles.  We take 20% of the total, up to a maximum of 2 GB
-        // (16,000 mip tails).
-        return std::min( static_cast<size_t>( .02f * options.maxPinnedMemory ), static_cast<size_t>( 2ULL * 1024 * 1024 * 1024 ) );
+        return std::min( static_cast<size_t>( 0.10f * options.maxPinnedMemory ), static_cast<size_t>( 256ULL * 1024 * 1024 ) );
     }
 
     size_t maxSamplerBytes( const Options& options )
     {
-        // TextureSampler is about 112 bytes.  We take .1% of the total, up to a maximum of 2MB
-        // (18,000 samplers).
-        return std::min( static_cast<size_t>( .001f * options.maxPinnedMemory ), static_cast<size_t>( 2ULL * 1024 * 1024 ) );
+        return std::min( static_cast<size_t>( 0.01f * options.maxPinnedMemory ), static_cast<size_t>( 2ULL * 1024 * 1024 ) );
     }
 
     size_t maxTileBytes( const Options& options )
     {
-        // Use the remaining allotted memory (about 80%) for tiles.
-        return options.maxPinnedMemory - m_mipTailPool.getTotalPinnedMemory() - m_samplerPool.getTotalPinnedMemory()
-               - m_pageMappingsContextPool.getTotalPinnedMemory() - m_requestContextPool.getTotalPinnedMemory();
+        return static_cast<size_t>( 0.89f * options.maxPinnedMemory );
     }
-
 };
 
 }  // namespace demandLoading

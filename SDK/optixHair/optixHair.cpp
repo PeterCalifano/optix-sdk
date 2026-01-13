@@ -140,17 +140,17 @@ void makeHairGAS( HairState* pState )
     size_t compactedSize;
     CUDA_CHECK( cudaMemcpy(&compactedSize, (void*)deviceCompactedSize, sizeof(size_t), cudaMemcpyDeviceToHost) );
 
-    printf("bufferSizesGAS.outputSizeInBytes: %zd  compacted size: %zd\n", 
+    printf("bufferSizesGAS.outputSizeInBytes: %zd  compacted size: %zd\n",
         bufferSizesGAS.outputSizeInBytes, compactedSize);
 
     CUdeviceptr deviceCompactedGAS;
     CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &deviceCompactedGAS), compactedSize ) );
 
-    OPTIX_CHECK( optixAccelCompact( pState->context, 
-                                    0, 
-                                    pState->hHairGAS, 
-                                    deviceCompactedGAS, 
-                                    compactedSize, 
+    OPTIX_CHECK( optixAccelCompact( pState->context,
+                                    0,
+                                    pState->hHairGAS,
+                                    deviceCompactedGAS,
+                                    compactedSize,
                                     &pState->hHairGAS ) );
 
     CUDA_CHECK( cudaFree( (void*)pState->deviceBufferHairGAS ) );
@@ -575,14 +575,8 @@ void renderFrame( HairState* pState )
     CUDA_SYNC_CHECK();
 }
 
-void printUsageAndExit( const char* argv0 )
+void printKeyboardCommands()
 {
-    std::cerr << "Usage  : " << argv0 << " [options]\n";
-    std::cerr << "Options: --file | -f <filename>      File for image output\n";
-    std::cerr << "         --dim=<width>x<height>      Set image dimensions; defaults to 1024x768\n";
-    std::cerr << "         --hair <model.hair>         Specify the hair model; defaults to \"Hair/wStraight.hair\"\n";
-    std::cerr << "         --deg=<1|2|3>               Specify the curve degree; defaults to 3\n";
-    std::cerr << "         --help | -h                 Print this usage message\n\n\n";
     std::cerr << "\n\nKeyboard commands:\n\n"
                  "  'q' (or 'ESC'): Quit the application.\n"
                  "  '1' linear b-spline interpretation of the geometry.\n"
@@ -600,6 +594,17 @@ void printUsageAndExit( const char* argv0 )
                  "      to compute a contiguous u along the hair.\n"
                  "  'c' \"constant radius\" hair geometry.\n"
                  "  't' \"tapered radius\" hair geometry.\n";
+}
+
+void printUsageAndExit( const char* argv0 )
+{
+    std::cerr << "Usage  : " << argv0 << " [options]\n";
+    std::cerr << "Options: --file | -f <filename>      File for image output\n";
+    std::cerr << "         --dim=<width>x<height>      Set image dimensions; defaults to 1024x768\n";
+    std::cerr << "         --hair <model.hair>         Specify the hair model; defaults to \"Hair/wStraight.hair\"\n";
+    std::cerr << "         --deg=<1|2|3>               Specify the curve degree; defaults to 3\n";
+    std::cerr << "         --help | -h                 Print this usage message\n\n\n";
+    printKeyboardCommands();
     exit( 0 );
 }
 
@@ -660,6 +665,8 @@ int main( int argc, char* argv[] )
 
     try
     {
+        printKeyboardCommands();
+        std::cerr << "\n\n" << std::endl;
         HairState state = {};
         initializeOptix( &state );
 

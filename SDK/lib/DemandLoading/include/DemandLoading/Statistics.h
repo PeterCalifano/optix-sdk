@@ -28,6 +28,9 @@
 
 #pragma once
 
+/// \file Statistics.h
+/// Demand loading statistics.
+
 namespace demandLoading {
 
 /// Demand loading statistics.  \see DemandLoader::getStatistics

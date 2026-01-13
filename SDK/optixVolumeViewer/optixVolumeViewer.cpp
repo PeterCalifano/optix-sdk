@@ -372,14 +372,6 @@ static void keyCallback( GLFWwindow* window, int32_t key, int32_t /*scancode*/, 
         {
             toggleCubeVisibility();
         }
-        else if( key == GLFW_KEY_KP_ADD )
-        {
-            increaseOpacity();
-        }
-        else if( key == GLFW_KEY_KP_SUBTRACT )
-        {
-            decreaseOpacity();
-        }
         else if( key == GLFW_KEY_U )
         {
             raisePlane();
@@ -413,6 +405,18 @@ static void keyCallback( GLFWwindow* window, int32_t key, int32_t /*scancode*/, 
             decCubeZ();
         }
         camera_changed = true;
+    }
+}
+
+static void charCallback( GLFWwindow* window, unsigned int codepoint )
+{
+    if( codepoint == '+' )
+    {
+        increaseOpacity();
+    }
+    else if( codepoint == '-' )
+    {
+        decreaseOpacity();
     }
 }
 
@@ -1233,7 +1237,7 @@ void createModule( OptixModule& module, const OptixDeviceContext& context )
 {
     OptixModuleCompileOptions module_compile_options = {};
     module_compile_options.optLevel   = OPTIX_COMPILE_OPTIMIZATION_DEFAULT;
-    module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_LINEINFO;
+    module_compile_options.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_MINIMAL;
 
     OptixPipelineCompileOptions pipeline_compile_options = {};
     pipeline_compile_options.usesMotionBlur            = false;
@@ -1700,6 +1704,7 @@ int main( int argc, char* argv[] )
             glfwSetWindowSizeCallback   ( window, windowSizeCallback    );
             glfwSetWindowIconifyCallback( window, windowIconifyCallback );
             glfwSetKeyCallback          ( window, keyCallback           );
+            glfwSetCharCallback         ( window, charCallback          );
             glfwSetScrollCallback       ( window, scrollCallback        );
 
             //

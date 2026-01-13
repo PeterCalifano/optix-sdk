@@ -28,11 +28,11 @@
 #pragma once
 
 #ifdef OPTIX_SAMPLE_USE_OPEN_EXR
-#include <DemandLoading/EXRReader.h>
+#include <ImageReader/EXRReader.h>
 #endif
 
-#include <DemandLoading/ImageReader.h>
-#include <DemandLoading/TextureInfo.h>
+#include <ImageReader/ImageReader.h>
+#include <ImageReader/TextureInfo.h>
 #include <vector>
 
 #ifndef ubyte
@@ -53,7 +53,7 @@ struct half4
 };
 #endif
 
-namespace demandLoading {
+namespace imageReader {
 
 // clang-format off
 unsigned int getNumChannels( float4& x ) { return 4; }
@@ -114,6 +114,9 @@ class MultiCheckerImage : public MipTailImageReader
     /// Read the specified mipLevel.  Returns true for success.
     bool readMipLevel( char* dest, unsigned int mipLevel, unsigned int width, unsigned int height ) override;
 
+    /// Read the base color of the image (1x1 mip level) as a float4. Returns true on success.
+    bool readBaseColor( float4& dest ) override;
+
   private:
     bool isOddChecker( float x, float y, unsigned int squaresPerSide );
 
@@ -128,7 +131,7 @@ MultiCheckerImage<TYPE>::MultiCheckerImage( unsigned int width, unsigned int hei
     : m_squaresPerSide( squaresPerSide )
 {
     TYPE         c;
-    unsigned int numMipLevels = useMipmaps ? demandLoading::calculateNumMipLevels( width, height ) : 1;
+    unsigned int numMipLevels = useMipmaps ? imageReader::calculateNumMipLevels( width, height ) : 1;
 
     m_info = {width, height, getFormat( c ), getNumChannels( c ), numMipLevels};
 
@@ -227,5 +230,12 @@ bool MultiCheckerImage<TYPE>::readMipLevel( char* dest, unsigned int mipLevel, u
     return true;
 }
 
+template <class TYPE>
+bool MultiCheckerImage<TYPE>::readBaseColor( float4& dest )
+{
+    dest = float4{1.0f, 1.0f, 0.0f, 0.0f};
+    return ( m_info.numMipLevels > 1 ) || ( m_info.width == 1 && m_info.height == 1 );
+}
 
-}  // namespace demandLoading
+
+}  // namespace imageReader

@@ -27,14 +27,18 @@
 //
 #pragma once
 
+#include "Util/Exception.h"
+
 #include <DemandLoading/DeviceContext.h> // for PageMapping
 #include <DemandLoading/Options.h>
+#include <DemandLoading/Ticket.h>
 
 #include <cuda.h>
 
 #include <memory>
 #include <mutex>
 #include <vector>
+#include <deque>
 
 namespace demandLoading {
 
@@ -57,27 +61,37 @@ class PagingSystem
                   RequestProcessor*    requestProcessor );
 
     /// Pull requests from device to system memory.
-    void pullRequests( const DeviceContext& context, CUstream stream, unsigned int startPage, unsigned int endPage, std::shared_ptr<TicketImpl> ticket );
+    void pullRequests( const DeviceContext& context, CUstream stream, unsigned int startPage, unsigned int endPage, Ticket ticket );
 
     /// Get the device index for this paging system.
     unsigned int getDeviceIndex() const { return m_deviceIndex; }
 
-    /// Add a page mapping (thread safe).  The device-side page table (etc.) is not updated until
+    // Add a page mapping (thread safe).  The device-side page table (etc.) is not updated until
     /// pushMappings is called.
     void addMapping( unsigned int pageId, unsigned int lruVal, unsigned long long entry );
+
+    // Clear a page mapping (thread safe).  The device-side page table is not updated until
+    // pushMappings is called.
+    void clearMapping( unsigned int pageId );
 
     /// Check whether the specified page is resident (thread safe).
     bool isResident( unsigned int pageId );
 
-    /// Clear a page mapping (thread safe).  The device-side page table is not updated until
-    /// pushMappings is called.
-    void clearMapping( unsigned int pageId );
-
     /// Push tile mappings to the device.  Returns the total number of new mappings.
     unsigned int pushMappings( const DeviceContext& context, CUstream stream );
 
-    /// Invalidate (remove from m_pageTable) and return page mappings for entries in m_stalePages
-    void invalidateStalePages( std::vector<PageMapping>& pageMappings, unsigned int maxMappings );
+    /// Free a staged page for reuse (thread safe). Return the page mapping in m so resources 
+    /// it holds can also be freed.
+    bool freeStagedPage( PageMapping* m );
+
+    /// Turn eviction on/off, (allows or stops staging stale pages)
+    void activateEviction( bool activate ) { m_evictionActive = activate; }
+
+    /// Returns whether eviction is turned on or off
+    bool evictionIsActive() { return m_evictionActive; }
+
+    /// Flush accumulated page mappings.  Used during trace file playback.
+    void flushMappings();
 
   private:
     Options              m_options{};
@@ -92,18 +106,56 @@ class PagingSystem
     std::vector<unsigned long long> m_pageTable;      // Host-side. Not copied to/from device. Used for eviction.
     std::mutex                      m_mutex;          // Guards m_filledPages (see addMapping).
 
-    // Variables related to LRU
-    unsigned int m_launchNum    = 0;
-    unsigned int m_lruThreshold = 0;
+  private:
+    // Variables related to eviction
+    const unsigned int MIN_LRU_THRESHOLD = 2;
+    bool               m_evictionActive  = false;
+    unsigned int       m_launchNum       = 0;
+    unsigned int       m_lruThreshold    = MIN_LRU_THRESHOLD;
+    std::vector<bool>  m_stagedBits;
+
+    // Synchronization event for pushMappings
+    struct FutureEvent
+    {
+        FutureEvent() { DEMAND_CUDA_CHECK( cudaEventCreate( &event ) ); }
+        ~FutureEvent() { DEMAND_CUDA_CHECK( cudaEventDestroy( event ) ); }
+        cudaError_t query() { return recorded ? cudaEventQuery( event ) : cudaErrorNotReady; }
+
+        cudaEvent_t event{};
+        bool        recorded = false;
+    };
+    std::shared_ptr<FutureEvent> m_pushMappingsEvent = nullptr;
+
+    // Staged tiles (tiles set as non-resident on the host, which can be freed once they are set
+    // as non-resident on the device).
+    struct StagedPageList
+    {
+        std::shared_ptr<FutureEvent> event;
+        std::deque<PageMapping> mappings;
+    };
+    std::deque<StagedPageList> m_stagedPages;
 
     // A host function callback is used to invoke processRequests().
-    friend void processRequestsCallback( void* ptr );
+    friend class ProcessRequestsCallback;
 
     // Process requests, inserting them in the global request queue.
-    void processRequests( const DeviceContext& context, RequestContext* requestContext, CUstream stream, std::shared_ptr<TicketImpl> ticket );
+    void processRequests( const DeviceContext& context, RequestContext* requestContext, CUstream stream, Ticket ticket );
 
-    /// Increment the lru threshold value
-    void incrementLruThreshold( unsigned int returnedStalePages, unsigned int requestedStalePages, unsigned int medianLruVal );
+    // Update the lru threshold value
+    void updateLruThreshold( unsigned int returnedStalePages, unsigned int requestedStalePages, unsigned int medianLruVal );
+
+    // Stage pages for reuse (Remove their mappings on the host, and schedule removal of thier mappings on the device
+    // the next time pushMappings is called.)
+    void stageStalePages( RequestContext* requestContext, std::deque<PageMapping>& stagedMappings );
+
+    // Get the number of staged pages (ready to be freed for reuse)
+    size_t getNumStagedPages();
+
+    // Add mapping function without mutex
+    void addMappingBody( unsigned int pageId, unsigned int lruVal, unsigned long long entry );
+
+    // Restore the mapping for a staged page if possible
+    bool restoreMapping( unsigned int pageId );
 };
 
 
