@@ -1,30 +1,33 @@
-//
-// Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions
-// are met:
-//  * Redistributions of source code must retain the above copyright
-//    notice, this list of conditions and the following disclaimer.
-//  * Redistributions in binary form must reproduce the above copyright
-//    notice, this list of conditions and the following disclaimer in the
-//    documentation and/or other materials provided with the distribution.
-//  * Neither the name of NVIDIA CORPORATION nor the names of its
-//    contributors may be used to endorse or promote products derived
-//    from this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
-// EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-// PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
-// CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-// EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-// PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-// PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
-// OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
+/*
+
+ * SPDX-FileCopyrightText: Copyright (c) 2023 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * 
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
 
 #include <optix.h>
 #include <optix_micromap.h>
@@ -137,6 +140,7 @@ struct Payload {
     }
 };
 
+constexpr unsigned int SBT_STRIDE_COLLAPSE = 0;
 
 extern "C" __global__ void __raygen__rg()
 {
@@ -166,9 +170,9 @@ extern "C" __global__ void __raygen__rg()
         payload.cseed.color = make_float3( 0.5f );
         optixTrace( params.handle, eye, direction, 0, 1e16f, time, OptixVisibilityMask( 1 ),
                     OPTIX_RAY_FLAG_NONE,
-                    0,  // SBT offset, first ray type (only one here)
-                    0,  // SBT stride, forcing a single HitGroup in combination with an sbt offset set to zero for every instance!
-                    0,  // missSBTIndex, used for camera rays
+                    0,                    // SBT offset, first ray type (only one here)
+                    SBT_STRIDE_COLLAPSE,  // SBT stride, forcing a single HitGroup in combination with an sbt offset set to zero for every instance!
+                    0,                    // missSBTIndex, used for camera rays
                     payload.p0123.p0, payload.p0123.p1, payload.p0123.p2, payload.p0123.p3 );
         final_c += payload.cseed.color;
     }
@@ -224,7 +228,7 @@ static __forceinline__ __device__ void ch_impl( const float3& normal, const floa
         unsigned int occluded = 1;
         optixTrace( params.handle, hitpoint + wn * offset, w_in, 0.0f, 1e16f, optixGetRayTime(), OptixVisibilityMask( 1 ),
                     OPTIX_RAY_FLAG_DISABLE_CLOSESTHIT | OPTIX_RAY_FLAG_TERMINATE_ON_FIRST_HIT,
-                    0, 0,  // no hit group will even be executed (assuming no IS), hence, set stride and offset to 0
+                    0, SBT_STRIDE_COLLAPSE,  // no hit group will even be executed (assuming no IS), hence, set stride and offset to 0
                     1,     // select MS program (__miss__occlusion)
                     occluded );  // this is inout here! If MS is called, it will override the payload
 

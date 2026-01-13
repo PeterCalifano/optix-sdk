@@ -1,30 +1,33 @@
-//
-// Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions
-// are met:
-//  * Redistributions of source code must retain the above copyright
-//    notice, this list of conditions and the following disclaimer.
-//  * Redistributions in binary form must reproduce the above copyright
-//    notice, this list of conditions and the following disclaimer in the
-//    documentation and/or other materials provided with the distribution.
-//  * Neither the name of NVIDIA CORPORATION nor the names of its
-//    contributors may be used to endorse or promote products derived
-//    from this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
-// EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-// PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
-// CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-// EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-// PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-// PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
-// OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
+/*
+
+ * SPDX-FileCopyrightText: Copyright (c) 2019 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * 
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
 
 #include <glad/glad.h> // Needs to be included before gl_interop
 
@@ -77,7 +80,7 @@ int32_t           mouse_button = -1;
 int32_t           samples_per_launch = 16;
 
 whitted::LaunchParams*  d_params = nullptr;
-whitted::LaunchParams   params   = {};
+whitted::LaunchParams   g_params = {};
 int32_t                 width    = 768;
 int32_t                 height   = 768;
 
@@ -189,12 +192,12 @@ void printUsageAndExit( const char* argv0 )
 
 void initLaunchParams( const sutil::Scene& scene ) {
     CUDA_CHECK( cudaMalloc(
-                reinterpret_cast<void**>( &params.accum_buffer ),
+                reinterpret_cast<void**>( &g_params.accum_buffer ),
                 width*height*sizeof(float4)
                 ) );
-    params.frame_buffer = nullptr; // Will be set when output buffer is mapped
+    g_params.frame_buffer = nullptr;  // Will be set when output buffer is mapped
 
-    params.subframe_index = 0u;
+    g_params.subframe_index = 0u;
 
     const float loffset = scene.aabb().maxExtent();
 
@@ -211,24 +214,24 @@ void initLaunchParams( const sutil::Scene& scene ) {
     lights[1].point.position  = scene.aabb().center() + make_float3( -loffset, 0.5f * loffset, -0.5f * loffset );
     lights[1].point.falloff   = Light::Falloff::QUADRATIC;
 
-    params.lights.count  = static_cast<uint32_t>( lights.size() );
+    g_params.lights.count = static_cast<uint32_t>( lights.size() );
     CUDA_CHECK( cudaMalloc(
-                reinterpret_cast<void**>( &params.lights.data ),
+                reinterpret_cast<void**>( &g_params.lights.data ),
                 lights.size() * sizeof( Light )
                 ) );
     CUDA_CHECK( cudaMemcpy(
-                reinterpret_cast<void*>( params.lights.data ),
+                reinterpret_cast<void*>( g_params.lights.data ),
                 lights.data(),
                 lights.size() * sizeof( Light ),
                 cudaMemcpyHostToDevice
                 ) );
 
-    params.miss_color   = make_float3( 0.1f );
+    g_params.miss_color = make_float3( 0.1f );
 
     //CUDA_CHECK( cudaStreamCreate( &stream ) );
     CUDA_CHECK( cudaMalloc( reinterpret_cast<void**>( &d_params ), sizeof( whitted::LaunchParams ) ) );
 
-    params.handle = scene.traversableHandle();
+    g_params.handle = scene.traversableHandle();
 }
 
 
@@ -261,9 +264,9 @@ void handleResize( sutil::CUDAOutputBuffer<uchar4>& output_buffer )
     output_buffer.resize( width, height );
 
     // Realloc accumulation buffer
-    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( params.accum_buffer ) ) );
+    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( g_params.accum_buffer ) ) );
     CUDA_CHECK( cudaMalloc(
-                reinterpret_cast<void**>( &params.accum_buffer ),
+                reinterpret_cast<void**>( &g_params.accum_buffer ),
                 width*height*sizeof(float4)
                 ) );
 }
@@ -285,9 +288,9 @@ void launchSubframe( sutil::CUDAOutputBuffer<uchar4>& output_buffer, const sutil
 
     // Launch
     uchar4* result_buffer_data = output_buffer.map();
-    params.frame_buffer        = result_buffer_data;
+    g_params.frame_buffer      = result_buffer_data;
     CUDA_CHECK( cudaMemcpyAsync( reinterpret_cast<void*>( d_params ),
-                &params,
+                &g_params,
                 sizeof( whitted::LaunchParams ),
                 cudaMemcpyHostToDevice,
                 0 // stream
@@ -341,9 +344,9 @@ void initCameraState( const sutil::Scene& scene )
 
 void cleanup()
 {
-    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( params.accum_buffer    ) ) );
-    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( params.lights.data     ) ) );
-    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_params               ) ) );
+    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( g_params.accum_buffer    ) ) );
+    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( g_params.lights.data     ) ) );
+    CUDA_CHECK( cudaFree( reinterpret_cast<void*>( d_params                 ) ) );
 }
 
 
@@ -414,7 +417,7 @@ int main( int argc, char* argv[] )
     try
     {
         sutil::Scene scene;
-        sutil::loadScene( infile.c_str(), scene );
+        sutil::loadScene( infile, scene );
         scene.finalize();
 
         OPTIX_CHECK( optixInit() ); // Need to initialize function table
@@ -431,7 +434,7 @@ int main( int argc, char* argv[] )
             glfwSetWindowIconifyCallback( window, windowIconifyCallback );
             glfwSetKeyCallback          ( window, keyCallback           );
             glfwSetScrollCallback       ( window, scrollCallback        );
-            glfwSetWindowUserPointer    ( window, &params               );
+            glfwSetWindowUserPointer    ( window, &g_params             );
 
             //
             // Render loop
@@ -449,7 +452,7 @@ int main( int argc, char* argv[] )
                     auto t0 = std::chrono::steady_clock::now();
                     glfwPollEvents();
 
-                    updateState( output_buffer, params );
+                    updateState( output_buffer, g_params );
                     auto t1 = std::chrono::steady_clock::now();
                     state_update_time += t1 - t0;
                     t0 = t1;
@@ -467,7 +470,7 @@ int main( int argc, char* argv[] )
 
                     glfwSwapBuffers(window);
 
-                    ++params.subframe_index;
+                    ++g_params.subframe_index;
                 }
                 while( !glfwWindowShouldClose( window ) );
                 CUDA_SYNC_CHECK();
@@ -487,7 +490,7 @@ int main( int argc, char* argv[] )
                 // this scope is for output_buffer, to ensure the destructor is called bfore glfwTerminate()
 
                 sutil::CUDAOutputBuffer<uchar4> output_buffer( output_buffer_type, width, height );
-                handleCameraUpdate( params );
+                handleCameraUpdate( g_params );
                 handleResize( output_buffer );
                 launchSubframe( output_buffer, scene );
 

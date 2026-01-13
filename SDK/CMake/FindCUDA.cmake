@@ -352,8 +352,8 @@
 #   James Bigler, NVIDIA Corp (nvidia.com - jbigler)
 #   Abe Stephens, SCI Institute -- http://www.sci.utah.edu/~abe/FindCuda.html
 #
-#   Copyright (c) 2008 - 2023 NVIDIA Corporation.  All rights reserved.
-#
+#   Copyright (c) 2008-2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
 #   Copyright (c) 2007-2009
 #   Scientific Computing and Imaging Institute, University of Utah
 #
@@ -362,7 +362,9 @@
 
 # The MIT License
 #
-# License for the specific language governing rights and limitations under
+# SPDX-FileCopyrightText: Copyright (c) 2008 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
 # Permission is hereby granted, free of charge, to any person obtaining a
 # copy of this software and associated documentation files (the "Software"),
 # to deal in the Software without restriction, including without limitation
@@ -370,11 +372,11 @@
 # and/or sell copies of the Software, and to permit persons to whom the
 # Software is furnished to do so, subject to the following conditions:
 #
-# The above copyright notice and this permission notice shall be included
-# in all copies or substantial portions of the Software.
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
 #
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
-# OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
 # THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
@@ -598,7 +600,7 @@ if(MSVC AND NOT CUDA_VC_VARS_ALL_BAT AND CUDA_ENABLE_BATCHING)
 endif()
 
 # Propagate the host flags to the host compiler via -Xcompiler
-option(CUDA_PROPAGATE_HOST_FLAGS "Propage C/CXX_FLAGS and friends to the host compiler via -Xcompile" ON)
+option(CUDA_PROPAGATE_HOST_FLAGS "Propage C/CXX_FLAGS and friends to the host compiler via -Xcompiler" ON)
 
 # Enable CUDA_SEPARABLE_COMPILATION
 option(CUDA_SEPARABLE_COMPILATION "Compile CUDA objects with separable compilation enabled.  Requires CUDA 5.0+" OFF)
@@ -621,7 +623,7 @@ mark_as_advanced(
 
 # Makefile and similar generators don't define CMAKE_CONFIGURATION_TYPES, so we
 # need to add another entry for the CMAKE_BUILD_TYPE.  We also need to add the
-# standerd set of 4 build types (Debug, MinSizeRel, Release, and RelWithDebInfo)
+# standard set of 4 build types (Debug, MinSizeRel, Release, and RelWithDebInfo)
 # for completeness.  We need run this loop in order to accomodate the addition
 # of extra configuration types.  Duplicate entries will be removed by
 # REMOVE_DUPLICATES.
@@ -1537,7 +1539,7 @@ macro(CUDA_WRAP_SRCS cuda_target format generated_files)
   endif()
 
   # Process the C++11 flag.  If the host sets the flag, we need to add it to nvcc and
-  # remove it from the host. This is because -Xcompile -std=c++ will choke nvcc (it uses
+  # remove it from the host. This is because -Xcompiler -std=c++ will choke nvcc (it uses
   # the C preprocessor).  In order to get this to work correctly, we need to use nvcc's
   # specific c++11 flag.
   if( "${_cuda_host_flags}" MATCHES "-std=c\\+\\+11" OR ( CMAKE_CXX_STANDARD EQUAL 11 AND NOT USING_WINDOWS_CL ) )

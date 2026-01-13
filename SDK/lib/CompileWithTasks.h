@@ -1,30 +1,33 @@
-//
-// Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions
-// are met:
-//  * Redistributions of source code must retain the above copyright
-//    notice, this list of conditions and the following disclaimer.
-//  * Redistributions in binary form must reproduce the above copyright
-//    notice, this list of conditions and the following disclaimer in the
-//    documentation and/or other materials provided with the distribution.
-//  * Neither the name of NVIDIA CORPORATION nor the names of its
-//    contributors may be used to endorse or promote products derived
-//    from this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
-// EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-// PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
-// CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-// EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-// PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-// PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
-// OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
+/*
+
+ * SPDX-FileCopyrightText: Copyright (c) 2021 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * 
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
 
 #pragma once
 
@@ -114,37 +117,14 @@ struct ThreadPool
     }
 };
 
-// Compiles a single OptixModule using multiple threads contained in m_threadPool. As new
+// Compiles one or more OptixModules using multiple threads contained in m_threadPool. As new
 // tasks are generated from calling optixTaskExecute, add more work to the thread pool.
 struct OptixTaskExecutePool
 {
-    ThreadPool   m_threadPool;
-    unsigned int m_maxNumAdditionalTasks;
-    bool         m_stop = false;
-
-    // Returns after the OptixTask objects have completed executing. As new tasks are
-    // created, add them to the thread pool for execution.
-    OptixResult executeTaskAndWait( OptixModule module, OptixTask firstTask )
-    {
-        // This condition variable helps this thread to sleep until a dependent task is
-        // executed, so we don't have to spin wait.
-        std::condition_variable      cv;
-        std::mutex                   mutex;
-        std::unique_lock<std::mutex> lock( mutex );
-        // Push work
-        m_threadPool.addWork( [&]() { executeTask( firstTask, cv ); } );
-
-        // The condition variable is triggered when a dependent task is finished
-        // executed. Check the module to see if it's finished executing.
-        OptixModuleCompileState state;
-        cv.wait( lock, [&] {
-            COMPILE_WITH_TASKS_CHECK( optixModuleGetCompilationState( module, &state ) );
-            return state == OPTIX_MODULE_COMPILE_STATE_FAILED || state == OPTIX_MODULE_COMPILE_STATE_COMPLETED || m_stop;
-        } );
-        return state == OPTIX_MODULE_COMPILE_STATE_FAILED || state == OPTIX_MODULE_COMPILE_STATE_IMPENDING_FAILURE ?
-                   OPTIX_ERROR_UNKNOWN :
-                   OPTIX_SUCCESS;
-    }
+    ThreadPool              m_threadPool;
+    unsigned int            m_maxNumAdditionalTasks;
+    bool                    m_stop = false;
+    std::condition_variable m_cv;
 
     void executeTask( OptixTask task, std::condition_variable& cv )
     {
@@ -163,6 +143,40 @@ struct OptixTaskExecutePool
         // Notify the thread calling executeTaskAndWait that a task has finished
         // executing.
         cv.notify_all();
+    }
+
+    // Add a module compilation task to the work queue.
+    void addTaskAndExecute( OptixTask task )
+    {
+        m_threadPool.addWork( [task, this]() { executeTask( task, m_cv ); } );
+    }
+
+    // Monitor the work queue and wait until the compile tasks for all of the
+    // OptixModules have completed.
+    OptixResult waitForModuleTasks( std::vector<OptixModule>& modules )
+    {
+        std::mutex                   mutex;
+        std::unique_lock<std::mutex> lock( mutex );
+        OptixResult                  result = OPTIX_SUCCESS;
+        for( OptixModule& module : modules )
+        {
+            OptixModuleCompileState state;
+            m_cv.wait( lock, [&] {
+                COMPILE_WITH_TASKS_CHECK( optixModuleGetCompilationState( module, &state ) );
+                return state == OPTIX_MODULE_COMPILE_STATE_FAILED || state == OPTIX_MODULE_COMPILE_STATE_COMPLETED || m_stop;
+            } );
+            result = state == OPTIX_MODULE_COMPILE_STATE_FAILED || state == OPTIX_MODULE_COMPILE_STATE_IMPENDING_FAILURE ?
+                         OPTIX_ERROR_UNKNOWN :
+                         result;
+        }
+        return result;
+    }
+
+    // Wait until the task for the OptiXModule has completed.
+    OptixResult waitForModuleTask( OptixModule module )
+    {
+        std::vector<OptixModule> modules( 1, module );
+        return waitForModuleTasks( modules );
     }
 };
 

@@ -1,30 +1,31 @@
 #
-# Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
-#
+# SPDX-FileCopyrightText: Copyright (c) 2019 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: BSD-3-Clause
+# 
 # Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions
-# are met:
-#  * Redistributions of source code must retain the above copyright
-#    notice, this list of conditions and the following disclaimer.
-#  * Redistributions in binary form must reproduce the above copyright
-#    notice, this list of conditions and the following disclaimer in the
-#    documentation and/or other materials provided with the distribution.
-#  * Neither the name of NVIDIA CORPORATION nor the names of its
-#    contributors may be used to endorse or promote products derived
-#    from this software without specific prior written permission.
+# modification, are permitted provided that the following conditions are met:
 #
-# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
-# EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-# PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
-# CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-# EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-# PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-# PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
-# OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# 1. Redistributions of source code must retain the above copyright notice, this
+# list of conditions and the following disclaimer.
+#
+# 2. Redistributions in binary form must reproduce the above copyright notice,
+# this list of conditions and the following disclaimer in the documentation
+# and/or other materials provided with the distribution.
+#
+# 3. Neither the name of the copyright holder nor the names of its
+# contributors may be used to endorse or promote products derived from
+# this software without specific prior written permission.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-#
 
 # Welcome to the OptiX SDK build.  We have chosen CMake, because it can generate multiple
 # build systems for multiple architectures from a single script.  There are many resources
@@ -77,16 +78,16 @@
 # https://devtalk.nvidia.com/default/board/90/
 
 
+# This sets up the name of our project.  For our purposes the main thing this controls is
+# the name of the VS solution file.
+project(OptiX-Samples)
+
 # This enforces a particular version of CMake that we require to process the script files
 # properly.  We rely on VERSION_GREATER_EQUAL which requires CMake v. 3.7.
 cmake_minimum_required(VERSION 3.7 FATAL_ERROR)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED TRUE)
 set(CMAKE_CXX_EXTENSIONS OFF)
-
-# This sets up the name of our project.  For our purposes the main thing this controls is
-# the name of the VS solution file.
-project(OptiX-Samples)
 
 # As of CMake 2.6 policies were introduced in order to provide a mechanism for
 # adding backwards compatibility one feature at a time.  We will just specify
@@ -266,21 +267,22 @@ if( NOT PASSED_FIRST_CONFIGURE )
 
   optix_add_cuda_flag("--use_fast_math")
   optix_add_cuda_flag("-lineinfo")
+
+  # CMAKE_CONFIGURATION_TYPES is only defined for multi-config build systems like
+  # MSVC and Ninja, but we need to generate flags for each configuration
+  # regardless.
   if( DEFINED CMAKE_CONFIGURATION_TYPES )
-    foreach( config ${CMAKE_CONFIGURATION_TYPES} )
-      if( ${config} STREQUAL "Debug" )
-        optix_add_cuda_flag_config( _${config} "-G" )
-        optix_add_cuda_flag_config( _${config} "-O0" )
-      endif()
-    endforeach()
+    set( OPTIX_CONFIGURATION_TYPES ${CMAKE_CONFIGURATION_TYPES} )
   else()
-    if( CMAKE_BUILD_TYPE STREQUAL "Debug" )
-      optix_add_cuda_flag( "-G" )
-      optix_add_cuda_flag( "-O0" )
-    endif()
+    set( OPTIX_CONFIGURATION_TYPES "Debug" "Release" "RelWithDebInfo" "MinSizeRel" )
   endif()
 
-
+  foreach( config ${OPTIX_CONFIGURATION_TYPES} )
+    if( ${config} STREQUAL "Debug" )
+      optix_add_cuda_flag_config( _${config} "-G" )
+      optix_add_cuda_flag_config( _${config} "-O0" )
+    endif()
+  endforeach()
 
   if( CUDA_VERSION VERSION_LESS "3.0" )
     optix_add_cuda_flag("--keep")
@@ -550,6 +552,7 @@ add_subdirectory( optixDynamicMaterials   )
 add_subdirectory( optixHair               )
 add_subdirectory( optixHello              )
 add_subdirectory( optixMeshViewer         )
+add_subdirectory( optixMixSDKs            )
 add_subdirectory( optixModuleCreateAbort  )
 add_subdirectory( optixMotionGeometry     )
 add_subdirectory( optixMultiGPU           )

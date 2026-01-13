@@ -1,30 +1,33 @@
-//
-// Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions
-// are met:
-//  * Redistributions of source code must retain the above copyright
-//    notice, this list of conditions and the following disclaimer.
-//  * Redistributions in binary form must reproduce the above copyright
-//    notice, this list of conditions and the following disclaimer in the
-//    documentation and/or other materials provided with the distribution.
-//  * Neither the name of NVIDIA CORPORATION nor the names of its
-//    contributors may be used to endorse or promote products derived
-//    from this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
-// EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-// PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
-// CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-// EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-// PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-// PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
-// OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
+/*
+
+ * SPDX-FileCopyrightText: Copyright (c) 2019 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * 
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
 
 #include <optix.h>
 #include <optix_function_table_definition.h>
@@ -112,17 +115,23 @@ struct Timer
     std::chrono::high_resolution_clock::time_point m_start;
 };
 
-void compileModule( const std::string& input, int numIters = 1 )
+void compileModules( const std::vector<std::string>& input, int numIters = 1 )
 {
-    OptixModule module;
-    Timer       overallTimer;
+    std::vector<OptixModule> modules( input.size() );
+    Timer                    overallTimer;
     for( int i = 0; i < numIters; ++i )
     {
         Timer iterTimer;
-        OPTIX_CHECK( optixModuleCreate( s_context, &s_moduleCompileOptions, &s_pipelineCompileOptions, input.c_str(),
-                                        input.size(), 0, 0, &module ) );
+        for( size_t idx = 0; idx < input.size(); ++idx )
+        {
+            Timer iterTimer;
+            OPTIX_CHECK( optixModuleCreate( s_context, &s_moduleCompileOptions, &s_pipelineCompileOptions,
+                                            input[idx].c_str(), input[idx].size(), 0, 0, &modules[idx] ) );
+        }
         if( i == 0 )
+        {
             SetLoggingLevel( 0 );
+        }
         std::cout << "iter[" << i << "] duration = " << iterTimer << " seconds\n";
     }
     double seconds = overallTimer.elapsed();
@@ -131,19 +140,26 @@ void compileModule( const std::string& input, int numIters = 1 )
     std::cout << "Successfully compiled\n";
 }
 
-void compileModuleWithTasks( const std::string& input, int numIters = 1 )
+void compileModulesWithTasks( const std::vector<std::string>& input, int numIters = 1 )
 {
-    OptixModule module;
-    Timer       overallTimer;
+    std::vector<OptixModule> modules( input.size() );
+    Timer                    overallTimer;
     for( int i = 0; i < numIters; ++i )
     {
-        Timer     iterTimer;
-        OptixTask firstTask;
-        OPTIX_CHECK( optixModuleCreateWithTasks( s_context, &s_moduleCompileOptions, &s_pipelineCompileOptions,
-                                                 input.c_str(), input.size(), 0, 0, &module, &firstTask ) );
-        OPTIX_CHECK( g_pool.executeTaskAndWait( module, firstTask ) );
+        Timer iterTimer;
+        for( size_t idx = 0; idx < input.size(); ++idx )
+        {
+            OptixTask initialTask;
+            OPTIX_CHECK( optixModuleCreateWithTasks( s_context, &s_moduleCompileOptions, &s_pipelineCompileOptions,
+                                                     input[idx].c_str(), input[idx].size(), 0, 0, &modules[idx], &initialTask ) );
+            g_pool.addTaskAndExecute( initialTask );
+        }
+        OPTIX_CHECK( g_pool.waitForModuleTasks( modules ) );
         if( i == 0 )
+        {
             SetLoggingLevel( 0 );
+        }
+
         std::cout << "iter[" << i << "] duration = " << iterTimer << " seconds\n";
     }
     double seconds = overallTimer.elapsed();
@@ -169,6 +185,7 @@ void printUsageAndExit( const std::string& argv0, bool doExit = true )
               << "  -dc  | --disable-cache            Disable caching of compiled ptx on disk (default enabled)\n"
               << "  -nt  | --num-threads <N>          Number of threads (default 1)\n"
               << "  -mt  | --max-num-tasks <N>        Maximum number of additional tasks (default 2)\n"
+              << "       | --filenames <list>         A quote-enclosed, semicolon delimited list of PTX input files\n"
               << "  -g                                Enable debug support (implies -O0)\n"
         << std::endl;
 
@@ -183,10 +200,10 @@ int main( int argc, char** argv )
     int   numThreads  = 2;
     int   maxNumTasks = 2;
     int   numIters    = 1;
-    std::string                   filename;
+    std::vector<std::string>      filenames;
     std::vector<OptixPayloadType> types;
     std::vector<unsigned int>     defaultPayloadSemantics;
-    
+
     if( argc < 2 )
     {
         std::cerr << "\nERROR: No input file provided for compilation\n";
@@ -265,14 +282,28 @@ int main( int argc, char** argv )
             s_moduleCompileOptions.optLevel   = OPTIX_COMPILE_OPTIMIZATION_LEVEL_0;
             s_moduleCompileOptions.debugLevel = OPTIX_COMPILE_DEBUG_LEVEL_FULL;
         }
+        else if( arg == "--filenames" )
+        {
+            if( i >= argc-1 )
+                printUsageAndExit( argv[0] );
+
+            // Tokenize the filename list into a vector of std::strings
+            std::string       namesArg = argv[++i];
+            std::stringstream namesStream( namesArg );
+            std::string       filename;
+            while( std::getline( namesStream, filename, ';' ) )
+                filenames.push_back( filename );
+        }
         else
         {
-            if( !filename.empty() )
+            if( !filenames.empty() )
             {
-                std::cerr << "Only one filename supported. Found additional filename: " << arg << ". Already found " << filename << "\n";
+                std::cerr << "Only one filename is supported as a positional argument. ";
+                std::cerr << "Found additional filename: " << arg << ". ";
+                std::cerr << "Already found " << filenames.size() << " " << (filenames.size() > 1 ? "filenames" : "filename") << ".\n";
                 printUsageAndExit( argv[0] );
             }
-            filename = arg;
+            filenames.push_back( arg );
         }
     }
 
@@ -280,17 +311,25 @@ int main( int argc, char** argv )
     if( numIters > 1 || !useCache )
         optixDeviceContextSetCacheEnabled( s_context, 0 );
 
-    std::string input = readInputFile( filename );
+    std::vector<std::string> input;
+    for( const std::string& filename : filenames )
+    {
+        std::string ptx = readInputFile( filename );
+        input.push_back( ptx );
+    }
+
     if( useTasks )
     {
         std::cout << "Running with " << numThreads << " threads and " << maxNumTasks << " maximum number of tasks\n";
         g_pool.m_threadPool.startPool( numThreads );
         g_pool.m_maxNumAdditionalTasks = maxNumTasks;
-        compileModuleWithTasks( input, numIters );
+        compileModulesWithTasks( input, numIters );
         g_pool.m_threadPool.terminate();
     }
     else
-        compileModule( input, numIters );
+    {
+        compileModules( input, numIters );
+    }
 
     TearDown();
 

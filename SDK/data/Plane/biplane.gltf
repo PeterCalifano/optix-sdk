@@ -1056,7 +1056,7 @@
     }
   ],
   "asset": {
-    "copyright": "Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.",
+    "copyright": "Copyright (c) 2023 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.",
     "generator": "Iray glTF plugin",
     "version": "2.0"
   },

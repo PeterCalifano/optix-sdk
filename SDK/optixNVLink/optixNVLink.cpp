@@ -1,30 +1,33 @@
-//
-// Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions
-// are met:
-//  * Redistributions of source code must retain the above copyright
-//    notice, this list of conditions and the following disclaimer.
-//  * Redistributions in binary form must reproduce the above copyright
-//    notice, this list of conditions and the following disclaimer in the
-//    documentation and/or other materials provided with the distribution.
-//  * Neither the name of NVIDIA CORPORATION nor the names of its
-//    contributors may be used to endorse or promote products derived
-//    from this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
-// EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-// PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
-// CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-// EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-// PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-// PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
-// OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
+/*
+
+ * SPDX-FileCopyrightText: Copyright (c) 2019 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * 
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
 
 /*
 Sample Description:
@@ -980,7 +983,7 @@ void createContexts( std::vector<PerDeviceSampleState>& pd_state )
     {
         // note: the device index must be the same as the position in the state vector
         pd_state[i].device_idx = i;
-        CUDA_CHECK( cudaGetDeviceProperties ( &prop, i ) );
+        CUDA_CHECK( cudaGetDeviceProperties( &prop, i ) );
         CUDA_CHECK( cudaSetDevice( i ) );
         std::cout << "GPU [" << i << "]: " << prop.name << std::endl;
 
@@ -1626,9 +1629,9 @@ void enablePeerAccess( std::vector<PerDeviceSampleState>& pd_states )
                 continue;
 
             int access = 0;
-            cudaDeviceCanAccessPeer(&access, device_idx, peer_idx);
+            CUDA_CHECK( cudaDeviceCanAccessPeer(&access, device_idx, peer_idx) );
             if (access)
-                cudaDeviceEnablePeerAccess( peer_idx, 0 );
+                CUDA_CHECK( cudaDeviceEnablePeerAccess( peer_idx, 0 ) );
         }
     }
 }
@@ -1642,8 +1645,13 @@ void shutdownPeerAccess( std::vector<PerDeviceSampleState>& pd_states )
         CUDA_CHECK( cudaSetDevice( device_idx ) );
         for( int peer_idx = 0; peer_idx < static_cast<int>( num_devices ); ++peer_idx )
         {
-            if ( (1<<peer_idx) != 0 )
-                cudaDeviceDisablePeerAccess( peer_idx );
+            if (peer_idx == device_idx)
+                continue;
+
+            int access = 0;
+            CUDA_CHECK( cudaDeviceCanAccessPeer(&access, device_idx, peer_idx) );
+            if (access)
+                CUDA_CHECK( cudaDeviceDisablePeerAccess( peer_idx ) );
         }
     }
 }
@@ -1778,7 +1786,7 @@ void findPeersForDevice( std::vector<PerDeviceSampleState>& pd_states, int devic
             continue;
 
         int access = 0;
-        cudaDeviceCanAccessPeer( &access, device_idx, peer_idx );
+        CUDA_CHECK( cudaDeviceCanAccessPeer( &access, device_idx, peer_idx ) );
         if ( access )
             pd_states[device_idx].peers |= ( 1 << peer_idx );
     }
@@ -2070,7 +2078,8 @@ int main( int argc, char* argv[] )
         if ( window )
             sutil::cleanupUI( window );
         destroyTextures( pd_states );
-        shutdownPeerAccess( pd_states );
+        if (g_peer_usage != PEERS_NONE)
+            shutdownPeerAccess( pd_states );
         for( PerDeviceSampleState& pd_state : pd_states )
             cleanupState( pd_state );
 

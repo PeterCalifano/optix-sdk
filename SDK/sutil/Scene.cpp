@@ -1,30 +1,33 @@
-//
-// Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
-//
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions
-// are met:
-//  * Redistributions of source code must retain the above copyright
-//    notice, this list of conditions and the following disclaimer.
-//  * Redistributions in binary form must reproduce the above copyright
-//    notice, this list of conditions and the following disclaimer in the
-//    documentation and/or other materials provided with the distribution.
-//  * Neither the name of NVIDIA CORPORATION nor the names of its
-//    contributors may be used to endorse or promote products derived
-//    from this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY
-// EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-// PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
-// CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-// EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-// PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-// PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
-// OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-//
+/*
+
+ * SPDX-FileCopyrightText: Copyright (c) 2019 - 2024  NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ * 
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ * list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ * this list of conditions and the following disclaimer in the documentation
+ * and/or other materials provided with the distribution.
+ *
+ * 3. Neither the name of the copyright holder nor the names of its
+ * contributors may be used to endorse or promote products derived from
+ * this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+ * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+ * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
 
 #include <optix.h>
 #include <optix_function_table_definition.h>
@@ -90,6 +93,7 @@ BufferView<T> bufferViewFromGLTF( const tinygltf::Model& model, Scene& scene, co
     const auto& gltf_buffer_view = model.bufferViews[ gltf_accessor.bufferView ];
 
     const int32_t elmt_byte_size =
+            gltf_accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_BYTE  ? 1 :
             gltf_accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT ? 2 :
             gltf_accessor.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT   ? 4 :
             gltf_accessor.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT          ? 4 :
@@ -670,15 +674,21 @@ cudaTextureObject_t Scene::getSampler( int32_t sampler_index ) const
 }
 
 
-void Scene::finalize()
+void Scene::finalize( bool create_pipeline, uint32_t ray_type_count )
 {
     createContext();
     buildMeshAccels();
-    buildInstanceAccel();
-    createPTXModule();
-    createProgramGroups();
-    createPipeline();
-    createSBT();
+    buildInstanceAccel( ray_type_count );
+
+    // Some apps might only need the mesh/instance geometry and not
+    // the shader programs or pipeline.
+    if( create_pipeline )
+    {
+        createPTXModule();
+        createProgramGroups();
+        createPipeline();
+        createSBT();
+    }
 
     m_scene_aabb.invalidate();
     for( const auto& instance : m_instances )
@@ -686,6 +696,12 @@ void Scene::finalize()
 
     if( !m_cameras.empty() )
         m_cameras.front().setLookat( m_scene_aabb.center() );
+}
+
+
+void Scene::finalize()
+{
+    finalize( /*create_pipeline*/ true, whitted::RAY_TYPE_COUNT );
 }
 
 
@@ -928,11 +944,12 @@ void Scene::buildMeshAccels()
             triangle_input.triangleArray.vertexStrideInBytes         =
                 mesh->positions[j].byte_stride ?
                 mesh->positions[j].byte_stride :
-                sizeof(float3),
-                triangle_input.triangleArray.numVertices             = mesh->positions[j].count;
+                sizeof(float3);
+            triangle_input.triangleArray.numVertices                 = mesh->positions[j].count;
             triangle_input.triangleArray.vertexBuffers               = &(mesh->positions[j].data);
             triangle_input.triangleArray.indexFormat                 =
                 mesh->indices[j].elmt_byte_size == 0 ? OPTIX_INDICES_FORMAT_NONE :
+                mesh->indices[j].elmt_byte_size == 1 ? OPTIX_INDICES_FORMAT_UNSIGNED_BYTE3 :
                 mesh->indices[j].elmt_byte_size == 2 ? OPTIX_INDICES_FORMAT_UNSIGNED_SHORT3 :
                                                        OPTIX_INDICES_FORMAT_UNSIGNED_INT3;
             triangle_input.triangleArray.indexStrideInBytes          =
@@ -958,7 +975,7 @@ void Scene::buildMeshAccels()
                 default:
                     triangle_input.triangleArray.flags = &opaque_triangle_input_flags[m_materials[mat_idx].doubleSided];
                     break;
-                };
+                }
             }
             else
             {

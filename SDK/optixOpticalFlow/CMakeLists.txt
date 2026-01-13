@@ -1,5 +1,5 @@
 #
-#  Copyright (c) 2010 - 2023 NVIDIA Corporation.  All rights reserved.
+#  Copyright (c) 2010 - 2024 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 #
 #  NVIDIA Corporation and its licensors retain all intellectual property and proprietary
 #  rights in and to this software, related documentation and any modifications thereto.
@@ -19,6 +19,10 @@
 #
 
 # See top level CMakeLists.txt file for documentation of OPTIX_add_sample_executable.
+
+if( NOT CUDA_CUDA_LIBRARY )
+  return()
+endif()
 
 set_source_files_properties( optixOpticalFlow.cu PROPERTIES CUDA_SOURCE_PROPERTY_FORMAT OBJ )
 
