@@ -36,7 +36,8 @@
 #include <driver_types.h>
 #include <optix.h>
 
-#include <glad/glad.h>
+//#include <glad/glad.h>
+#include <GL/gl.h> // Manually patched to use openGL from system
 
 #include <iostream>
 #include <sstream>
