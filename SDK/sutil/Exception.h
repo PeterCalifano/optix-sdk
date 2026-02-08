@@ -9,7 +9,8 @@
 #include <driver_types.h>
 #include <optix.h>
 
-#include <glad/glad.h>
+//#include <glad/glad.h>
+#include <GL/gl.h> // Manually modified from <glad/glad.h> because it was not correctly pointing to GL functions
 
 #include <iostream>
 #include <sstream>
